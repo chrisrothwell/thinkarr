@@ -1,0 +1,12 @@
+services:
+  thinkarr:
+    build: .
+    container_name: thinkarr
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./config:/config
+    environment:
+      - PUID=1000
+      - PGID=1000
+    restart: unless-stopped

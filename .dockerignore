@@ -1,0 +1,7 @@
+node_modules
+.next
+.config
+.git
+.claude
+*.md
+!README.md

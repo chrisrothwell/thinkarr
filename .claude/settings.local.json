@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir:*)",
+      "mcp__plugin_context7_context7__resolve-library-id",
+      "mcp__plugin_context7_context7__query-docs",
+      "WebSearch",
+      "Bash(npx create-next-app@latest:*)",
+      "Bash(xcopy:*)",
+      "Bash(copy /Y \"C:\\\\Users\\\\me\\\\Documents\\\\git\\\\thinkarr-temp\\\\package.json\" \"C:\\\\Users\\\\me\\\\Documents\\\\git\\\\thinkarr\\\\package.json\")",
+      "Bash(copy /Y \"C:\\\\Users\\\\me\\\\Documents\\\\git\\\\thinkarr-temp\\\\package-lock.json\" \"C:\\\\Users\\\\me\\\\Documents\\\\git\\\\thinkarr\\\\package-lock.json\")",
+      "Bash(copy /Y \"C:\\\\Users\\\\me\\\\Documents\\\\git\\\\thinkarr-temp\\\\postcss.config.mjs\" \"C:\\\\Users\\\\me\\\\Documents\\\\git\\\\thinkarr\\\\postcss.config.mjs\")",
+      "Bash(copy:*)",
+      "Bash(npm install:*)",
+      "Bash(npx drizzle-kit generate:*)",
+      "Bash(npm run build:*)",
+      "Bash(node -e:*)"
+    ]
+  }
+}
