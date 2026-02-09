@@ -5,4 +5,7 @@
 5. After typing a question, show exactly what the model is doing (i.e. Running MCP tool 'xxx' on Plex'). You should be able to expand this to show the response from the tool.  These should be saved as part of the chat history.
 6. Create a name for the chat once the conversation has started.
 7. Fix the error: ⚠ The "middleware" file convention is deprecated. Please use "proxy" instead. Learn more: https://nextjs.org/docs/messages/middleware-to-proxy
-8. Check why the startup wizard didn't trigger after first logon.
+8. When first loading and with no users created, make it clear that the user is creating an Administrator account by logging into Plex.
+9. Check why the startup wizard didn't trigger after first logon.
+10. Add a timezone field to the Dockerfile which will set the timezone for logs and other purposes.
+11. Provide a traffic light visual indication on the home screen in the sidebar that the services are connected (LLM, Sonarr, Radarr, Overseerr, Plex) - Green = Connected, Amber = Reachable but some failure eg API key, Red = Not reachable
