@@ -4,19 +4,31 @@ set -e
 PUID=${PUID:-1000}
 PGID=${PGID:-1000}
 
-# Create group and user if they don't exist
-if ! getent group thinkarr >/dev/null 2>&1; then
-  addgroup -g "$PGID" thinkarr
+# 1. Handle Group
+# Check if a group with that GID already exists
+EXISTING_GROUP=$(getent group "$PGID" | cut -d: -f1)
+
+if [ -z "$EXISTING_GROUP" ]; then
+    addgroup -g "$PGID" thinkarr
+    GROUP_NAME="thinkarr"
+else
+    GROUP_NAME="$EXISTING_GROUP"
 fi
 
-if ! getent passwd thinkarr >/dev/null 2>&1; then
-  adduser -u "$PUID" -G thinkarr -D -H thinkarr
+# 2. Handle User
+# Check if a user with that UID already exists
+EXISTING_USER=$(getent passwd "$PUID" | cut -d: -f1)
+
+if [ -z "$EXISTING_USER" ]; then
+    adduser -u "$PUID" -G "$GROUP_NAME" -D -H thinkarr
+    USER_NAME="thinkarr"
+else
+    USER_NAME="$EXISTING_USER"
 fi
 
-# Ensure /config is owned by the right user
+# 3. Fix Permissions
 chown -R "$PUID:$PGID" /config
 
-echo "Starting Thinkarr (UID=$PUID, GID=$PGID)"
+echo "Starting Thinkarr as $USER_NAME ($PUID) in group $GROUP_NAME ($PGID)"
 
-# Run as the specified user
 exec su-exec "$PUID:$PGID" node server.js
