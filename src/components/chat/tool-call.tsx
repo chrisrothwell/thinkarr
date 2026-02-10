@@ -10,6 +10,26 @@ interface ToolCallProps {
   toolCall: ToolCallDisplay;
 }
 
+/** Map tool name prefix to service display name. */
+const SERVICE_MAP: Record<string, string> = {
+  plex: "Plex",
+  sonarr: "Sonarr",
+  radarr: "Radarr",
+  overseerr: "Overseerr",
+};
+
+/** Format tool name into a human-readable action + service label. */
+function formatToolLabel(name: string): { action: string; service: string | null } {
+  const parts = name.split("_");
+  const serviceKey = parts[0];
+  const service = SERVICE_MAP[serviceKey] || null;
+  const actionParts = service ? parts.slice(1) : parts;
+  const action = actionParts
+    .join(" ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+  return { action, service };
+}
+
 export function ToolCall({ toolCall }: ToolCallProps) {
   const [expanded, setExpanded] = useState(false);
 
@@ -22,10 +42,14 @@ export function ToolCall({ toolCall }: ToolCallProps) {
       <XCircle size={14} className="text-destructive" />
     );
 
-  // Format the tool name for display
-  const displayName = toolCall.name
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (c) => c.toUpperCase());
+  const { action, service } = formatToolLabel(toolCall.name);
+  const label = service
+    ? toolCall.status === "calling"
+      ? `Running ${action} on ${service}...`
+      : `${action} on ${service}`
+    : toolCall.status === "calling"
+      ? `Running ${action}...`
+      : action;
 
   return (
     <div className="my-1 rounded-lg border bg-background/50 text-sm">
@@ -35,7 +59,7 @@ export function ToolCall({ toolCall }: ToolCallProps) {
       >
         {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
         <Wrench size={14} className="text-muted-foreground" />
-        <span className="flex-1 text-muted-foreground">{displayName}</span>
+        <span className="flex-1 text-muted-foreground">{label}</span>
         {statusIcon}
       </button>
 

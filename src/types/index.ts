@@ -19,6 +19,7 @@ export interface Conversation {
   title: string | null;
   createdAt: Date;
   updatedAt: Date;
+  ownerName?: string;
 }
 
 export interface Message {

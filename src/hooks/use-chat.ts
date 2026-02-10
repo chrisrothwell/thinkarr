@@ -24,7 +24,7 @@ export function useChat(conversationId: string | null) {
   }, []);
 
   const sendMessage = useCallback(
-    async (content: string, targetConversationId?: string) => {
+    async (content: string, targetConversationId?: string, modelId?: string) => {
       const convId = targetConversationId || conversationId;
       if (!convId || !content.trim() || streaming) return;
 
@@ -66,7 +66,7 @@ export function useChat(conversationId: string | null) {
         const res = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ conversationId: convId, message: content }),
+          body: JSON.stringify({ conversationId: convId, message: content, modelId }),
           signal: controller.signal,
         });
 

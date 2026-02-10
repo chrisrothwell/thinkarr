@@ -66,7 +66,12 @@ export default function LoginPage() {
           if (cbData.success) {
             cleanup();
             setState("success");
-            router.push("/chat");
+            // Check if admin needs to configure settings
+            const isAdmin = cbData.data?.user?.isAdmin;
+            const setupRes = await fetch("/api/setup").catch(() => null);
+            const setupData = setupRes ? await setupRes.json().catch(() => null) : null;
+            const needsSetup = setupData?.data && !setupData.data.hasLlm;
+            router.push(isAdmin && needsSetup ? "/settings" : "/chat");
           } else if (cbData.error !== "pending") {
             cleanup();
             setState("error");

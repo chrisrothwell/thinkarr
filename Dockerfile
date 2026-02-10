@@ -21,8 +21,9 @@ ENV NODE_ENV=production
 ENV CONFIG_DIR=/config
 ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
+ENV TZ=UTC
 
-RUN apk add --no-cache shadow su-exec && \
+RUN apk add --no-cache shadow su-exec tzdata && \
     mkdir -p /config && \
     chown node:node /config
 

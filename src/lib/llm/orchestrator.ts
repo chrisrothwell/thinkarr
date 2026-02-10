@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from "uuid";
-import { getLlmClient, getLlmModel } from "./client";
+import { getLlmClient, getLlmModel, getLlmClientForEndpoint } from "./client";
 import { buildSystemPrompt } from "./system-prompt";
 import { getDb, schema } from "@/lib/db";
 import { eq, asc } from "drizzle-orm";
@@ -24,6 +24,7 @@ export type OrchestratorEvent =
 interface OrchestratorParams {
   conversationId: string;
   userMessage: string;
+  modelId?: string;
 }
 
 type ChatMessage = OpenAI.ChatCompletionMessageParam;
@@ -124,8 +125,17 @@ export async function* orchestrate(
     ...history,
   ];
 
-  const client = getLlmClient();
-  const model = getLlmModel();
+  // Resolve client and model — use override if provided
+  let client;
+  let model;
+  if (params.modelId) {
+    const resolved = getLlmClientForEndpoint(params.modelId);
+    client = resolved.client;
+    model = resolved.model;
+  } else {
+    client = getLlmClient();
+    model = getLlmModel();
+  }
   const tools = hasTools() ? getOpenAITools() : undefined;
 
   // 3. Tool call loop
@@ -273,7 +283,7 @@ export async function generateTitle(
         {
           role: "system",
           content:
-            "Generate a very short title (3-6 words, no quotes) summarizing this chat message. Reply with ONLY the title, nothing else.",
+            "Generate a very short summary (3-6 words, no quotes) summarizing this chat message. Most conversations will be about TV and Movies and/or their avaialability in a Media Library so assume this is the case.  If the chat was about a specific title, reply with ONLY the title and the year e.g. Ghostbusters (1984), nothing else.  If the chat as about multiple titles or something else, reply with ONLY the short summary, nothing else.",
         },
         { role: "user", content: firstUserMessage },
       ],

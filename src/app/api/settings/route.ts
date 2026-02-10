@@ -3,6 +3,53 @@ import { getSession } from "@/lib/auth/session";
 import { getConfig, setConfig } from "@/lib/config";
 import type { ApiResponse } from "@/types/api";
 
+export interface LlmEndpoint {
+  id: string;
+  name: string;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  systemPrompt: string;
+  enabled: boolean;
+}
+
+function getLlmEndpoints(): LlmEndpoint[] {
+  const raw = getConfig("llm.endpoints");
+  if (raw) {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      // Fall through to legacy
+    }
+  }
+
+  // Legacy: migrate single endpoint to array
+  const baseUrl = getConfig("llm.baseUrl");
+  const apiKey = getConfig("llm.apiKey");
+  const model = getConfig("llm.model");
+  if (baseUrl && apiKey) {
+    return [
+      {
+        id: "default",
+        name: "Default",
+        baseUrl,
+        apiKey,
+        model: model || "gpt-4.1",
+        systemPrompt: "",
+        enabled: true,
+      },
+    ];
+  }
+  return [];
+}
+
+function getMaskedEndpoints(): LlmEndpoint[] {
+  return getLlmEndpoints().map((ep) => ({
+    ...ep,
+    apiKey: ep.apiKey ? "••••••••" : "",
+  }));
+}
+
 export async function GET() {
   const session = await getSession();
   if (!session || !session.user.isAdmin) {
@@ -12,13 +59,8 @@ export async function GET() {
     );
   }
 
-  // Return current config (mask secrets)
   const data = {
-    llm: {
-      baseUrl: getConfig("llm.baseUrl") || "",
-      apiKey: getConfig("llm.apiKey") ? "••••••••" : "",
-      model: getConfig("llm.model") || "",
-    },
+    llmEndpoints: getMaskedEndpoints(),
     plex: {
       url: getConfig("plex.url") || "",
       token: getConfig("plex.token") ? "••••••••" : "",
@@ -49,7 +91,7 @@ export async function PATCH(request: Request) {
     );
   }
 
-  let body: Record<string, Record<string, string>>;
+  let body: Record<string, unknown>;
   try {
     body = await request.json();
   } catch {
@@ -59,9 +101,30 @@ export async function PATCH(request: Request) {
     );
   }
 
-  // Update only non-masked values
+  // Handle LLM endpoints
+  if (body.llmEndpoints && Array.isArray(body.llmEndpoints)) {
+    const existing = getLlmEndpoints();
+    const endpoints = (body.llmEndpoints as LlmEndpoint[]).map((ep) => {
+      // Preserve masked API keys
+      if (ep.apiKey === "••••••••") {
+        const prev = existing.find((e) => e.id === ep.id);
+        ep.apiKey = prev?.apiKey || "";
+      }
+      return ep;
+    });
+    setConfig("llm.endpoints", JSON.stringify(endpoints));
+
+    // Also update legacy keys for backward compatibility with orchestrator
+    const primary = endpoints.find((e) => e.enabled);
+    if (primary) {
+      setConfig("llm.baseUrl", primary.baseUrl);
+      setConfig("llm.apiKey", primary.apiKey, true);
+      setConfig("llm.model", primary.model);
+    }
+  }
+
+  // Handle arr services
   const sections: Record<string, { keys: Record<string, boolean> }> = {
-    llm: { keys: { baseUrl: false, apiKey: true, model: false } },
     plex: { keys: { url: false, token: true } },
     sonarr: { keys: { url: false, apiKey: true } },
     radarr: { keys: { url: false, apiKey: true } },
@@ -69,7 +132,7 @@ export async function PATCH(request: Request) {
   };
 
   for (const [section, config] of Object.entries(sections)) {
-    const sectionData = body[section];
+    const sectionData = body[section] as Record<string, string> | undefined;
     if (!sectionData) continue;
 
     for (const [key, encrypted] of Object.entries(config.keys)) {

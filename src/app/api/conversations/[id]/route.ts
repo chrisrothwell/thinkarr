@@ -19,11 +19,21 @@ export async function GET(
   const { id } = await params;
   const db = getDb();
 
-  const conversation = db
-    .select()
-    .from(schema.conversations)
-    .where(and(eq(schema.conversations.id, id), eq(schema.conversations.userId, session.user.id)))
-    .get();
+  // Admin can view any conversation; regular users can only view their own
+  let conversation;
+  if (session.user.isAdmin) {
+    conversation = db
+      .select()
+      .from(schema.conversations)
+      .where(eq(schema.conversations.id, id))
+      .get();
+  } else {
+    conversation = db
+      .select()
+      .from(schema.conversations)
+      .where(and(eq(schema.conversations.id, id), eq(schema.conversations.userId, session.user.id)))
+      .get();
+  }
 
   if (!conversation) {
     return NextResponse.json<ApiResponse>(

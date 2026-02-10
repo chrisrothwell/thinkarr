@@ -1,11 +1,14 @@
 import { redirect } from "next/navigation";
-import { isSetupComplete } from "@/lib/config";
+import { getDb, schema } from "@/lib/db";
 
 export default function Home() {
-  if (!isSetupComplete()) {
+  // If no users exist yet, this is a fresh install — show welcome splash
+  const db = getDb();
+  const userCount = db.select().from(schema.users).all().length;
+  if (userCount === 0) {
     redirect("/setup");
   }
 
-  // Middleware handles session check — if we reach here, user is authenticated
+  // Proxy handles session check — if we reach here, user is authenticated
   redirect("/chat");
 }

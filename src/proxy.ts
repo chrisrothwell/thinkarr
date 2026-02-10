@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-const PUBLIC_PATHS = ["/setup", "/login", "/api/setup", "/api/auth"];
+const PUBLIC_PATHS = ["/setup", "/login", "/api/setup", "/api/auth", "/api/mcp"];
 const SESSION_COOKIE = "thinkarr_session";
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Allow public paths

@@ -42,6 +42,7 @@ export interface DoneEvent {
 export interface ChatRequest {
   conversationId: string;
   message: string;
+  modelId?: string;
 }
 
 export interface ToolCallDisplay {

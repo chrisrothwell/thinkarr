@@ -5,7 +5,7 @@ import { getDb, schema } from "@/lib/db";
 import { eq, desc } from "drizzle-orm";
 import type { ApiResponse } from "@/types/api";
 
-export async function GET() {
+export async function GET(request: Request) {
   const session = await getSession();
   if (!session) {
     return NextResponse.json<ApiResponse>(
@@ -15,6 +15,29 @@ export async function GET() {
   }
 
   const db = getDb();
+  const url = new URL(request.url);
+  const viewAll = url.searchParams.get("all") === "true" && session.user.isAdmin;
+
+  if (viewAll) {
+    // Admin view: all conversations with owner info
+    const rows = db
+      .select({
+        id: schema.conversations.id,
+        userId: schema.conversations.userId,
+        title: schema.conversations.title,
+        createdAt: schema.conversations.createdAt,
+        updatedAt: schema.conversations.updatedAt,
+        ownerName: schema.users.plexUsername,
+      })
+      .from(schema.conversations)
+      .leftJoin(schema.users, eq(schema.conversations.userId, schema.users.id))
+      .orderBy(desc(schema.conversations.updatedAt))
+      .all();
+
+    return NextResponse.json<ApiResponse>({ success: true, data: rows });
+  }
+
+  // Regular view: own conversations only
   const conversations = db
     .select({
       id: schema.conversations.id,

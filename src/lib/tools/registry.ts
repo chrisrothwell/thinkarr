@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 import type OpenAI from "openai";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -27,10 +26,9 @@ export function defineTool<T extends z.ZodType>(def: {
 /** Get all registered tools as OpenAI function definitions. */
 export function getOpenAITools(): OpenAI.ChatCompletionTool[] {
   return Array.from(tools.values()).map((tool) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const jsonSchema = zodToJsonSchema(tool.schema as any, { target: "openAi" });
-    // Remove $schema and top-level metadata that OpenAI doesn't want
-    const { $schema: _, ...parameters } = jsonSchema as Record<string, unknown>;
+    const jsonSchema = z.toJSONSchema(tool.schema) as Record<string, unknown>;
+    // Remove $schema that OpenAI doesn't want
+    const { $schema: _, ...parameters } = jsonSchema;
     return {
       type: "function" as const,
       function: {

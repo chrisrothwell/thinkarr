@@ -9,6 +9,11 @@ import { useConversations } from "@/hooks/use-conversations";
 import { useChat } from "@/hooks/use-chat";
 import type { User } from "@/types";
 
+interface ModelOption {
+  id: string;
+  label: string;
+}
+
 export default function ChatPage() {
   const [user, setUser] = useState<User | null>(null);
   const [userLoading, setUserLoading] = useState(true);
@@ -18,11 +23,16 @@ export default function ChatPage() {
     return false;
   });
 
+  // Model selection
+  const [models, setModels] = useState<ModelOption[]>([]);
+  const [selectedModel, setSelectedModel] = useState<string>("");
+  const [canChangeModel, setCanChangeModel] = useState(true);
+
   const {
     conversations,
     createConversation,
     deleteConversation,
-  } = useConversations();
+  } = useConversations(user?.isAdmin ?? false);
 
   const {
     messages,
@@ -44,6 +54,20 @@ export default function ChatPage() {
       })
       .catch(() => {})
       .finally(() => setUserLoading(false));
+  }, []);
+
+  // Load available models
+  useEffect(() => {
+    fetch("/api/models")
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.success) {
+          setModels(data.data.models || []);
+          setCanChangeModel(data.data.canChangeModel);
+          setSelectedModel(data.data.defaultModel || "");
+        }
+      })
+      .catch(() => {});
   }, []);
 
   // Auto-collapse sidebar on narrow viewports
@@ -97,9 +121,9 @@ export default function ChatPage() {
         setActiveConversationId(convId);
       }
 
-      sendMessage(content, convId);
+      sendMessage(content, convId, selectedModel || undefined);
     },
-    [activeConversationId, createConversation, sendMessage],
+    [activeConversationId, createConversation, sendMessage, selectedModel],
   );
 
   if (userLoading) {
@@ -126,6 +150,27 @@ export default function ChatPage() {
       {sidebarCollapsed && <SidebarToggle onClick={() => setSidebarCollapsed(false)} />}
 
       <main className="flex flex-1 flex-col min-w-0">
+        {/* Model selector bar */}
+        {canChangeModel && models.length > 1 && (
+          <div className="flex items-center justify-end border-b px-4 py-1.5">
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              Model:
+              <select
+                value={selectedModel}
+                onChange={(e) => setSelectedModel(e.target.value)}
+                className="rounded border bg-background px-2 py-1 text-xs"
+                disabled={streaming}
+              >
+                {models.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        )}
+
         <MessageList
           messages={messages}
           toolCalls={toolCalls}

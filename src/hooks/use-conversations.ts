@@ -3,13 +3,14 @@
 import { useState, useEffect, useCallback } from "react";
 import type { Conversation } from "@/types";
 
-export function useConversations() {
+export function useConversations(viewAll = false) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(true);
 
   const fetchConversations = useCallback(async () => {
     try {
-      const res = await fetch("/api/conversations");
+      const url = viewAll ? "/api/conversations?all=true" : "/api/conversations";
+      const res = await fetch(url);
       const data = await res.json();
       if (data.success) {
         setConversations(data.data);
@@ -19,7 +20,7 @@ export function useConversations() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [viewAll]);
 
   useEffect(() => {
     fetchConversations();

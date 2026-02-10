@@ -78,6 +78,9 @@ export async function POST(request: Request) {
     // Create session
     await createSession(userId);
 
+    // Fetch updated user to get isAdmin flag
+    const user = db.select().from(schema.users).where(eq(schema.users.id, userId)).get();
+
     return NextResponse.json<ApiResponse>({
       success: true,
       data: {
@@ -85,6 +88,7 @@ export async function POST(request: Request) {
           id: userId,
           plexUsername: plexUser.username,
           plexAvatarUrl: plexUser.thumb,
+          isAdmin: user?.isAdmin ?? false,
         },
       },
     });

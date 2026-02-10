@@ -63,6 +63,7 @@ export async function POST(request: Request) {
         for await (const event of orchestrate({
           conversationId: body.conversationId,
           userMessage: body.message,
+          modelId: body.modelId,
         })) {
           const line = `data: ${JSON.stringify(event)}\n\n`;
           controller.enqueue(encoder.encode(line));
