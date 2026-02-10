@@ -1,6 +1,9 @@
 # dev secrets
 secrets.txt
 
+#dev config
+.config/
+
 # Logs
 logs
 *.log
