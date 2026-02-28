@@ -16,8 +16,9 @@ export interface SetupStatus {
 export interface TestConnectionRequest {
   type: "llm" | "plex" | "sonarr" | "radarr" | "overseerr";
   url: string;
-  apiKey: string;
+  apiKey?: string;
   model?: string;
+  endpointId?: string; // LLM only — used to look up stored apiKey when masked
 }
 
 export interface TestConnectionResponse {

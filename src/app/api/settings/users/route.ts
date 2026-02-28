@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { getDb, schema } from "@/lib/db";
-import { eq } from "drizzle-orm";
+import { eq, asc } from "drizzle-orm";
 import { getConfig } from "@/lib/config";
 import type { ApiResponse } from "@/types/api";
 
@@ -66,6 +66,18 @@ export async function PATCH(request: Request) {
   const { setConfig } = await import("@/lib/config");
 
   if (body.isAdmin !== undefined) {
+    // The first registered user (lowest ID) is the master admin and cannot be demoted
+    const firstUser = db
+      .select({ id: schema.users.id })
+      .from(schema.users)
+      .orderBy(asc(schema.users.id))
+      .get();
+    if (body.isAdmin === false && firstUser?.id === body.userId) {
+      return NextResponse.json<ApiResponse>(
+        { success: false, error: "The master administrator cannot be demoted" },
+        { status: 403 },
+      );
+    }
     db.update(schema.users)
       .set({ isAdmin: body.isAdmin })
       .where(eq(schema.users.id, body.userId))

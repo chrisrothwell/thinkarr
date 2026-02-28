@@ -3,7 +3,8 @@ export type SSEEventType =
   | "tool_call_start"
   | "tool_result"
   | "error"
-  | "done";
+  | "done"
+  | "title_update";
 
 export interface SSEEvent {
   type: SSEEventType;
@@ -37,6 +38,12 @@ export interface ErrorEvent {
 export interface DoneEvent {
   type: "done";
   messageId: string;
+}
+
+export interface TitleUpdateEvent {
+  type: "title_update";
+  conversationId: string;
+  title: string;
 }
 
 export interface ChatRequest {

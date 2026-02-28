@@ -18,8 +18,8 @@ import {
   Trash2,
   RefreshCw,
   Copy,
-  Link as LinkIcon,
 } from "lucide-react";
+import { DEFAULT_SYSTEM_PROMPT } from "@/lib/llm/default-prompt";
 
 // --- Types ---
 
@@ -31,6 +31,7 @@ interface LlmEndpoint {
   model: string;
   systemPrompt: string;
   enabled: boolean;
+  isDefault: boolean;
 }
 
 interface ArrConfig {
@@ -73,7 +74,6 @@ export default function SettingsPage() {
   // Plex & Arrs state
   const [plexConfig, setPlexConfig] = useState<PlexConfig>({ url: "", token: "" });
   const [arrConfigs, setArrConfigs] = useState<Record<string, ArrConfig>>({});
-  const [plexConnecting, setPlexConnecting] = useState(false);
 
   // MCP state
   const [mcpToken, setMcpToken] = useState<string>("");
@@ -140,7 +140,7 @@ export default function SettingsPage() {
   }, [endpoints, plexConfig, arrConfigs]);
 
   // --- Test connection ---
-  async function testConnection(sectionKey: string, url: string, apiKey: string, model?: string) {
+  async function testConnection(sectionKey: string, url: string, apiKey: string, model?: string, endpointId?: string) {
     if (!url) return;
     try {
       const res = await fetch("/api/setup/test-connection", {
@@ -149,8 +149,10 @@ export default function SettingsPage() {
         body: JSON.stringify({
           type: sectionKey === "llm" ? "llm" : sectionKey,
           url,
+          // Send masked/empty apiKey as-is — server will look up stored credential
           apiKey: apiKey === "••••••••" ? "" : apiKey,
           model,
+          endpointId,
         }),
       });
       const data = await res.json();
@@ -182,8 +184,16 @@ export default function SettingsPage() {
         model: "gpt-4.1",
         systemPrompt: "",
         enabled: true,
+        isDefault: prev.length === 0, // First endpoint is default by default
       },
     ]);
+    setSaved(false);
+  }
+
+  function setDefaultEndpoint(id: string) {
+    setEndpoints((prev) =>
+      prev.map((ep) => ({ ...ep, isDefault: ep.id === id })),
+    );
     setSaved(false);
   }
 
@@ -197,51 +207,6 @@ export default function SettingsPage() {
   function removeEndpoint(id: string) {
     setEndpoints((prev) => prev.filter((ep) => ep.id !== id));
     setSaved(false);
-  }
-
-  // --- Plex Connect ---
-  async function handlePlexConnect() {
-    setPlexConnecting(true);
-    try {
-      const res = await fetch("/api/settings/plex-connect", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "create" }),
-      });
-      const data = await res.json();
-      if (!data.success) return;
-
-      const { id: pinId, authUrl } = data.data;
-      const popup = window.open(authUrl, "plexAuth", "width=800,height=600");
-
-      // Poll for PIN claim
-      const poll = setInterval(async () => {
-        try {
-          const checkRes = await fetch("/api/settings/plex-connect", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: "check", pinId }),
-          });
-          const checkData = await checkRes.json();
-          if (checkData.success && checkData.data.claimed) {
-            clearInterval(poll);
-            popup?.close();
-            setPlexConfig((prev) => ({ ...prev, token: "••••••••" }));
-            setPlexConnecting(false);
-          }
-        } catch {
-          // Keep polling
-        }
-      }, 2000);
-
-      // Stop polling after 5 minutes
-      setTimeout(() => {
-        clearInterval(poll);
-        setPlexConnecting(false);
-      }, 300000);
-    } catch {
-      setPlexConnecting(false);
-    }
   }
 
   // --- MCP token ---
@@ -273,6 +238,9 @@ export default function SettingsPage() {
       // Silent fail
     }
   }
+
+  // The master admin is the user with the lowest ID — their role cannot be changed
+  const masterAdminId = users.length > 0 ? Math.min(...users.map((u) => u.id)) : -1;
 
   // --- Get all model options from endpoints ---
   const modelOptions = endpoints.filter((ep) => ep.enabled).map((ep) => ({
@@ -327,6 +295,16 @@ export default function SettingsPage() {
                         />
                         Enabled
                       </label>
+                      <label className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                        <input
+                          type="radio"
+                          name="defaultEndpoint"
+                          checked={ep.isDefault}
+                          onChange={() => setDefaultEndpoint(ep.id)}
+                          className="rounded"
+                        />
+                        Default
+                      </label>
                     </div>
                     <Button
                       variant="ghost"
@@ -364,20 +342,23 @@ export default function SettingsPage() {
                     />
                   </div>
                   <div className="space-y-1.5">
-                    <Label>System Prompt (optional)</Label>
+                    <Label>System Prompt</Label>
                     <Textarea
                       value={ep.systemPrompt}
                       onChange={(e) => updateEndpoint(ep.id, "systemPrompt", e.target.value)}
-                      placeholder="Custom system prompt for this endpoint..."
-                      rows={3}
+                      placeholder={DEFAULT_SYSTEM_PROMPT}
+                      rows={6}
                     />
+                    <p className="text-xs text-muted-foreground">
+                      Leave blank to use the default. Use <code className="font-mono">{"{{serviceList}}"}</code> as a placeholder for the configured services list.
+                    </p>
                   </div>
                 </CardContent>
                 <CardFooter className="flex items-center gap-3">
                   <Button
                     variant="secondary"
                     size="sm"
-                    onClick={() => testConnection("llm", ep.baseUrl, ep.apiKey, ep.model)}
+                    onClick={() => testConnection("llm", ep.baseUrl, ep.apiKey, ep.model, ep.id)}
                     disabled={!ep.baseUrl}
                   >
                     Test
@@ -417,23 +398,19 @@ export default function SettingsPage() {
                 </div>
                 <div className="space-y-1.5">
                   <Label>Plex Token</Label>
-                  <div className="flex gap-2">
-                    <Button
-                      variant="secondary"
-                      onClick={handlePlexConnect}
-                      disabled={plexConnecting}
-                      className="gap-2"
-                    >
-                      {plexConnecting ? <Spinner size={14} /> : <LinkIcon size={14} />}
-                      {plexConfig.token ? "Reconnect to Plex" : "Connect to Plex"}
-                    </Button>
-                    {plexConfig.token && (
-                      <span className="flex items-center gap-1.5 text-sm text-green-500">
-                        <CheckCircle size={14} />
-                        Token saved
-                      </span>
-                    )}
-                  </div>
+                  <Input
+                    type="password"
+                    value={plexConfig.token}
+                    onChange={(e) => {
+                      setPlexConfig((prev) => ({ ...prev, token: e.target.value }));
+                      setSaved(false);
+                    }}
+                    placeholder="Paste your Plex token"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Find your token: Plex Web → Settings → Troubleshooting → Your Account Token.
+                    Or append <code className="font-mono">?X-Plex-Token=</code> to any Plex API URL and copy the value shown.
+                  </p>
                 </div>
               </CardContent>
               <CardFooter className="flex items-center gap-3">
@@ -623,18 +600,24 @@ export default function SettingsPage() {
                             {/* Role selector */}
                             <label className="flex items-center gap-1.5 text-sm">
                               <span className="text-muted-foreground">Role:</span>
-                              <select
-                                value={user.isAdmin ? "admin" : "user"}
-                                onChange={(e) =>
-                                  updateUser(user.id, {
-                                    isAdmin: e.target.value === "admin",
-                                  })
-                                }
-                                className="rounded border bg-background px-2 py-0.5 text-sm"
-                              >
-                                <option value="admin">Administrator</option>
-                                <option value="user">User</option>
-                              </select>
+                              {user.id === masterAdminId ? (
+                                <span className="rounded border bg-background px-2 py-0.5 text-sm text-muted-foreground">
+                                  Administrator (locked)
+                                </span>
+                              ) : (
+                                <select
+                                  value={user.isAdmin ? "admin" : "user"}
+                                  onChange={(e) =>
+                                    updateUser(user.id, {
+                                      isAdmin: e.target.value === "admin",
+                                    })
+                                  }
+                                  className="rounded border bg-background px-2 py-0.5 text-sm"
+                                >
+                                  <option value="admin">Administrator</option>
+                                  <option value="user">User</option>
+                                </select>
+                              )}
                             </label>
 
                             {/* Default model */}

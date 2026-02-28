@@ -5,12 +5,20 @@ async function testLlm(url: string, apiKey: string, model?: string): Promise<Tes
     const { default: OpenAI } = await import("openai");
     const client = new OpenAI({ baseURL: url, apiKey });
     if (model) {
-      // Quick completion test with the specified model
-      await client.chat.completions.create({
-        model,
-        messages: [{ role: "user", content: "Hi" }],
-        max_tokens: 1,
-      });
+      // Quick completion test — some non-OpenAI endpoints reject max_tokens,
+      // so fall back to a plain request without it if the first attempt fails.
+      try {
+        await client.chat.completions.create({
+          model,
+          messages: [{ role: "user", content: "Hi" }],
+          max_tokens: 1,
+        });
+      } catch {
+        await client.chat.completions.create({
+          model,
+          messages: [{ role: "user", content: "Hi" }],
+        });
+      }
       return { success: true, message: `Connected to ${model}` };
     } else {
       // Just list models to verify connectivity
@@ -87,14 +95,14 @@ async function testOverseerr(url: string, apiKey: string): Promise<TestConnectio
 export async function testConnection(req: TestConnectionRequest): Promise<TestConnectionResponse> {
   switch (req.type) {
     case "llm":
-      return testLlm(req.url, req.apiKey, req.model);
+      return testLlm(req.url, req.apiKey ?? "", req.model);
     case "plex":
-      return testPlex(req.url, req.apiKey);
+      return testPlex(req.url, req.apiKey ?? "");
     case "sonarr":
     case "radarr":
-      return testArrService(req.type, req.url, req.apiKey);
+      return testArrService(req.type, req.url, req.apiKey ?? "");
     case "overseerr":
-      return testOverseerr(req.url, req.apiKey);
+      return testOverseerr(req.url, req.apiKey ?? "");
     default:
       return { success: false, message: `Unknown service type: ${req.type}` };
   }

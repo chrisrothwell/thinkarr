@@ -4,14 +4,22 @@ import { useState, useCallback, useRef } from "react";
 import type { Message } from "@/types";
 import type { ToolCallDisplay } from "@/types/chat";
 
-export function useChat(conversationId: string | null) {
+interface UseChatOptions {
+  onTitleUpdate?: (conversationId: string, title: string) => void;
+}
+
+export function useChat(conversationId: string | null, options?: UseChatOptions) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [toolCalls, setToolCalls] = useState<Map<string, ToolCallDisplay>>(new Map());
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // Ref tracks streaming without stale-closure issues — loadMessages checks this
+  // before overwriting state so it never races with an active SSE stream.
+  const streamingRef = useRef(false);
 
   const loadMessages = useCallback(async (convId: string) => {
+    if (streamingRef.current) return;
     try {
       const res = await fetch(`/api/conversations/${convId}`);
       const data = await res.json();
@@ -58,6 +66,7 @@ export function useChat(conversationId: string | null) {
       };
       setMessages((prev) => [...prev, assistantMsg]);
 
+      streamingRef.current = true;
       setStreaming(true);
       const controller = new AbortController();
       abortRef.current = controller;
@@ -96,7 +105,9 @@ export function useChat(conversationId: string | null) {
 
             try {
               const event = JSON.parse(payload);
-              if (event.type === "text_delta") {
+              if (event.type === "title_update") {
+                options?.onTitleUpdate?.(event.conversationId, event.title);
+              } else if (event.type === "text_delta") {
                 setMessages((prev) =>
                   prev.map((m) =>
                     m.id === assistantId
@@ -144,6 +155,7 @@ export function useChat(conversationId: string | null) {
         setError(msg);
         setMessages((prev) => prev.filter((m) => m.id !== assistantId || (m.content && m.content.length > 0)));
       } finally {
+        streamingRef.current = false;
         setStreaming(false);
         abortRef.current = null;
       }

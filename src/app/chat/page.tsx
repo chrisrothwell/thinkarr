@@ -32,6 +32,7 @@ export default function ChatPage() {
     conversations,
     createConversation,
     deleteConversation,
+    updateConversationTitle,
   } = useConversations(user?.isAdmin ?? false);
 
   const {
@@ -43,7 +44,9 @@ export default function ChatPage() {
     stopStreaming,
     loadMessages,
     clearMessages,
-  } = useChat(activeConversationId);
+  } = useChat(activeConversationId, {
+    onTitleUpdate: updateConversationTitle,
+  });
 
   // Load current user
   useEffect(() => {

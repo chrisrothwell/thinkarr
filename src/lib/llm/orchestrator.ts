@@ -118,24 +118,26 @@ export async function* orchestrate(
   saveMessage(conversationId, "user", userMessage);
 
   // 2. Build messages array
-  const systemPrompt = buildSystemPrompt();
+  // Resolve client and model — use override if provided
+  let client;
+  let model;
+  let endpointSystemPrompt: string | undefined;
+  if (params.modelId) {
+    const resolved = getLlmClientForEndpoint(params.modelId);
+    client = resolved.client;
+    model = resolved.model;
+    endpointSystemPrompt = resolved.systemPrompt;
+  } else {
+    client = getLlmClient();
+    model = getLlmModel();
+  }
+
+  const systemPrompt = buildSystemPrompt(endpointSystemPrompt);
   const history = loadHistory(conversationId);
   const apiMessages: ChatMessage[] = [
     { role: "system", content: systemPrompt },
     ...history,
   ];
-
-  // Resolve client and model — use override if provided
-  let client;
-  let model;
-  if (params.modelId) {
-    const resolved = getLlmClientForEndpoint(params.modelId);
-    client = resolved.client;
-    model = resolved.model;
-  } else {
-    client = getLlmClient();
-    model = getLlmModel();
-  }
   const tools = hasTools() ? getOpenAITools() : undefined;
 
   // 3. Tool call loop
@@ -267,12 +269,12 @@ export async function* orchestrate(
 
 /**
  * Generate a short title for a conversation from the first user message.
- * Non-streaming, fire-and-forget.
+ * Returns the generated title, or null if generation fails.
  */
 export async function generateTitle(
   conversationId: string,
   firstUserMessage: string,
-): Promise<void> {
+): Promise<string | null> {
   try {
     const client = getLlmClient();
     const model = getLlmModel();
@@ -297,8 +299,10 @@ export async function generateTitle(
         .set({ title, updatedAt: new Date() })
         .where(eq(schema.conversations.id, conversationId))
         .run();
+      return title;
     }
   } catch {
     // Title generation is best-effort
   }
+  return null;
 }

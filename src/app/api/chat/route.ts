@@ -69,6 +69,16 @@ export async function POST(request: Request) {
           controller.enqueue(encoder.encode(line));
         }
 
+        // 6. Generate title for new chats and emit it before closing so the
+        //    sidebar updates in real-time without a page refresh.
+        if (isFirstMessage) {
+          const newTitle = await generateTitle(body.conversationId, body.message);
+          if (newTitle) {
+            const titleEvent = { type: "title_update", conversationId: body.conversationId, title: newTitle };
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(titleEvent)}\n\n`));
+          }
+        }
+
         controller.enqueue(encoder.encode("data: [DONE]\n\n"));
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : "Stream error";
@@ -76,11 +86,6 @@ export async function POST(request: Request) {
         controller.enqueue(encoder.encode(errorLine));
       } finally {
         controller.close();
-      }
-
-      // 6. Auto-title (fire-and-forget, after stream completes)
-      if (isFirstMessage) {
-        generateTitle(body.conversationId, body.message);
       }
     },
   });

@@ -24,11 +24,19 @@ async function checkLlm(): Promise<ServiceStatus> {
     const { default: OpenAI } = await import("openai");
     const client = new OpenAI({ baseURL: baseUrl, apiKey });
     if (model) {
-      await client.chat.completions.create({
-        model,
-        messages: [{ role: "user", content: "Hi" }],
-        max_tokens: 1,
-      });
+      // Some non-OpenAI endpoints reject max_tokens — retry without it
+      try {
+        await client.chat.completions.create({
+          model,
+          messages: [{ role: "user", content: "Hi" }],
+          max_tokens: 1,
+        });
+      } catch {
+        await client.chat.completions.create({
+          model,
+          messages: [{ role: "user", content: "Hi" }],
+        });
+      }
       return { name: "LLM", status: "green", message: `Connected (${model})` };
     }
     const models = await client.models.list();

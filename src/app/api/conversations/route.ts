@@ -85,6 +85,13 @@ export async function POST(request: Request) {
 
   return NextResponse.json<ApiResponse>({
     success: true,
-    data: { id, title: body.title || "New Chat", createdAt: now, updatedAt: now },
+    data: {
+      id,
+      userId: session.user.id,
+      title: body.title || "New Chat",
+      createdAt: now,
+      updatedAt: now,
+      ownerName: session.user.plexUsername,
+    },
   });
 }

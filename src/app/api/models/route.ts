@@ -17,6 +17,7 @@ interface LlmEndpoint {
   baseUrl: string;
   model: string;
   enabled: boolean;
+  isDefault?: boolean;
 }
 
 export async function GET() {
@@ -62,12 +63,16 @@ export async function GET() {
       label: endpoints.length > 1 ? `${ep.name} — ${ep.model}` : ep.model,
     }));
 
+  // System default: the endpoint marked isDefault, falling back to first enabled
+  const defaultEndpoint = endpoints.find((ep) => ep.isDefault && ep.enabled) ?? endpoints.find((ep) => ep.enabled);
+  const systemDefault = defaultEndpoint ? `${defaultEndpoint.id}:${defaultEndpoint.model}` : (models.length > 0 ? models[0].id : "");
+
   return NextResponse.json<ApiResponse>({
     success: true,
     data: {
       models,
       canChangeModel: canChange,
-      defaultModel: userDefault || (models.length > 0 ? models[0].id : ""),
+      defaultModel: userDefault || systemDefault,
     },
   });
 }

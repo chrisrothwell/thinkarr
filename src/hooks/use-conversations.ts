@@ -75,12 +75,18 @@ export function useConversations(viewAll = false) {
     }
   }, []);
 
+  /** Update the title in local state only — use when the server has already persisted the change. */
+  const updateConversationTitle = useCallback((id: string, title: string) => {
+    setConversations((prev) => prev.map((c) => (c.id === id ? { ...c, title } : c)));
+  }, []);
+
   return {
     conversations,
     loading,
     createConversation,
     deleteConversation,
     renameConversation,
+    updateConversationTitle,
     refetch: fetchConversations,
   };
 }

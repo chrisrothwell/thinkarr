@@ -23,9 +23,12 @@ export async function createSession(userId: number): Promise<string> {
     .run();
 
   const cookieStore = await cookies();
+  // SECURE_COOKIES=true must be set explicitly — Docker deployments commonly run
+  // over plain HTTP on a local network, so defaulting to secure:true would
+  // prevent the cookie from being sent and break authentication.
   cookieStore.set(SESSION_COOKIE, sessionId, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure: process.env.SECURE_COOKIES === "true",
     sameSite: "lax",
     path: "/",
     maxAge: SESSION_MAX_AGE_DAYS * 24 * 60 * 60,

@@ -43,10 +43,10 @@ interface LlmEndpointConfig {
 const endpointClients = new Map<string, { client: OpenAI; key: string }>();
 
 /**
- * Resolve a modelId like "ep_123:gpt-4.1" to a specific OpenAI client + model.
+ * Resolve a modelId like "ep_123:gpt-4.1" to a specific OpenAI client + model + systemPrompt.
  * Falls back to the default client/model if endpoint not found.
  */
-export function getLlmClientForEndpoint(modelId: string): { client: OpenAI; model: string } {
+export function getLlmClientForEndpoint(modelId: string): { client: OpenAI; model: string; systemPrompt?: string } {
   const colonIdx = modelId.indexOf(":");
   if (colonIdx === -1) {
     // No endpoint prefix — treat as plain model name with default client
@@ -66,11 +66,11 @@ export function getLlmClientForEndpoint(modelId: string): { client: OpenAI; mode
         // Cache clients per endpoint
         const cached = endpointClients.get(ep.id);
         if (cached && cached.key === ep.apiKey) {
-          return { client: cached.client, model: modelName || ep.model };
+          return { client: cached.client, model: modelName || ep.model, systemPrompt: ep.systemPrompt || undefined };
         }
         const client = new OpenAI({ baseURL: ep.baseUrl, apiKey: ep.apiKey });
         endpointClients.set(ep.id, { client, key: ep.apiKey });
-        return { client, model: modelName || ep.model };
+        return { client, model: modelName || ep.model, systemPrompt: ep.systemPrompt || undefined };
       }
     } catch {
       // Fall through

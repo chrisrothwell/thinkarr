@@ -26,8 +26,28 @@ export interface PlexSearchResult {
   type: string;
   summary?: string;
   rating?: number;
-  thumb?: string;
   key: string;
+  // Show-specific fields
+  seasons?: number;         // Number of seasons (childCount)
+  totalEpisodes?: number;   // Total episodes in library (leafCount)
+  watchedEpisodes?: number; // Episodes watched (viewedLeafCount)
+  dateAdded?: string;       // ISO date string (addedAt Unix → ISO)
+}
+
+function mapMetadata(item: Record<string, unknown>, type?: string): PlexSearchResult {
+  const addedAt = item.addedAt as number | undefined;
+  return {
+    title: item.title as string,
+    year: item.year as number | undefined,
+    type: (type || item.type) as string,
+    summary: (item.summary as string | undefined)?.substring(0, 300),
+    rating: item.rating as number | undefined,
+    key: item.key as string,
+    seasons: item.childCount as number | undefined,
+    totalEpisodes: item.leafCount as number | undefined,
+    watchedEpisodes: item.viewedLeafCount as number | undefined,
+    dateAdded: addedAt ? new Date(addedAt * 1000).toISOString().split("T")[0] : undefined,
+  };
 }
 
 export async function searchLibrary(query: string): Promise<PlexSearchResult[]> {
@@ -35,14 +55,7 @@ export async function searchLibrary(query: string): Promise<PlexSearchResult[]> 
   const results: PlexSearchResult[] = [];
   for (const hub of data?.MediaContainer?.Hub || []) {
     for (const item of hub.Metadata || []) {
-      results.push({
-        title: item.title,
-        year: item.year,
-        type: hub.type || item.type,
-        summary: item.summary?.substring(0, 200),
-        rating: item.rating,
-        key: item.key,
-      });
+      results.push(mapMetadata(item, hub.type || item.type));
     }
   }
   return results;
@@ -50,24 +63,12 @@ export async function searchLibrary(query: string): Promise<PlexSearchResult[]> 
 
 export async function getOnDeck(): Promise<PlexSearchResult[]> {
   const data = await plexFetch("/library/onDeck?X-Plex-Container-Start=0&X-Plex-Container-Size=10");
-  return (data?.MediaContainer?.Metadata || []).map((item: Record<string, unknown>) => ({
-    title: item.title as string,
-    year: item.year as number,
-    type: item.type as string,
-    summary: (item.summary as string)?.substring(0, 200),
-    key: item.key as string,
-  }));
+  return (data?.MediaContainer?.Metadata || []).map((item: Record<string, unknown>) => mapMetadata(item));
 }
 
 export async function getRecentlyAdded(): Promise<PlexSearchResult[]> {
   const data = await plexFetch("/library/recentlyAdded?X-Plex-Container-Start=0&X-Plex-Container-Size=10");
-  return (data?.MediaContainer?.Metadata || []).map((item: Record<string, unknown>) => ({
-    title: item.title as string,
-    year: item.year as number,
-    type: item.type as string,
-    summary: (item.summary as string)?.substring(0, 200),
-    key: item.key as string,
-  }));
+  return (data?.MediaContainer?.Metadata || []).map((item: Record<string, unknown>) => mapMetadata(item));
 }
 
 export async function checkAvailability(title: string): Promise<{ available: boolean; results: PlexSearchResult[] }> {

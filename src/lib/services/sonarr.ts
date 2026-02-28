@@ -42,6 +42,7 @@ export async function searchSeries(term: string): Promise<SonarrSeries[]> {
   }));
 }
 
+/** @deprecated Avoid in LLM tools — returns all series as a large payload. Use getSeriesStatus instead. */
 export async function listSeries(): Promise<SonarrSeries[]> {
   const data = await sonarrFetch("/series");
   return (data || []).map((s: Record<string, unknown>) => ({
@@ -52,6 +53,64 @@ export async function listSeries(): Promise<SonarrSeries[]> {
     seasonCount: s.seasonCount as number,
     monitored: s.monitored as boolean,
   }));
+}
+
+export interface SonarrSeriesStatus {
+  title: string;
+  year?: number;
+  networkStatus: string;   // continuing, ended, etc.
+  monitored: boolean;
+  totalSeasons: number;
+  totalEpisodes: number;
+  downloadedEpisodes: number;
+  missingEpisodes: number;
+  nextAiring?: string;
+  seasons: Array<{
+    seasonNumber: number;
+    totalEpisodes: number;
+    downloadedEpisodes: number;
+    monitored: boolean;
+  }>;
+}
+
+/**
+ * Find a specific series in Sonarr and return detailed download/availability status.
+ * Returns null if the series is not managed by Sonarr.
+ */
+export async function getSeriesStatus(title: string): Promise<SonarrSeriesStatus | null> {
+  const allSeries = await sonarrFetch("/series");
+  const match = (allSeries || []).find((s: Record<string, unknown>) =>
+    (s.title as string).toLowerCase().includes(title.toLowerCase()),
+  ) as Record<string, unknown> | undefined;
+
+  if (!match || !match.id) return null;
+
+  // Fetch full detail with per-season statistics
+  const detail = await sonarrFetch(`/series/${match.id as number}`);
+  const stats = detail.statistics as Record<string, unknown> | undefined;
+
+  return {
+    title: detail.title as string,
+    year: detail.year as number | undefined,
+    networkStatus: detail.status as string,
+    monitored: detail.monitored as boolean,
+    totalSeasons: (detail.seasons as unknown[])?.length ?? 0,
+    totalEpisodes: (stats?.totalEpisodeCount as number) ?? 0,
+    downloadedEpisodes: (stats?.episodeCount as number) ?? 0,
+    missingEpisodes: ((stats?.totalEpisodeCount as number) ?? 0) - ((stats?.episodeCount as number) ?? 0),
+    nextAiring: detail.nextAiring as string | undefined,
+    seasons: ((detail.seasons as Record<string, unknown>[]) || [])
+      .filter((s) => (s.seasonNumber as number) > 0)
+      .map((s) => {
+        const seasonStats = s.statistics as Record<string, unknown> | undefined;
+        return {
+          seasonNumber: s.seasonNumber as number,
+          totalEpisodes: (seasonStats?.totalEpisodeCount as number) ?? 0,
+          downloadedEpisodes: (seasonStats?.episodeCount as number) ?? 0,
+          monitored: s.monitored as boolean,
+        };
+      }),
+  };
 }
 
 export interface SonarrCalendarEntry {
@@ -79,21 +138,30 @@ export async function getCalendar(days: number = 7): Promise<SonarrCalendarEntry
 
 export interface SonarrQueueItem {
   seriesTitle: string;
+  seasonNumber: number;
+  episodeNumber: number;
   episodeTitle: string;
   status: string;
   timeLeft: string;
-  size: number;
-  sizeleft: number;
+  downloadPercent: number;
 }
 
 export async function getQueue(): Promise<SonarrQueueItem[]> {
   const data = await sonarrFetch("/queue?pageSize=20");
-  return (data?.records || []).map((q: Record<string, unknown>) => ({
-    seriesTitle: (q.series as Record<string, unknown>)?.title as string || "Unknown",
-    episodeTitle: (q.episode as Record<string, unknown>)?.title as string || "Unknown",
-    status: q.status as string,
-    timeLeft: q.timeleft as string || "",
-    size: q.size as number,
-    sizeleft: q.sizeleft as number,
-  }));
+  return (data?.records || []).map((q: Record<string, unknown>) => {
+    const size = (q.size as number) || 0;
+    const sizeLeft = (q.sizeleft as number) || 0;
+    const downloaded = size - sizeLeft;
+    const pct = size > 0 ? Math.round((downloaded / size) * 100) : 0;
+    const episode = q.episode as Record<string, unknown> | undefined;
+    return {
+      seriesTitle: (q.series as Record<string, unknown>)?.title as string || "Unknown",
+      seasonNumber: (episode?.seasonNumber as number) ?? 0,
+      episodeNumber: (episode?.episodeNumber as number) ?? 0,
+      episodeTitle: episode?.title as string || "Unknown",
+      status: q.status as string,
+      timeLeft: (q.timeleft as string) || "",
+      downloadPercent: pct,
+    };
+  });
 }

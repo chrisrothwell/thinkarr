@@ -11,6 +11,7 @@ export interface LlmEndpoint {
   model: string;
   systemPrompt: string;
   enabled: boolean;
+  isDefault: boolean;
 }
 
 function getLlmEndpoints(): LlmEndpoint[] {
@@ -37,6 +38,7 @@ function getLlmEndpoints(): LlmEndpoint[] {
         model: model || "gpt-4.1",
         systemPrompt: "",
         enabled: true,
+        isDefault: true,
       },
     ];
   }
@@ -112,10 +114,16 @@ export async function PATCH(request: Request) {
       }
       return ep;
     });
+    // Ensure exactly one endpoint is marked as default; fall back to first enabled
+    const hasDefault = endpoints.some((e) => e.isDefault && e.enabled);
+    if (!hasDefault) {
+      const firstEnabled = endpoints.find((e) => e.enabled);
+      if (firstEnabled) firstEnabled.isDefault = true;
+    }
     setConfig("llm.endpoints", JSON.stringify(endpoints));
 
-    // Also update legacy keys for backward compatibility with orchestrator
-    const primary = endpoints.find((e) => e.enabled);
+    // Update legacy keys to the isDefault endpoint for backward compatibility
+    const primary = endpoints.find((e) => e.isDefault && e.enabled) ?? endpoints.find((e) => e.enabled);
     if (primary) {
       setConfig("llm.baseUrl", primary.baseUrl);
       setConfig("llm.apiKey", primary.apiKey, true);

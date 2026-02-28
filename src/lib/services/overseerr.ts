@@ -22,31 +22,26 @@ async function overseerrFetch(path: string, options?: RequestInit) {
   return res.json();
 }
 
+export interface OverseerrSeasonStatus {
+  seasonNumber: number;
+  status: string; // "Available" | "Partially Available" | "Pending" | "Not Requested"
+}
+
 export interface OverseerrSearchResult {
   id: number;
   mediaType: string;
   title: string;
+  year?: string;
   overview?: string;
   releaseDate?: string;
-  status: number;
-  mediaStatus?: string;
-}
-
-export async function search(query: string): Promise<OverseerrSearchResult[]> {
-  const data = await overseerrFetch(`/search?query=${encodeURIComponent(query)}&page=1&language=en`);
-  return (data?.results || []).slice(0, 10).map((r: Record<string, unknown>) => ({
-    id: r.id as number,
-    mediaType: r.mediaType as string,
-    title: (r.title || r.name) as string,
-    overview: (r.overview as string)?.substring(0, 200),
-    releaseDate: (r.releaseDate || r.firstAirDate) as string,
-    status: r.status as number,
-    mediaStatus: mediaStatusLabel(r.mediaInfo as Record<string, unknown> | undefined),
-  }));
+  mediaStatus: string;
+  // TV-specific
+  seasonCount?: number;
+  seasons?: OverseerrSeasonStatus[];
 }
 
 function mediaStatusLabel(info?: Record<string, unknown>): string {
-  if (!info) return "Unknown";
+  if (!info) return "Not Requested";
   switch (info.status) {
     case 1: return "Unknown";
     case 2: return "Pending";
@@ -57,26 +52,73 @@ function mediaStatusLabel(info?: Record<string, unknown>): string {
   }
 }
 
+function seasonStatusLabel(status: number): string {
+  switch (status) {
+    case 2: return "Pending";
+    case 3: return "Processing";
+    case 4: return "Partially Available";
+    case 5: return "Available";
+    default: return "Not Requested";
+  }
+}
+
+export async function search(query: string): Promise<OverseerrSearchResult[]> {
+  const data = await overseerrFetch(`/search?query=${encodeURIComponent(query)}&page=1&language=en`);
+  return (data?.results || []).slice(0, 10).map((r: Record<string, unknown>) => {
+    const mediaInfo = r.mediaInfo as Record<string, unknown> | undefined;
+    const isTV = r.mediaType === "tv";
+    const rawSeasons = (mediaInfo?.seasons as Record<string, unknown>[]) || [];
+
+    return {
+      id: r.id as number,
+      mediaType: r.mediaType as string,
+      title: (r.title || r.name) as string,
+      year: ((r.releaseDate || r.firstAirDate) as string | undefined)?.substring(0, 4),
+      overview: (r.overview as string | undefined)?.substring(0, 300),
+      releaseDate: (r.releaseDate || r.firstAirDate) as string | undefined,
+      mediaStatus: mediaStatusLabel(mediaInfo),
+      seasonCount: isTV ? (r.numberOfSeasons as number | undefined) : undefined,
+      seasons: isTV && rawSeasons.length > 0
+        ? rawSeasons
+            .filter((s) => (s.seasonNumber as number) > 0)
+            .map((s) => ({
+              seasonNumber: s.seasonNumber as number,
+              status: seasonStatusLabel(s.status as number),
+            }))
+        : undefined,
+    };
+  });
+}
+
 export interface OverseerrRequest {
   id: number;
   type: string;
   title: string;
+  year?: string;
   status: string;
   requestedBy: string;
-  createdAt: string;
+  requestedAt: string;
+  seasonsRequested?: number[];
 }
 
 export async function listRequests(): Promise<OverseerrRequest[]> {
   const data = await overseerrFetch("/request?take=20&skip=0&sort=added");
   return (data?.results || []).map((r: Record<string, unknown>) => {
     const media = r.media as Record<string, unknown> | undefined;
+    const isTV = r.type === "tv";
+    const seasonsList = isTV
+      ? ((r.seasons as Record<string, unknown>[]) || []).map((s) => s.seasonNumber as number).sort((a, b) => a - b)
+      : undefined;
+
     return {
       id: r.id as number,
       type: r.type as string,
       title: (media?.title || media?.name || "Unknown") as string,
+      year: ((media?.releaseDate || media?.firstAirDate) as string | undefined)?.substring(0, 4),
       status: requestStatusLabel(r.status as number),
       requestedBy: ((r.requestedBy as Record<string, unknown>)?.displayName || "Unknown") as string,
-      createdAt: r.createdAt as string,
+      requestedAt: r.createdAt as string,
+      seasonsRequested: seasonsList && seasonsList.length > 0 ? seasonsList : undefined,
     };
   });
 }

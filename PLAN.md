@@ -91,6 +91,25 @@ Build an LLM-powered chat frontend for media management (*arr stack). Users log 
 - [x] Loading states, error handling, responsive design — chat page loading spinner, auto-collapse sidebar on mobile
 - [x] Next.js 16 proxy convention (middleware.ts → proxy.ts) — `src/proxy.ts`
 
+### Phase 9: Bug Fixes & Settings Improvements
+
+#### Fixed
+- [x] **Docker auth loop** — Session cookie used `secure: true` whenever `NODE_ENV=production`, which browsers silently drop over plain HTTP. Changed to opt-in via `SECURE_COOKIES=true` env var (set this when running behind an HTTPS reverse proxy). — `src/lib/auth/session.ts`
+- [x] **First message no response** — `setActiveConversationId()` in `handleSend` triggered a `useEffect` → `loadMessages()` which fetched from DB and called `setMessages([])`, overwriting the optimistic SSE placeholder mid-stream. Fixed with `streamingRef` (a `useRef` that tracks streaming state synchronously); `loadMessages` bails out early if a stream is active. — `src/hooks/use-chat.ts`
+- [x] **New chats show "Unknown" user (admin view)** — `POST /api/conversations` returned no `userId`/`ownerName`, so the optimistic sidebar update lacked owner info. Response now includes both. — `src/app/api/conversations/route.ts`
+
+- [x] **Test connection masked credentials** — Settings GET masks secrets as "••••••••"; frontend sent empty string; backend rejected. Test-connection route now resolves credentials server-side from stored config (by service type; by `endpointId` for multi-LLM). `TestConnectionRequest.apiKey` made optional, `endpointId` added. — `src/app/api/setup/test-connection/route.ts`, `src/types/api.ts`, `src/app/settings/page.tsx`
+- [x] **LLM test max_tokens rejected** — Non-OpenAI endpoints (Ollama, LM Studio) reject `max_tokens: 1`. Test now retries without it if first attempt fails. — `src/lib/services/test-connection.ts`
+- [x] **Default LLM endpoint** — Added `isDefault: boolean` to `LlmEndpoint` everywhere. Settings page uses radio group to select one default. PATCH enforces single-default invariant. `models/route.ts` uses `isDefault` endpoint as system default. — `src/app/api/settings/route.ts`, `src/app/api/models/route.ts`, `src/app/settings/page.tsx`
+- [x] **Master admin lock** — PATCH `/api/settings/users` blocks `isAdmin=false` for lowest-ID user (server-enforced). Settings UI shows "Administrator (locked)" for that user instead of a role selector. — `src/app/api/settings/users/route.ts`, `src/app/settings/page.tsx`
+
+- [x] **Chat auto-title real-time** — `generateTitle()` now returns `string | null`. Chat route awaits it inside the stream and emits a `title_update` SSE event before `[DONE]`. `useChat` calls an optional `onTitleUpdate` callback. `chat/page.tsx` wires this to `updateConversationTitle()` (new local-only update in `useConversations`) so the sidebar updates without a page refresh. — `src/lib/llm/orchestrator.ts`, `src/app/api/chat/route.ts`, `src/types/chat.ts`, `src/hooks/use-chat.ts`, `src/hooks/use-conversations.ts`, `src/app/chat/page.tsx`
+- [x] **Traffic light false amber** — `checkLlm()` in the status route used `max_tokens: 1`; same endpoint compatibility fix as test-connection. — `src/app/api/services/status/route.ts`
+- [x] **System prompt template** — Extracted `DEFAULT_SYSTEM_PROMPT` to `src/lib/llm/default-prompt.ts` (client-importable). Uses `{{serviceList}}` placeholder substituted at runtime. `buildSystemPrompt(customPrompt?)` accepts per-endpoint override. Orchestrator passes endpoint's `systemPrompt`. Settings textarea placeholder shows default template; hint explains `{{serviceList}}`. — `src/lib/llm/default-prompt.ts` (new), `src/lib/llm/system-prompt.ts`, `src/lib/llm/client.ts`, `src/lib/llm/orchestrator.ts`, `src/app/settings/page.tsx`
+
+- [x] **Plex token input (direct)** — Removed Plex OAuth "Connect to Plex" button and polling flow. Replaced with a plain password input so users paste their Plex token directly (same UX as Sonarr/Radarr/Overseerr API keys). Includes hint text on where to find the token. — `src/app/settings/page.tsx`
+- [x] **MCP tool improvements** — Plex: extracts `seasons`, `totalEpisodes`, `watchedEpisodes`, `dateAdded` from the existing search response fields (`childCount`, `leafCount`, `viewedLeafCount`, `addedAt`). Sonarr: replaced `sonarr_list_series` with `sonarr_get_series_status` (per-season episode counts, download progress, next air date); queue now includes `downloadPercent` and season/episode numbers. Radarr: replaced `radarr_list_movies` with `radarr_get_movie_status` (downloaded, in-queue, download %, time left); queue now includes `downloadPercent`. Overseerr: search returns per-season availability status and year; listRequests returns `seasonsRequested` and `requestedAt`. — `src/lib/services/{plex,sonarr,radarr,overseerr}.ts`, `src/lib/tools/{sonarr,radarr}-tools.ts`
+
 ## Current File Structure
 
 ```
@@ -253,9 +272,9 @@ src/
 
 | Server | Tools |
 |--------|-------|
-| Plex | plex_search_library, plex_get_watch_history, plex_get_on_deck, plex_check_availability |
-| Sonarr | sonarr_search_series, sonarr_get_calendar, sonarr_get_queue, sonarr_list_series, sonarr_monitor_series |
-| Radarr | radarr_search_movie, radarr_list_movies, radarr_get_queue, radarr_monitor_movie |
+| Plex | plex_search_library, plex_get_on_deck, plex_get_recently_added, plex_check_availability |
+| Sonarr | sonarr_search_series, sonarr_get_series_status, sonarr_get_calendar, sonarr_get_queue |
+| Radarr | radarr_search_movie, radarr_get_movie_status, radarr_get_queue |
 | Overseerr | overseerr_search, overseerr_request_movie, overseerr_request_tv, overseerr_list_requests |
 
 ## MCP Permission Framework
