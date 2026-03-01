@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
@@ -84,6 +84,11 @@ export default function SettingsPage() {
   const [plexConfig, setPlexConfig] = useState<PlexConfig>({ url: "", token: "" });
   const [arrConfigs, setArrConfigs] = useState<Record<string, ArrConfig>>({});
 
+  // Initial setup mode + redirect countdown
+  const [isInitialSetup, setIsInitialSetup] = useState(false);
+  const [redirectCountdown, setRedirectCountdown] = useState<number | null>(null);
+  const countdownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Plex discovery state
   const [plexDiscovering, setPlexDiscovering] = useState(false);
   const [plexDevices, setPlexDevices] = useState<PlexDevice[]>([]);
@@ -109,6 +114,8 @@ export default function SettingsPage() {
       .then(([settingsData, usersData, mcpData]) => {
         if (settingsData.success) {
           const d = settingsData.data;
+          // No LLM endpoints = first-time setup; enable exit guard + redirect-on-complete
+          if ((d.llmEndpoints || []).length === 0) setIsInitialSetup(true);
           setEndpoints(d.llmEndpoints || []);
           setPlexConfig({ url: d.plex?.url || "", token: d.plex?.token || "" });
           const arrs: Record<string, ArrConfig> = {};
@@ -126,6 +133,33 @@ export default function SettingsPage() {
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
+
+  // Countdown tick: decrement every second, redirect at 0
+  useEffect(() => {
+    if (redirectCountdown === null) return;
+    if (redirectCountdown <= 0) {
+      router.push("/chat");
+      return;
+    }
+    countdownTimerRef.current = setTimeout(
+      () => setRedirectCountdown((prev) => (prev !== null ? prev - 1 : null)),
+      1000,
+    );
+    return () => {
+      if (countdownTimerRef.current) clearTimeout(countdownTimerRef.current);
+    };
+  }, [redirectCountdown, router]);
+
+  // Warn before browser navigation when initial setup is incomplete
+  useEffect(() => {
+    if (!isInitialSetup || redirectCountdown !== null) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [isInitialSetup, redirectCountdown]);
 
   // --- Save ---
   const handleSave = useCallback(async () => {
@@ -145,13 +179,30 @@ export default function SettingsPage() {
         body: JSON.stringify(body),
       });
       const data = await res.json();
-      if (data.success) setSaved(true);
+      if (data.success) {
+        setSaved(true);
+        // In initial setup: check if critical services are now working; if so, start redirect countdown
+        if (isInitialSetup && redirectCountdown === null) {
+          try {
+            const statusRes = await fetch("/api/services/status");
+            const statusData = await statusRes.json();
+            if (statusData.success) {
+              const services: { name: string; status: string }[] = statusData.data.services;
+              const llmOk = services.find((s) => s.name === "LLM")?.status === "green";
+              const plexOk = services.find((s) => s.name === "Plex")?.status === "green";
+              if (llmOk && plexOk) setRedirectCountdown(5);
+            }
+          } catch {
+            // Status check failing doesn't prevent saving
+          }
+        }
+      }
     } catch {
       // Silent fail
     } finally {
       setSaving(false);
     }
-  }, [endpoints, plexConfig, arrConfigs]);
+  }, [endpoints, plexConfig, arrConfigs, isInitialSetup, redirectCountdown]);
 
   // --- Plex server discovery ---
   async function discoverPlexServers() {
@@ -309,11 +360,41 @@ export default function SettingsPage() {
     <div className="min-h-screen p-4">
       <div className="mx-auto max-w-3xl">
         <div className="mb-6 flex items-center gap-3">
-          <Button variant="ghost" size="icon" onClick={() => router.push("/chat")}>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => {
+              if (isInitialSetup && redirectCountdown === null) {
+                if (!window.confirm("Setup is not complete. Are you sure you want to leave?")) return;
+              }
+              router.push("/chat");
+            }}
+          >
             <ArrowLeft size={18} />
           </Button>
           <h1 className="text-2xl font-semibold">Settings</h1>
         </div>
+
+        {/* Redirect countdown banner */}
+        {redirectCountdown !== null && (
+          <div className="mb-4 flex items-center justify-between rounded-lg border border-green-500/30 bg-green-500/10 px-4 py-3">
+            <p className="text-sm text-green-400">
+              All critical services connected. Redirecting to chat in{" "}
+              <span className="font-semibold">{redirectCountdown}s</span>…
+            </p>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                if (countdownTimerRef.current) clearTimeout(countdownTimerRef.current);
+                setRedirectCountdown(null);
+              }}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              Cancel
+            </Button>
+          </div>
+        )}
 
         <Tabs defaultValue="llm">
           <TabsList>
