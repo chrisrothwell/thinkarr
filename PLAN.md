@@ -110,6 +110,23 @@ Build an LLM-powered chat frontend for media management (*arr stack). Users log 
 - [x] **Plex token input (direct)** — Removed Plex OAuth "Connect to Plex" button and polling flow. Replaced with a plain password input so users paste their Plex token directly (same UX as Sonarr/Radarr/Overseerr API keys). Includes hint text on where to find the token. — `src/app/settings/page.tsx`
 - [x] **MCP tool improvements** — Plex: extracts `seasons`, `totalEpisodes`, `watchedEpisodes`, `dateAdded` from the existing search response fields (`childCount`, `leafCount`, `viewedLeafCount`, `addedAt`). Sonarr: replaced `sonarr_list_series` with `sonarr_get_series_status` (per-season episode counts, download progress, next air date); queue now includes `downloadPercent` and season/episode numbers. Radarr: replaced `radarr_list_movies` with `radarr_get_movie_status` (downloaded, in-queue, download %, time left); queue now includes `downloadPercent`. Overseerr: search returns per-season availability status and year; listRequests returns `seasonsRequested` and `requestedAt`. — `src/lib/services/{plex,sonarr,radarr,overseerr}.ts`, `src/lib/tools/{sonarr,radarr}-tools.ts`
 
+### Phase 10: Features & Bug Fixes (features branch)
+
+#### Bug Fixes
+- [x] **Plex episode metadata missing** — `PlexSearchResult` extended with `showTitle`, `seasonNumber` (parentIndex), `episodeNumber` (index); `mapMetadata()` populates these when type is `"episode"`. — `src/lib/services/plex.ts`
+- [x] **Historic conversation tool calls duplicate + phantom cursor** — Two root causes fixed: (1) `loadMessages` now clears `toolCalls` state before fetching so stale live tool calls cannot bleed into a loaded historical conversation; (2) `MessageBubble` no longer renders the content bubble (or its pulsing cursor) when a message has no content but already has tool calls rendered above it. — `src/hooks/use-chat.ts`, `src/components/chat/message-bubble.tsx`
+
+#### Features
+- [x] **Plex server discovery** — New `GET /api/settings/plex-devices` queries `plex.tv/api/v2/resources` using the admin's stored OAuth token and returns all linked Plex Media Servers. Settings Plex section now has a "Discover Servers" button; selecting a server auto-fills the URL (preferring local HTTP) and access token. Manual entry preserved as fallback. — `src/app/api/settings/plex-devices/route.ts`, `src/app/settings/page.tsx`
+- [x] **Setup completion redirect + exit guard** — Settings page detects initial setup (no LLM endpoints on load). After a successful save, checks `/api/services/status`; if LLM and Plex are both green, a 5s countdown banner appears with a redirect to chat and a Cancel button. Back button and `beforeunload` show a confirmation guard while setup is incomplete. — `src/app/settings/page.tsx`
+- [x] **Plex library membership check** — New `checkUserHasLibraryAccess(serverUrl, userToken)` in `plex-auth.ts` probes `GET /library/sections` on the configured Plex server with the registering user's personal token. New registrations (non-first user) are rejected with the standard error message when access is denied. Fails closed on network error. — `src/lib/services/plex-auth.ts`, `src/app/api/auth/callback/route.ts`
+- [x] **Per-user rate limiting** — Rate limits stored in `app_config` as `user.{id}.rateLimit` JSON. `config/index.ts` exports `getRateLimit`, `setRateLimit`, `getPeriodStart`, `getNextPeriodStart` (calendar-aligned), `countUserMessagesSince` (join query). `/api/chat` enforces the limit before streaming; over-limit requests receive an SSE error: "Your Session Limit has expired and will refresh on DD/MMM/YY HH:MM". Default: 100 messages/day. Admin can set per-user limits (messages + period) in Settings > Users tab. — `src/lib/config/index.ts`, `src/app/api/chat/route.ts`, `src/app/api/settings/users/route.ts`, `src/app/settings/page.tsx`
+
+#### Git Workflow
+- `main` — production-ready merges only
+- `dev` — integration branch; feature branches merge here before main
+- `features` — active development branch (current)
+
 ## Current File Structure
 
 ```
@@ -141,7 +158,8 @@ src/
 │   │   │   ├── route.ts             # GET config (masked) / PATCH update (multi-LLM)
 │   │   │   ├── mcp-token/route.ts   # GET/POST bearer token management
 │   │   │   ├── plex-connect/route.ts # POST Plex OAuth from settings
-│   │   │   └── users/route.ts       # GET list / PATCH update user settings
+│   │   │   ├── plex-devices/route.ts # GET discovered Plex servers via plex.tv API
+│   │   │   └── users/route.ts       # GET list / PATCH update user settings (incl. rate limits)
 │   │   └── setup/
 │   │       ├── route.ts             # GET status + POST save config
 │   │       └── test-connection/
@@ -185,7 +203,7 @@ src/
 │   ├── auth/
 │   │   └── session.ts               # Session create/validate/destroy + cookie management
 │   ├── config/
-│   │   └── index.ts                 # getConfig/setConfig/getConfigMap/isSetupComplete
+│   │   └── index.ts                 # getConfig/setConfig/getConfigMap/isSetupComplete + rate limit utils (getRateLimit, setRateLimit, getPeriodStart, countUserMessagesSince)
 │   ├── db/
 │   │   ├── index.ts                 # DB singleton + auto-migration
 │   │   ├── migrate.ts               # runMigrations standalone utility
@@ -197,7 +215,7 @@ src/
 │   ├── services/
 │   │   ├── overseerr.ts             # Overseerr client (search, request, list)
 │   │   ├── plex.ts                  # Plex client (search, on deck, recently added, availability)
-│   │   ├── plex-auth.ts             # Plex PIN OAuth (create/check PIN, get user)
+│   │   ├── plex-auth.ts             # Plex PIN OAuth (create/check PIN, get user, checkUserHasLibraryAccess)
 │   │   ├── radarr.ts                # Radarr client (search, list, queue)
 │   │   ├── sonarr.ts                # Sonarr client (search, list, calendar, queue)
 │   │   └── test-connection.ts       # Connection testers
@@ -238,6 +256,7 @@ src/
 | mcp.bearerToken | Bearer token for external MCP access |
 | user.{id}.defaultModel | Per-user default model selection |
 | user.{id}.canChangeModel | Per-user permission to switch models |
+| user.{id}.rateLimit | JSON: `{"messages": number, "period": "hour"|"day"|"week"|"month"}` |
 
 ## API Routes
 
@@ -265,8 +284,9 @@ src/
 | GET | /api/settings/mcp-token | Get MCP bearer token (admin) |
 | POST | /api/settings/mcp-token | Regenerate MCP bearer token (admin) |
 | POST | /api/settings/plex-connect | Plex OAuth from settings (create PIN / check claim) |
-| GET | /api/settings/users | List all users with settings (admin) |
-| PATCH | /api/settings/users | Update user role/model/permissions (admin) |
+| GET | /api/settings/users | List all users with settings incl. rate limits (admin) |
+| PATCH | /api/settings/users | Update user role/model/permissions/rate limit (admin) |
+| GET | /api/settings/plex-devices | List Plex servers discoverable via admin's plex.tv account (admin) |
 
 ## MCP Tools
 
