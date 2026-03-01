@@ -61,6 +61,8 @@ interface UserEntry {
   isAdmin: boolean | null;
   defaultModel: string;
   canChangeModel: boolean;
+  rateLimitMessages: number;
+  rateLimitPeriod: "hour" | "day" | "week" | "month";
 }
 
 // --- Helpers ---
@@ -127,7 +129,15 @@ export default function SettingsPage() {
           }
           setArrConfigs(arrs);
         }
-        if (usersData.success) setUsers(usersData.data || []);
+        if (usersData.success) {
+          setUsers(
+            (usersData.data || []).map((u: UserEntry) => ({
+              ...u,
+              rateLimitMessages: u.rateLimitMessages ?? 100,
+              rateLimitPeriod: u.rateLimitPeriod ?? "day",
+            })),
+          );
+        }
         if (mcpData.success) setMcpToken(mcpData.data?.token || "");
       })
       .catch(() => {})
@@ -324,7 +334,7 @@ export default function SettingsPage() {
   }
 
   // --- User management ---
-  async function updateUser(userId: number, updates: Partial<Pick<UserEntry, "isAdmin" | "defaultModel" | "canChangeModel">>) {
+  async function updateUser(userId: number, updates: Partial<Pick<UserEntry, "isAdmin" | "defaultModel" | "canChangeModel" | "rateLimitMessages" | "rateLimitPeriod">>) {
     try {
       await fetch("/api/settings/users", {
         method: "PATCH",
@@ -827,6 +837,37 @@ export default function SettingsPage() {
                               <span className="text-muted-foreground">
                                 Can change model
                               </span>
+                            </label>
+
+                            {/* Rate limit */}
+                            <label className="flex items-center gap-1.5 text-sm">
+                              <span className="text-muted-foreground">Limit:</span>
+                              <input
+                                type="number"
+                                min={1}
+                                value={user.rateLimitMessages}
+                                onChange={(e) =>
+                                  updateUser(user.id, {
+                                    rateLimitMessages: Math.max(1, parseInt(e.target.value, 10) || 1),
+                                  })
+                                }
+                                className="w-16 rounded border bg-background px-2 py-0.5 text-sm"
+                              />
+                              <span className="text-muted-foreground">messages per</span>
+                              <select
+                                value={user.rateLimitPeriod}
+                                onChange={(e) =>
+                                  updateUser(user.id, {
+                                    rateLimitPeriod: e.target.value as UserEntry["rateLimitPeriod"],
+                                  })
+                                }
+                                className="rounded border bg-background px-2 py-0.5 text-sm"
+                              >
+                                <option value="hour">hour</option>
+                                <option value="day">day</option>
+                                <option value="week">week</option>
+                                <option value="month">month</option>
+                              </select>
                             </label>
                           </div>
                         </div>

@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { getDb, schema } from "@/lib/db";
 import { eq, asc } from "drizzle-orm";
-import { getConfig } from "@/lib/config";
+import { getConfig, getRateLimit, setRateLimit } from "@/lib/config";
+import type { RateLimitPeriod } from "@/lib/config";
 import type { ApiResponse } from "@/types/api";
 
 export async function GET() {
@@ -28,11 +29,16 @@ export async function GET() {
     .all();
 
   // Get per-user settings from config
-  const usersWithSettings = users.map((u) => ({
-    ...u,
-    defaultModel: getConfig(`user.${u.id}.defaultModel`) || "",
-    canChangeModel: getConfig(`user.${u.id}.canChangeModel`) !== "false",
-  }));
+  const usersWithSettings = users.map((u) => {
+    const rl = getRateLimit(u.id);
+    return {
+      ...u,
+      defaultModel: getConfig(`user.${u.id}.defaultModel`) || "",
+      canChangeModel: getConfig(`user.${u.id}.canChangeModel`) !== "false",
+      rateLimitMessages: rl.messages,
+      rateLimitPeriod: rl.period,
+    };
+  });
 
   return NextResponse.json<ApiResponse>({ success: true, data: usersWithSettings });
 }
@@ -51,6 +57,8 @@ export async function PATCH(request: Request) {
     isAdmin?: boolean;
     defaultModel?: string;
     canChangeModel?: boolean;
+    rateLimitMessages?: number;
+    rateLimitPeriod?: RateLimitPeriod;
   };
 
   try {
@@ -90,6 +98,14 @@ export async function PATCH(request: Request) {
 
   if (body.canChangeModel !== undefined) {
     setConfig(`user.${body.userId}.canChangeModel`, String(body.canChangeModel));
+  }
+
+  if (body.rateLimitMessages !== undefined || body.rateLimitPeriod !== undefined) {
+    const current = getRateLimit(body.userId);
+    setRateLimit(body.userId, {
+      messages: body.rateLimitMessages ?? current.messages,
+      period: body.rateLimitPeriod ?? current.period,
+    });
   }
 
   return NextResponse.json<ApiResponse>({ success: true });
