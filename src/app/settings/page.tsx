@@ -20,6 +20,7 @@ import {
   Copy,
 } from "lucide-react";
 import { DEFAULT_SYSTEM_PROMPT } from "@/lib/llm/default-prompt";
+import { copyToClipboard } from "@/lib/utils";
 
 // --- Types ---
 
@@ -504,7 +505,7 @@ export default function SettingsPage() {
                     <Button
                       variant="ghost"
                       size="icon"
-                      onClick={() => navigator.clipboard.writeText(`${window.location.origin}/api/mcp`)}
+                      onClick={() => copyToClipboard(`${window.location.origin}/api/mcp`)}
                     >
                       <Copy size={14} />
                     </Button>
@@ -522,7 +523,7 @@ export default function SettingsPage() {
                     <Button
                       variant="ghost"
                       size="icon"
-                      onClick={() => navigator.clipboard.writeText(mcpToken)}
+                      onClick={() => copyToClipboard(mcpToken)}
                     >
                       <Copy size={14} />
                     </Button>

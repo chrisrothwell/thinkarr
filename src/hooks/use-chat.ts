@@ -3,6 +3,7 @@
 import { useState, useCallback, useRef } from "react";
 import type { Message } from "@/types";
 import type { ToolCallDisplay } from "@/types/chat";
+import { generateId } from "@/lib/utils";
 
 interface UseChatOptions {
   onTitleUpdate?: (conversationId: string, title: string) => void;
@@ -41,7 +42,7 @@ export function useChat(conversationId: string | null, options?: UseChatOptions)
 
       // Add user message optimistically
       const userMsg: Message = {
-        id: crypto.randomUUID(),
+        id: generateId(),
         conversationId: convId,
         role: "user",
         content,
@@ -53,7 +54,7 @@ export function useChat(conversationId: string | null, options?: UseChatOptions)
       setMessages((prev) => [...prev, userMsg]);
 
       // Add placeholder assistant message
-      const assistantId = crypto.randomUUID();
+      const assistantId = generateId();
       const assistantMsg: Message = {
         id: assistantId,
         conversationId: convId,
