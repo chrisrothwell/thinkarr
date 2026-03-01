@@ -32,14 +32,19 @@ export interface PlexSearchResult {
   totalEpisodes?: number;   // Total episodes in library (leafCount)
   watchedEpisodes?: number; // Episodes watched (viewedLeafCount)
   dateAdded?: string;       // ISO date string (addedAt Unix → ISO)
+  // Episode-specific fields
+  showTitle?: string;       // Parent show title (grandparentTitle)
+  seasonNumber?: number;    // Season number (parentIndex)
+  episodeNumber?: number;   // Episode number within season (index)
 }
 
 function mapMetadata(item: Record<string, unknown>, type?: string): PlexSearchResult {
   const addedAt = item.addedAt as number | undefined;
+  const resolvedType = (type || item.type) as string;
   return {
     title: item.title as string,
     year: item.year as number | undefined,
-    type: (type || item.type) as string,
+    type: resolvedType,
     summary: (item.summary as string | undefined)?.substring(0, 300),
     rating: item.rating as number | undefined,
     key: item.key as string,
@@ -47,6 +52,10 @@ function mapMetadata(item: Record<string, unknown>, type?: string): PlexSearchRe
     totalEpisodes: item.leafCount as number | undefined,
     watchedEpisodes: item.viewedLeafCount as number | undefined,
     dateAdded: addedAt ? new Date(addedAt * 1000).toISOString().split("T")[0] : undefined,
+    // Episode fields — only populated when type is "episode"
+    showTitle: resolvedType === "episode" ? (item.grandparentTitle as string | undefined) : undefined,
+    seasonNumber: resolvedType === "episode" ? (item.parentIndex as number | undefined) : undefined,
+    episodeNumber: resolvedType === "episode" ? (item.index as number | undefined) : undefined,
   };
 }
 

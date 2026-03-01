@@ -20,6 +20,7 @@ export function useChat(conversationId: string | null, options?: UseChatOptions)
 
   const loadMessages = useCallback(async (convId: string) => {
     if (streamingRef.current) return;
+    setToolCalls(new Map());
     try {
       const res = await fetch(`/api/conversations/${convId}`);
       const data = await res.json();

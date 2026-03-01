@@ -37,24 +37,26 @@ export function MessageBubble({ message, toolCalls, userAvatar, userName }: Mess
           </div>
         )}
 
-        <div
-          className={cn(
-            "inline-block rounded-2xl px-4 py-2.5 text-sm",
-            isUser
-              ? "bg-primary text-primary-foreground"
-              : "bg-card text-card-foreground",
-          )}
-        >
-          {message.content ? (
-            isUser ? (
-              <p className="whitespace-pre-wrap">{message.content}</p>
+        {(message.content || !hasToolCalls) && (
+          <div
+            className={cn(
+              "inline-block rounded-2xl px-4 py-2.5 text-sm",
+              isUser
+                ? "bg-primary text-primary-foreground"
+                : "bg-card text-card-foreground",
+            )}
+          >
+            {message.content ? (
+              isUser ? (
+                <p className="whitespace-pre-wrap">{message.content}</p>
+              ) : (
+                <MessageContent content={message.content} />
+              )
             ) : (
-              <MessageContent content={message.content} />
-            )
-          ) : (
-            <span className="inline-block h-5 w-1 animate-pulse bg-muted-foreground/50 rounded-full" />
-          )}
-        </div>
+              <span className="inline-block h-5 w-1 animate-pulse bg-muted-foreground/50 rounded-full" />
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
