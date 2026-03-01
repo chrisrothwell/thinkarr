@@ -18,6 +18,7 @@ import {
   Trash2,
   RefreshCw,
   Copy,
+  Search,
 } from "lucide-react";
 import { DEFAULT_SYSTEM_PROMPT } from "@/lib/llm/default-prompt";
 
@@ -42,6 +43,14 @@ interface ArrConfig {
 interface PlexConfig {
   url: string;
   token: string;
+}
+
+interface PlexDevice {
+  name: string;
+  clientIdentifier: string;
+  accessToken: string;
+  owned: boolean;
+  connections: { protocol: string; address: string; port: number; uri: string; local: boolean }[];
 }
 
 interface UserEntry {
@@ -74,6 +83,11 @@ export default function SettingsPage() {
   // Plex & Arrs state
   const [plexConfig, setPlexConfig] = useState<PlexConfig>({ url: "", token: "" });
   const [arrConfigs, setArrConfigs] = useState<Record<string, ArrConfig>>({});
+
+  // Plex discovery state
+  const [plexDiscovering, setPlexDiscovering] = useState(false);
+  const [plexDevices, setPlexDevices] = useState<PlexDevice[]>([]);
+  const [plexDiscoverError, setPlexDiscoverError] = useState<string | null>(null);
 
   // MCP state
   const [mcpToken, setMcpToken] = useState<string>("");
@@ -138,6 +152,41 @@ export default function SettingsPage() {
       setSaving(false);
     }
   }, [endpoints, plexConfig, arrConfigs]);
+
+  // --- Plex server discovery ---
+  async function discoverPlexServers() {
+    setPlexDiscovering(true);
+    setPlexDiscoverError(null);
+    setPlexDevices([]);
+    try {
+      const res = await fetch("/api/settings/plex-devices");
+      const data = await res.json();
+      if (data.success) {
+        setPlexDevices(data.data || []);
+        if ((data.data || []).length === 0) {
+          setPlexDiscoverError("No Plex servers found on your account.");
+        }
+      } else {
+        setPlexDiscoverError(data.error || "Discovery failed");
+      }
+    } catch {
+      setPlexDiscoverError("Network error — could not reach server");
+    } finally {
+      setPlexDiscovering(false);
+    }
+  }
+
+  function selectPlexDevice(device: PlexDevice) {
+    // Prefer a local http connection, fall back to first available
+    const best =
+      device.connections.find((c) => c.local && c.protocol === "http") ||
+      device.connections.find((c) => c.local) ||
+      device.connections[0];
+    const url = best ? `${best.protocol}://${best.address}:${best.port}` : "";
+    setPlexConfig({ url, token: device.accessToken });
+    setPlexDevices([]);
+    setSaved(false);
+  }
 
   // --- Test connection ---
   async function testConnection(sectionKey: string, url: string, apiKey: string, model?: string, endpointId?: string) {
@@ -382,8 +431,50 @@ export default function SettingsPage() {
             <Card>
               <CardHeader className="pb-3">
                 <CardTitle className="text-lg">Plex</CardTitle>
+                <CardDescription>
+                  Discover servers automatically using your linked Plex account, or enter details manually.
+                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
+                {/* Discovery button */}
+                <div className="flex items-center gap-3">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={discoverPlexServers}
+                    disabled={plexDiscovering}
+                    className="gap-2"
+                  >
+                    {plexDiscovering ? <Spinner size={14} /> : <Search size={14} />}
+                    Discover Servers
+                  </Button>
+                  {plexDiscoverError && (
+                    <span className="text-sm text-destructive">{plexDiscoverError}</span>
+                  )}
+                </div>
+
+                {/* Server list */}
+                {plexDevices.length > 0 && (
+                  <div className="rounded-lg border divide-y">
+                    {plexDevices.map((device) => (
+                      <button
+                        key={device.clientIdentifier}
+                        onClick={() => selectPlexDevice(device)}
+                        className="w-full flex items-center justify-between px-3 py-2.5 text-left hover:bg-muted/50 transition-colors"
+                      >
+                        <div>
+                          <p className="text-sm font-medium">{device.name}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {device.connections.length} connection{device.connections.length !== 1 ? "s" : ""}
+                            {device.owned ? " · Owned" : " · Shared"}
+                          </p>
+                        </div>
+                        <span className="text-xs text-primary">Select →</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
                 <div className="space-y-1.5">
                   <Label>URL</Label>
                   <Input
@@ -405,11 +496,10 @@ export default function SettingsPage() {
                       setPlexConfig((prev) => ({ ...prev, token: e.target.value }));
                       setSaved(false);
                     }}
-                    placeholder="Paste your Plex token"
+                    placeholder="Paste your Plex token (or use Discover above)"
                   />
                   <p className="text-xs text-muted-foreground">
-                    Find your token: Plex Web → Settings → Troubleshooting → Your Account Token.
-                    Or append <code className="font-mono">?X-Plex-Token=</code> to any Plex API URL and copy the value shown.
+                    Manual entry: Plex Web → Settings → Troubleshooting → Your Account Token.
                   </p>
                 </div>
               </CardContent>
