@@ -110,6 +110,50 @@ Build an LLM-powered chat frontend for media management (*arr stack). Users log 
 - [x] **Plex token input (direct)** — Removed Plex OAuth "Connect to Plex" button and polling flow. Replaced with a plain password input so users paste their Plex token directly (same UX as Sonarr/Radarr/Overseerr API keys). Includes hint text on where to find the token. — `src/app/settings/page.tsx`
 - [x] **MCP tool improvements** — Plex: extracts `seasons`, `totalEpisodes`, `watchedEpisodes`, `dateAdded` from the existing search response fields (`childCount`, `leafCount`, `viewedLeafCount`, `addedAt`). Sonarr: replaced `sonarr_list_series` with `sonarr_get_series_status` (per-season episode counts, download progress, next air date); queue now includes `downloadPercent` and season/episode numbers. Radarr: replaced `radarr_list_movies` with `radarr_get_movie_status` (downloaded, in-queue, download %, time left); queue now includes `downloadPercent`. Overseerr: search returns per-season availability status and year; listRequests returns `seasonsRequested` and `requestedAt`. — `src/lib/services/{plex,sonarr,radarr,overseerr}.ts`, `src/lib/tools/{sonarr,radarr}-tools.ts`
 
+### Phase 10: Features & Bug Fixes (features branch)
+
+#### Bug Fixes
+- [x] **Plex episode metadata missing** — `PlexSearchResult` extended with `showTitle`, `seasonNumber` (parentIndex), `episodeNumber` (index); `mapMetadata()` populates these when type is `"episode"`. — `src/lib/services/plex.ts`
+- [x] **Historic conversation tool calls duplicate + phantom cursor** — Two root causes fixed: (1) `loadMessages` now clears `toolCalls` state before fetching so stale live tool calls cannot bleed into a loaded historical conversation; (2) `MessageBubble` no longer renders the content bubble (or its pulsing cursor) when a message has no content but already has tool calls rendered above it. — `src/hooks/use-chat.ts`, `src/components/chat/message-bubble.tsx`
+
+#### Features
+- [x] **Plex server discovery** — New `GET /api/settings/plex-devices` queries `plex.tv/api/v2/resources` using the admin's stored OAuth token and returns all linked Plex Media Servers. Settings Plex section now has a "Discover Servers" button; selecting a server auto-fills the URL (preferring local HTTP) and access token. Manual entry preserved as fallback. — `src/app/api/settings/plex-devices/route.ts`, `src/app/settings/page.tsx`
+- [x] **Setup completion redirect + exit guard** — Settings page detects initial setup (no LLM endpoints on load). After a successful save, checks `/api/services/status`; if LLM and Plex are both green, a 5s countdown banner appears with a redirect to chat and a Cancel button. Back button and `beforeunload` show a confirmation guard while setup is incomplete. — `src/app/settings/page.tsx`
+- [x] **Plex library membership check** — New `checkUserHasLibraryAccess(serverUrl, userToken)` in `plex-auth.ts` probes `GET /library/sections` on the configured Plex server with the registering user's personal token. New registrations (non-first user) are rejected with the standard error message when access is denied. Fails closed on network error. — `src/lib/services/plex-auth.ts`, `src/app/api/auth/callback/route.ts`
+- [x] **Per-user rate limiting** — Rate limits stored in `app_config` as `user.{id}.rateLimit` JSON. `config/index.ts` exports `getRateLimit`, `setRateLimit`, `getPeriodStart`, `getNextPeriodStart` (calendar-aligned), `countUserMessagesSince` (join query). `/api/chat` enforces the limit before streaming; over-limit requests receive an SSE error: "Your Session Limit has expired and will refresh on DD/MMM/YY HH:MM". Default: 100 messages/day. Admin can set per-user limits (messages + period) in Settings > Users tab. — `src/lib/config/index.ts`, `src/app/api/chat/route.ts`, `src/app/api/settings/users/route.ts`, `src/app/settings/page.tsx`
+
+#### Git Workflow
+- `main` — production-ready merges only
+- `dev` — integration branch; feature branches merge here before main
+- `features` — active development branch (current)
+
+### Phase 11: Title Cards, Logging & Bug Fixes (features branch)
+
+#### Title Cards & Carousel (TODO #6)
+- [x] **`display_titles` MCP tool** — New `display_titles` tool registered unconditionally. Accepts 1–10 title entries with rich metadata (mediaType, thumbPath, overseerrId, seasonNumber, etc.) and returns `DisplayTitle[]` with server-side resolved `thumbUrl` and `plexMachineId`. Zod schema uses `.nullish()` on all optional fields (LLMs send `null`; coercion to `undefined` done in handler). — `src/lib/tools/display-titles-tool.ts`, `src/lib/tools/init.ts`
+- [x] **`DisplayTitle` type** — Shared type for title card data, including `plexMachineId` (for Watch Now URL) and `imdbId`. — `src/types/titles.ts`
+- [x] **`TitleCard` component** — Horizontal card with thumbnail (TMDB or Plex), status badge (available/partial/pending/not_requested), rating, summary, cast, and action buttons (Watch Now → `app.plex.tv` universal link, More Info → IMDB or TMDB fallback, Request → `POST /api/request`). Request button shows spinner during request and switches to "Requested" badge on success. — `src/components/chat/title-card.tsx`
+- [x] **`TitleCarousel` component** — Single title renders in `max-w-md` wrapper; multiple titles render in a horizontal snap-scroll carousel (`w-[352px]` per card) with hover-reveal left/right arrow buttons and hidden scrollbar. — `src/components/chat/title-carousel.tsx`
+- [x] **`message-bubble.tsx` integration** — `display_titles` tool calls render as both a collapsible `ToolCall` panel (same as other tools) AND a `TitleCarousel` below it. Intermediate assistant messages (tool-calling rounds with no text) suppress the message bubble / pulsing cursor. — `src/components/chat/message-bubble.tsx`
+- [x] **Request API route** — `POST /api/request` calls `requestMovie` or `requestTv` from Overseerr service. Accepts `seasons: [n]` for single-season requests. Auth required; logs success and failure. — `src/app/api/request/route.ts`
+- [x] **Watch Now universal link** — Uses `https://app.plex.tv/desktop/#!/server/{machineId}/details?key={encodedKey}` — works externally and opens native Plex app on iOS/Android. `getPlexMachineId()` fetches and in-memory caches from `GET /` on the Plex server. — `src/lib/services/plex.ts`
+- [x] **System prompt updated** — LLM instructed to always call `display_titles` after searching, never request media autonomously (button-only), and generate per-season cards for multi-season shows. — `src/lib/llm/default-prompt.ts`
+
+#### Logging (TODO #10, #12, #15)
+- [x] **Winston logger** — Singleton with Console transport (stdout, pretty-printed JSON with newline separator for Docker logs) and DailyRotateFile transport (`/config/logs/thinkarr-YYYY-MM-DD.log`, 14-day retention, 20 MB max). — `src/lib/logger.ts`, `next.config.ts`
+- [x] **API call logging** — Full request URL, method, and response body (truncated to 5000 chars) logged at `info` level in all four service clients (Plex, Overseerr, Sonarr, Radarr). — `src/lib/services/{plex,overseerr,sonarr,radarr}.ts`
+- [x] **Tool call/result logging** — `executeTool` logs tool name + args at call time and result (truncated to 2000 chars) on completion; errors logged at `error` level. — `src/lib/tools/registry.ts`
+- [x] **Settings Logs tab** — `GET /api/settings/logs` lists log files (name, size, modified). `GET /api/settings/logs/[filename]` returns last 500 lines (or full with `?full=true`) or streams file for download (`?download=true`). Settings page has a new Logs tab with file selector, line count toolbar, scrollable `<pre>` viewer, and Download button. — `src/app/api/settings/logs/route.ts`, `src/app/api/settings/logs/[filename]/route.ts`, `src/app/settings/page.tsx`
+
+#### Bug Fixes
+- [x] **Overseerr `seasonCount` missing** — `/search` proxies TMDB which omits `numberOfSeasons`. Fixed by parallel `GET /tv/{id}` detail calls in `search()` using `Promise.all`. — `src/lib/services/overseerr.ts`
+- [x] **Overseerr `mediaStatus: "Unknown"`** — Status code 1 (tracked, nothing requested) now maps to `"Not Requested"` instead of `"Unknown"`. — `src/lib/services/overseerr.ts`
+- [x] **More Info button (IMDB/TMDB)** — Overseerr `/search` never returns `imdbId`; fixed by always showing More Info for requestable titles using IMDB when available, falling back to TMDB URL from `overseerrId`. — `src/components/chat/title-card.tsx`, `src/lib/services/overseerr.ts`
+- [x] **Multi-season TV requests** — Removed `overseerr_request_movie` and `overseerr_request_tv` LLM tools. Requests made button-only with `seasons: [n]` payload for per-season requests. — `src/lib/tools/overseerr-tools.ts`
+- [x] **Next.js proxy convention** — Renamed `src/middleware.ts` → `src/proxy.ts`, export `middleware` → `proxy`, eliminating build deprecation warning. — `src/proxy.ts`
+- [x] **Posterless titles** — Overseerr-only results (not in Plex) use TMDB `posterUrl` directly as `thumbPath`; `display-titles-tool.ts` detects `startsWith("http")` and passes through without wrapping in Plex token URL. — `src/lib/tools/display-titles-tool.ts`
+- [x] **`display_titles` Zod null rejection** — LLMs pass `null` for absent optional fields; schema now uses `.nullish()` (JSON Schema compatible, no transforms). Handler coerces `null → undefined` with `?? undefined`. — `src/lib/tools/display-titles-tool.ts`
+
 ## Current File Structure
 
 ```
@@ -141,7 +185,8 @@ src/
 │   │   │   ├── route.ts             # GET config (masked) / PATCH update (multi-LLM)
 │   │   │   ├── mcp-token/route.ts   # GET/POST bearer token management
 │   │   │   ├── plex-connect/route.ts # POST Plex OAuth from settings
-│   │   │   └── users/route.ts       # GET list / PATCH update user settings
+│   │   │   ├── plex-devices/route.ts # GET discovered Plex servers via plex.tv API
+│   │   │   └── users/route.ts       # GET list / PATCH update user settings (incl. rate limits)
 │   │   └── setup/
 │   │       ├── route.ts             # GET status + POST save config
 │   │       └── test-connection/
@@ -161,11 +206,13 @@ src/
 ├── components/
 │   ├── chat/
 │   │   ├── chat-input.tsx           # Auto-resizing textarea + send/stop buttons
-│   │   ├── message-bubble.tsx       # User/assistant message styling + avatar + tool calls
+│   │   ├── message-bubble.tsx       # User/assistant message styling + avatar + tool calls + TitleCarousel interception
 │   │   ├── message-content.tsx      # Markdown rendering (react-markdown + remark-gfm)
 │   │   ├── message-list.tsx         # Scrollable messages + historical tool call reconstruction
 │   │   ├── service-status.tsx       # Traffic light service status (green/amber/red)
 │   │   ├── sidebar.tsx              # Collapsible sidebar + grouped conversations + service status
+│   │   ├── title-card.tsx           # Rich title card (thumbnail, status, cast, Watch Now / Request / More Info buttons)
+│   │   ├── title-carousel.tsx       # Single card or horizontal snap-scroll carousel with arrow buttons
 │   │   └── tool-call.tsx            # "Running {Action} on {Service}" + expandable details
 │   └── ui/
 │       ├── avatar.tsx               # Image/fallback avatar (sm/md/lg)
@@ -185,7 +232,7 @@ src/
 │   ├── auth/
 │   │   └── session.ts               # Session create/validate/destroy + cookie management
 │   ├── config/
-│   │   └── index.ts                 # getConfig/setConfig/getConfigMap/isSetupComplete
+│   │   └── index.ts                 # getConfig/setConfig/getConfigMap/isSetupComplete + rate limit utils (getRateLimit, setRateLimit, getPeriodStart, countUserMessagesSince)
 │   ├── db/
 │   │   ├── index.ts                 # DB singleton + auto-migration
 │   │   ├── migrate.ts               # runMigrations standalone utility
@@ -197,22 +244,25 @@ src/
 │   ├── services/
 │   │   ├── overseerr.ts             # Overseerr client (search, request, list)
 │   │   ├── plex.ts                  # Plex client (search, on deck, recently added, availability)
-│   │   ├── plex-auth.ts             # Plex PIN OAuth (create/check PIN, get user)
+│   │   ├── plex-auth.ts             # Plex PIN OAuth (create/check PIN, get user, checkUserHasLibraryAccess)
 │   │   ├── radarr.ts                # Radarr client (search, list, queue)
 │   │   ├── sonarr.ts                # Sonarr client (search, list, calendar, queue)
 │   │   └── test-connection.ts       # Connection testers
 │   ├── tools/
+│   │   ├── display-titles-tool.ts   # display_titles tool (builds DisplayTitle[], resolves thumbUrl + machineId)
 │   │   ├── init.ts                  # Auto-register tools based on configured services
-│   │   ├── overseerr-tools.ts       # Overseerr tool definitions (4 tools)
+│   │   ├── overseerr-tools.ts       # Overseerr tool definitions (search + list_requests; request tools removed)
 │   │   ├── plex-tools.ts            # Plex tool definitions (4 tools)
 │   │   ├── radarr-tools.ts          # Radarr tool definitions (3 tools)
-│   │   ├── registry.ts              # Tool registry (defineTool, getOpenAITools, executeTool)
+│   │   ├── registry.ts              # Tool registry (defineTool, getOpenAITools, executeTool) + tool logging
 │   │   └── sonarr-tools.ts          # Sonarr tool definitions (4 tools)
+│   ├── logger.ts                    # Winston singleton (Console + DailyRotateFile to /config/logs/)
 │   └── utils.ts                     # cn() class merge utility
 └── types/
     ├── api.ts                       # SetupStatus, TestConnection, SetupSaveRequest types
     ├── chat.ts                      # SSE events, ChatRequest (with modelId), ToolCallDisplay types
-    └── index.ts                     # User, Session, Conversation (with ownerName), Message interfaces
+    ├── index.ts                     # User, Session, Conversation (with ownerName), Message interfaces
+    └── titles.ts                    # DisplayTitle, TitleMediaType, TitleMediaStatus types
 ```
 
 ## Database Schema
@@ -238,6 +288,7 @@ src/
 | mcp.bearerToken | Bearer token for external MCP access |
 | user.{id}.defaultModel | Per-user default model selection |
 | user.{id}.canChangeModel | Per-user permission to switch models |
+| user.{id}.rateLimit | JSON: `{"messages": number, "period": "hour"|"day"|"week"|"month"}` |
 
 ## API Routes
 
@@ -265,8 +316,12 @@ src/
 | GET | /api/settings/mcp-token | Get MCP bearer token (admin) |
 | POST | /api/settings/mcp-token | Regenerate MCP bearer token (admin) |
 | POST | /api/settings/plex-connect | Plex OAuth from settings (create PIN / check claim) |
-| GET | /api/settings/users | List all users with settings (admin) |
-| PATCH | /api/settings/users | Update user role/model/permissions (admin) |
+| GET | /api/settings/users | List all users with settings incl. rate limits (admin) |
+| PATCH | /api/settings/users | Update user role/model/permissions/rate limit (admin) |
+| GET | /api/settings/plex-devices | List Plex servers discoverable via admin's plex.tv account (admin) |
+| GET | /api/settings/logs | List log files with name/size/modified (admin) |
+| GET | /api/settings/logs/[filename] | Read last 500 lines or full log; `?download=true` streams file (admin) |
+| POST | /api/request | Submit Overseerr media request (movie or TV with optional seasons array) |
 
 ## MCP Tools
 
@@ -275,7 +330,8 @@ src/
 | Plex | plex_search_library, plex_get_on_deck, plex_get_recently_added, plex_check_availability |
 | Sonarr | sonarr_search_series, sonarr_get_series_status, sonarr_get_calendar, sonarr_get_queue |
 | Radarr | radarr_search_movie, radarr_get_movie_status, radarr_get_queue |
-| Overseerr | overseerr_search, overseerr_request_movie, overseerr_request_tv, overseerr_list_requests |
+| Overseerr | overseerr_search, overseerr_list_requests |
+| (built-in) | display_titles — renders TitleCarousel in chat UI (registered unconditionally) |
 
 ## MCP Permission Framework
 

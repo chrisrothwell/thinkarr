@@ -1,64 +1,36 @@
-Production Issues
-1. [x] FIXED - When deployed as a docker container running on a different machine using the docker-compose.yml in this source folder - after attempting the first login, The frontend displays Authenticated...redirecting - but it never redirects.
-   ROOT CAUSE: Session cookie set with `secure: true` in production (NODE_ENV=production) — browsers silently drop Secure cookies over plain HTTP. The cookie was never sent back so the proxy saw no session and looped to /login.
-   FIX: Changed `secure` flag to only activate when `SECURE_COOKIES=true` env var is explicitly set. Default is false (suitable for local HTTP Docker deployments). Set SECURE_COOKIES=true in docker-compose.yml if running behind HTTPS reverse proxy.
-   FILES: src/lib/auth/session.ts
+## Completed
 
-Chat Frontend
-2. [x] FIXED - The first message in a new chat does not produce an answer, we have to ask the question a second time.
-   ROOT CAUSE: When a new conversation is created in handleSend(), setActiveConversationId(convId) triggers a useEffect that calls loadMessages(), which fetches from the DB and calls setMessages([]) — overwriting the optimistic placeholder message (with its unique assistantId) mid-stream. Subsequent SSE text_delta events tried to update a message ID that no longer existed in state, so tokens were silently dropped.
-   FIX: Added streamingRef (useRef) alongside the streaming state in useChat. loadMessages() returns early if streamingRef.current is true, preventing it from clobbering an active stream. streamingRef is set synchronously (unlike setState) so there is no race window.
-   FILES: src/hooks/use-chat.ts
+1. [x] Create a dev branch and a features branch. Use main for production ready merges only.
 
-3. [x] FIXED - New chats show up as 'Unknown' user but they can immediately be tagged to the logged in user.
-   ROOT CAUSE: POST /api/conversations returned no userId or ownerName. The optimistic update in useConversations added the conversation to state without ownerName, so the admin sidebar grouped it under "Unknown".
-   FIX: POST /api/conversations now returns userId and ownerName (from session) alongside id/title/timestamps.
-   FILES: src/app/api/conversations/route.ts
+2. [x] BUG - When checking episode information in Plex, the MCP needs to return the season number along with the episode details to faciliate better querying.
 
-4. [x] FIXED - The chat should be named immediately after the first conversation to avoid them staying as 'New Chat'.
-   ROOT CAUSE: generateTitle() was fire-and-forget after controller.close() — the stream was already closed before the title was available, so it could never be sent to the client.
-   FIX: generateTitle() now returns the title (string | null). In the chat route, it is awaited inside the stream before [DONE] is sent, and a title_update SSE event is emitted. useChat handles title_update by calling an optional onTitleUpdate callback. chat/page.tsx wires this to updateConversationTitle() in useConversations, which updates local sidebar state immediately.
-   FILES: src/lib/llm/orchestrator.ts, src/app/api/chat/route.ts, src/types/chat.ts, src/hooks/use-chat.ts, src/hooks/use-conversations.ts, src/app/chat/page.tsx
+3. [x] BUG - During a conversation, the chat history displays correctly, but when opening a historic conversation, the tool call may appear twice, and there is an unnecessary div after each tool call with the pulsing cursor as if waiting for a response.
 
-5. [x] FIXED - The services traffic light goes amber after changing the model in the default profile but chats are working fine.
-   ROOT CAUSE: checkLlm() in the status route used max_tokens: 1 in its health check — same problem as the test-connection bug. Non-OpenAI endpoints reject this parameter, causing the check to throw and return amber even when the endpoint is working correctly.
-   FIX: Retry without max_tokens if the first attempt fails (same pattern as test-connection fix).
-   FILES: src/app/api/services/status/route.ts
+4. [x] FEATURE - When connecting to Plex, we shouldn't require a Token. Implemented "Discover Servers" button in settings that queries plex.tv/api/v2/resources using the admin's linked Plex account token, returns a list of servers, and auto-fills URL and access token when one is selected. Manual entry preserved as fallback.
 
-MCP additional features
+5. [x] FEATURE - After saving settings during the initial welcome setup, if critical settings are complete (successful model connection, plex connected) it offers to redirect to the main chat interface with a 5s option to cancel. If the user tries to exit the setup screen when its not fully configured, it shows "Are you sure?" before allowing the user to exit.
 
-6. [x] FIXED - Review the MCPs to determine which additional tools or changes to existing tools may be needed and how best to structure the response for the LLM
-   FIX: Replaced bulk list tools with focused status tools. Added richer metadata across all services:
-   - Plex: Extended PlexSearchResult with seasons, totalEpisodes, watchedEpisodes, dateAdded. New mapMetadata() helper.
-   - Sonarr: Added getSeriesStatus() returning per-season breakdown (totalEpisodes, downloadedEpisodes, monitored). Removed sonarr_list_series tool, added sonarr_get_series_status. Queue now includes downloadPercent, seasonNumber, episodeNumber.
-   - Radarr: Added getMovieStatus() returning downloaded/inQueue/downloadPercent/timeLeft. Removed radarr_list_movies tool, added radarr_get_movie_status. Queue now includes downloadPercent.
-   - Overseerr: search() returns per-season availability status and year. listRequests() returns seasonsRequested array.
-   FILES: src/lib/services/plex.ts, src/lib/services/sonarr.ts, src/lib/services/radarr.ts, src/lib/services/overseerr.ts, src/lib/tools/sonarr-tools.ts, src/lib/tools/radarr-tools.ts
+7. [x] FEATURE - Only users who are added to a shared media library in Plex can register. Users who are not registered for the shared media library get an error message "You do not have access to any media on this server, please contact the owner to get access to a Shared Library." Check fails closed (denies) if Plex server is unreachable. First user (admin) always passes.
 
-Settings frontend bugs
-7. [x] FIXED - Testing the connection for Plex & Arrs gives error: type, url, and apiKey are required
-   ROOT CAUSE: Settings GET response masks secrets as "••••••••". Frontend testConnection replaced masked value with "" before sending. Backend rejected empty apiKey with the field-required error.
-   FIX: Test-connection route now resolves credentials server-side: if apiKey is blank/masked, it looks up the stored credential from config (by service type, or by endpointId for multi-LLM). Frontend passes endpointId for LLM endpoints. Error message updated to be actionable ("save settings first").
-   FILES: src/app/api/setup/test-connection/route.ts, src/types/api.ts, src/app/settings/page.tsx
+8. [x] FEATURE - Per-user rate limiting added. Default 100 messages per day, configurable to X messages per Y (hour, day, week, month) in the Settings > Users tab. If users exceed their rate limit, they see a message in chat: "Your Session Limit has expired and will refresh on DD/MMM/YY HH:MM".
 
-8. [x] FIXED - The default system prompt (system-prompt.ts) should pre-fill in the system prompt box and be stored in the database. Some format should be used for the serviceList variable.
-   FIX: Extracted DEFAULT_SYSTEM_PROMPT to src/lib/llm/default-prompt.ts (client-safe, no server imports). Uses {{serviceList}} placeholder substituted at runtime. buildSystemPrompt() now accepts an optional custom prompt (from the endpoint's systemPrompt field) and substitutes the placeholder. Orchestrator passes the active endpoint's systemPrompt. Settings page imports DEFAULT_SYSTEM_PROMPT and uses it as the textarea placeholder; hint text explains the {{serviceList}} variable.
-   FILES: src/lib/llm/default-prompt.ts (new), src/lib/llm/system-prompt.ts, src/lib/llm/orchestrator.ts, src/lib/llm/client.ts, src/app/settings/page.tsx
+---
 
-9. [x] FIXED - Plex should not get a token via Plex Login, it should accept a direct token input.
-   FIX: Removed the Plex OAuth PIN-based connect button (handlePlexConnect, plexConnecting state, LinkIcon). Replaced with a simple password input field ("Paste your Plex token") matching the pattern used by Arr services. Users get their token from plex.tv/account.
-   FILES: src/app/settings/page.tsx
+## Pending
 
-10. [x] FIXED - Testing the connection for LLM variously gives error: type, url, and apiKey are required or something about Max-something not supported by the model endpoint.
-    ROOT CAUSE (field errors): Same masked apiKey issue as #7.
-    ROOT CAUSE (Max-something): testLlm() sent max_tokens: 1 — some non-OpenAI endpoints (Ollama, LM Studio etc.) reject this parameter.
-    FIX: Server-side credential lookup (from #7 fix) handles the field errors. testLlm() now retries the completion without max_tokens if the first attempt fails.
-    FILES: src/lib/services/test-connection.ts, src/app/api/setup/test-connection/route.ts
+6. [x] FEATURE - Create a card in the chat interface which displays a specific title or titles in a standard format in the chat interface.  It should include the artwork thumbnail, and basic information about the title (name, release date, summary, key cast, starring, rating, availability in library, and anything else you think is useful).  If multiple titles are returned it should be in a carousel format.  If the title is not yet available, a request button should allow the user to request the item.  If the title is available, a button should allow the user to watch now (launches Plex).  This should handle both movies and series (each episode is considered a title.)  When dealing with series, the results should always be returned in order of air date.
 
-11. [x] FIXED - There is no option to set any of the LLM models as default. One (any one, but only one) should be allowed to be toggled as default.
-    FIX: Added isDefault boolean field to LlmEndpoint type everywhere (api.ts, settings/route.ts, models/route.ts, settings page). Settings page shows a radio button group (name="defaultEndpoint") so only one endpoint can be default at a time. PATCH handler enforces one default (auto-assigns to first enabled if none set). models/route.ts picks the isDefault endpoint as system default instead of first enabled.
-    FILES: src/app/api/settings/route.ts, src/app/api/models/route.ts, src/app/settings/page.tsx
+9. MAJOR FEATURE - I'd like to add WhatsApp integration.  Create a new tab in the Settings screen for WhatsApp integration to provide the Meta Cloud API Key.  The Users tab should have a Phone Number field so users can be identified when they use WhatsApp to send a message and chat history will be assigned to that user.  When a user who is not registered for the platform sends a message, the bot should respond with a link to the web interface to sign in with Plex.  New users must provide a phone number (optional) if they wish to converse via WhatsApp.  Users can change their phone number in Settings.  Sessions created via WhatsApp should have a 24 hour limit.  The bot should respond when it is @ messaged "@Thinkarr" and replies should be sent as quoted replies.  WhatsApp messages will also need to handle the card/carousel concept for titles (send the thumbnail as images, and use interactive buttons for request / watch).  As the WhatsApp bot may exist in Groups, one person may request a title but another person may click the button to request the title and it may be requested multiple times (the tool call should handle this gracefully and explain the title has already been requested.)
 
-12. [x] FIXED - In User Management, the first user to register (Master Administrator) should not be allowed to be made a user.
-    FIX: PATCH /api/settings/users now queries for the lowest user ID and blocks isAdmin=false for that user with a 403. Frontend identifies master admin as Math.min(users.map(u => u.id)) and renders "Administrator (locked)" text instead of a role selector.
-    FILES: src/app/api/settings/users/route.ts, src/app/settings/page.tsx
+10. [X] FEATURE - Let's add best practice logging.  Application initialization logs should be written to stdio to be picked up by Docker Logs.  Application run logs should be written within the container and persisted in the shared volume config.  Logs should be rotated.  Add a logs tab in Settings to enable the log files to be viewed and downloaded.
+
+11. [x] BUG/TECH DEBT - Next.js build warns: "The 'middleware' file convention is deprecated. Please use 'proxy' instead." (`src/middleware.ts` needs to be renamed to `src/proxy.ts` and the export renamed from `middleware` to `proxy`). See: https://nextjs.org/docs/messages/middleware-to-proxy
+
+12. [x] IMPROVEMENT - log all API calls to Plex/Overseerr/Sonarr/Radarr in full including request url, payload and full response.  Also log requests to the MCP and the responses in detail.
+
+13. [x] BUG - When searching for a title in Overseerr, if the title is a multi-season show, there is no information from Overseerr about the number of seasons, so we can't generate a carousel for the seasons. This results in users being able to 'Request' a multi season show which Overseerr cannot process.  Include the number of seasons in the Overseerr payload and ensure if it's multi season the title card displays as a carousel to enable each individual season to be requested.
+
+14. [x] BUG - Overseerr tool call result does not seem to include the imdbId and this is also not displayed on the title card as a More Info button.  Logs confirmed the Overseerr /search endpoint never returns imdbId (only available on the detail endpoint). Fixed: More Info button now always shows for requestable titles, linking to IMDB when imdbId is present and falling back to TMDB using the overseerrId we already have.
+
+15. [x] IMPROVEMENT - log readability, pretty print json messages for ease of debugging.
+

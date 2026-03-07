@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
@@ -18,6 +18,9 @@ import {
   Trash2,
   RefreshCw,
   Copy,
+  Search,
+  FileText,
+  Download,
 } from "lucide-react";
 import { DEFAULT_SYSTEM_PROMPT } from "@/lib/llm/default-prompt";
 import { copyToClipboard } from "@/lib/utils";
@@ -45,6 +48,14 @@ interface PlexConfig {
   token: string;
 }
 
+interface PlexDevice {
+  name: string;
+  clientIdentifier: string;
+  accessToken: string;
+  owned: boolean;
+  connections: { protocol: string; address: string; port: number; uri: string; local: boolean }[];
+}
+
 interface UserEntry {
   id: number;
   plexUsername: string;
@@ -53,6 +64,8 @@ interface UserEntry {
   isAdmin: boolean | null;
   defaultModel: string;
   canChangeModel: boolean;
+  rateLimitMessages: number;
+  rateLimitPeriod: "hour" | "day" | "week" | "month";
 }
 
 // --- Helpers ---
@@ -76,6 +89,16 @@ export default function SettingsPage() {
   const [plexConfig, setPlexConfig] = useState<PlexConfig>({ url: "", token: "" });
   const [arrConfigs, setArrConfigs] = useState<Record<string, ArrConfig>>({});
 
+  // Initial setup mode + redirect countdown
+  const [isInitialSetup, setIsInitialSetup] = useState(false);
+  const [redirectCountdown, setRedirectCountdown] = useState<number | null>(null);
+  const countdownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Plex discovery state
+  const [plexDiscovering, setPlexDiscovering] = useState(false);
+  const [plexDevices, setPlexDevices] = useState<PlexDevice[]>([]);
+  const [plexDiscoverError, setPlexDiscoverError] = useState<string | null>(null);
+
   // MCP state
   const [mcpToken, setMcpToken] = useState<string>("");
   const [mcpTokenLoading, setMcpTokenLoading] = useState(false);
@@ -85,6 +108,16 @@ export default function SettingsPage() {
 
   // Test results
   const [testResults, setTestResults] = useState<Record<string, { success: boolean; message: string }>>({});
+
+  // Log state
+  const [logFiles, setLogFiles] = useState<{ name: string; size: number; modified: string }[]>([]);
+  const [logFilesLoading, setLogFilesLoading] = useState(false);
+  const [logFilesLoaded, setLogFilesLoaded] = useState(false);
+  const [selectedLogFile, setSelectedLogFile] = useState<string | null>(null);
+  const [logContent, setLogContent] = useState<string>("");
+  const [logContentLoading, setLogContentLoading] = useState(false);
+  const [logTotalLines, setLogTotalLines] = useState(0);
+  const [logShowing, setLogShowing] = useState(0);
 
   // --- Load data ---
   useEffect(() => {
@@ -96,6 +129,8 @@ export default function SettingsPage() {
       .then(([settingsData, usersData, mcpData]) => {
         if (settingsData.success) {
           const d = settingsData.data;
+          // No LLM endpoints = first-time setup; enable exit guard + redirect-on-complete
+          if ((d.llmEndpoints || []).length === 0) setIsInitialSetup(true);
           setEndpoints(d.llmEndpoints || []);
           setPlexConfig({ url: d.plex?.url || "", token: d.plex?.token || "" });
           const arrs: Record<string, ArrConfig> = {};
@@ -107,12 +142,47 @@ export default function SettingsPage() {
           }
           setArrConfigs(arrs);
         }
-        if (usersData.success) setUsers(usersData.data || []);
+        if (usersData.success) {
+          setUsers(
+            (usersData.data || []).map((u: UserEntry) => ({
+              ...u,
+              rateLimitMessages: u.rateLimitMessages ?? 100,
+              rateLimitPeriod: u.rateLimitPeriod ?? "day",
+            })),
+          );
+        }
         if (mcpData.success) setMcpToken(mcpData.data?.token || "");
       })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
+
+  // Countdown tick: decrement every second, redirect at 0
+  useEffect(() => {
+    if (redirectCountdown === null) return;
+    if (redirectCountdown <= 0) {
+      router.push("/chat");
+      return;
+    }
+    countdownTimerRef.current = setTimeout(
+      () => setRedirectCountdown((prev) => (prev !== null ? prev - 1 : null)),
+      1000,
+    );
+    return () => {
+      if (countdownTimerRef.current) clearTimeout(countdownTimerRef.current);
+    };
+  }, [redirectCountdown, router]);
+
+  // Warn before browser navigation when initial setup is incomplete
+  useEffect(() => {
+    if (!isInitialSetup || redirectCountdown !== null) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [isInitialSetup, redirectCountdown]);
 
   // --- Save ---
   const handleSave = useCallback(async () => {
@@ -132,13 +202,65 @@ export default function SettingsPage() {
         body: JSON.stringify(body),
       });
       const data = await res.json();
-      if (data.success) setSaved(true);
+      if (data.success) {
+        setSaved(true);
+        // In initial setup: check if critical services are now working; if so, start redirect countdown
+        if (isInitialSetup && redirectCountdown === null) {
+          try {
+            const statusRes = await fetch("/api/services/status");
+            const statusData = await statusRes.json();
+            if (statusData.success) {
+              const services: { name: string; status: string }[] = statusData.data.services;
+              const llmOk = services.find((s) => s.name === "LLM")?.status === "green";
+              const plexOk = services.find((s) => s.name === "Plex")?.status === "green";
+              if (llmOk && plexOk) setRedirectCountdown(5);
+            }
+          } catch {
+            // Status check failing doesn't prevent saving
+          }
+        }
+      }
     } catch {
       // Silent fail
     } finally {
       setSaving(false);
     }
-  }, [endpoints, plexConfig, arrConfigs]);
+  }, [endpoints, plexConfig, arrConfigs, isInitialSetup, redirectCountdown]);
+
+  // --- Plex server discovery ---
+  async function discoverPlexServers() {
+    setPlexDiscovering(true);
+    setPlexDiscoverError(null);
+    setPlexDevices([]);
+    try {
+      const res = await fetch("/api/settings/plex-devices");
+      const data = await res.json();
+      if (data.success) {
+        setPlexDevices(data.data || []);
+        if ((data.data || []).length === 0) {
+          setPlexDiscoverError("No Plex servers found on your account.");
+        }
+      } else {
+        setPlexDiscoverError(data.error || "Discovery failed");
+      }
+    } catch {
+      setPlexDiscoverError("Network error — could not reach server");
+    } finally {
+      setPlexDiscovering(false);
+    }
+  }
+
+  function selectPlexDevice(device: PlexDevice) {
+    // Prefer a local http connection, fall back to first available
+    const best =
+      device.connections.find((c) => c.local && c.protocol === "http") ||
+      device.connections.find((c) => c.local) ||
+      device.connections[0];
+    const url = best ? `${best.protocol}://${best.address}:${best.port}` : "";
+    setPlexConfig({ url, token: device.accessToken });
+    setPlexDevices([]);
+    setSaved(false);
+  }
 
   // --- Test connection ---
   async function testConnection(sectionKey: string, url: string, apiKey: string, model?: string, endpointId?: string) {
@@ -224,8 +346,44 @@ export default function SettingsPage() {
     }
   }
 
+  // --- Logs ---
+  async function loadLogFiles() {
+    if (logFilesLoaded) return;
+    setLogFilesLoading(true);
+    try {
+      const res = await fetch("/api/settings/logs");
+      const data = await res.json();
+      if (data.success) setLogFiles(data.data || []);
+    } catch {
+      // Silent fail
+    } finally {
+      setLogFilesLoading(false);
+      setLogFilesLoaded(true);
+    }
+  }
+
+  async function loadLogContent(filename: string, full = false) {
+    setSelectedLogFile(filename);
+    setLogContentLoading(true);
+    setLogContent("");
+    try {
+      const url = `/api/settings/logs/${encodeURIComponent(filename)}${full ? "?full=true" : ""}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      if (data.success) {
+        setLogContent(data.data.content);
+        setLogTotalLines(data.data.totalLines);
+        setLogShowing(data.data.showing);
+      }
+    } catch {
+      setLogContent("Failed to load log file.");
+    } finally {
+      setLogContentLoading(false);
+    }
+  }
+
   // --- User management ---
-  async function updateUser(userId: number, updates: Partial<Pick<UserEntry, "isAdmin" | "defaultModel" | "canChangeModel">>) {
+  async function updateUser(userId: number, updates: Partial<Pick<UserEntry, "isAdmin" | "defaultModel" | "canChangeModel" | "rateLimitMessages" | "rateLimitPeriod">>) {
     try {
       await fetch("/api/settings/users", {
         method: "PATCH",
@@ -261,18 +419,49 @@ export default function SettingsPage() {
     <div className="min-h-screen p-4">
       <div className="mx-auto max-w-3xl">
         <div className="mb-6 flex items-center gap-3">
-          <Button variant="ghost" size="icon" onClick={() => router.push("/chat")}>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => {
+              if (isInitialSetup && redirectCountdown === null) {
+                if (!window.confirm("Setup is not complete. Are you sure you want to leave?")) return;
+              }
+              router.push("/chat");
+            }}
+          >
             <ArrowLeft size={18} />
           </Button>
           <h1 className="text-2xl font-semibold">Settings</h1>
         </div>
 
-        <Tabs defaultValue="llm">
+        {/* Redirect countdown banner */}
+        {redirectCountdown !== null && (
+          <div className="mb-4 flex items-center justify-between rounded-lg border border-green-500/30 bg-green-500/10 px-4 py-3">
+            <p className="text-sm text-green-400">
+              All critical services connected. Redirecting to chat in{" "}
+              <span className="font-semibold">{redirectCountdown}s</span>…
+            </p>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                if (countdownTimerRef.current) clearTimeout(countdownTimerRef.current);
+                setRedirectCountdown(null);
+              }}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              Cancel
+            </Button>
+          </div>
+        )}
+
+        <Tabs defaultValue="llm" onValueChange={(v) => { if (v === "logs") loadLogFiles(); }}>
           <TabsList>
             <TabsTrigger value="llm">LLM Setup</TabsTrigger>
             <TabsTrigger value="services">Plex & Arrs</TabsTrigger>
             <TabsTrigger value="mcp">MCP</TabsTrigger>
             <TabsTrigger value="users">Users</TabsTrigger>
+            <TabsTrigger value="logs">Logs</TabsTrigger>
           </TabsList>
 
           {/* ===== TAB 1: LLM Setup ===== */}
@@ -383,8 +572,50 @@ export default function SettingsPage() {
             <Card>
               <CardHeader className="pb-3">
                 <CardTitle className="text-lg">Plex</CardTitle>
+                <CardDescription>
+                  Discover servers automatically using your linked Plex account, or enter details manually.
+                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
+                {/* Discovery button */}
+                <div className="flex items-center gap-3">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={discoverPlexServers}
+                    disabled={plexDiscovering}
+                    className="gap-2"
+                  >
+                    {plexDiscovering ? <Spinner size={14} /> : <Search size={14} />}
+                    Discover Servers
+                  </Button>
+                  {plexDiscoverError && (
+                    <span className="text-sm text-destructive">{plexDiscoverError}</span>
+                  )}
+                </div>
+
+                {/* Server list */}
+                {plexDevices.length > 0 && (
+                  <div className="rounded-lg border divide-y">
+                    {plexDevices.map((device) => (
+                      <button
+                        key={device.clientIdentifier}
+                        onClick={() => selectPlexDevice(device)}
+                        className="w-full flex items-center justify-between px-3 py-2.5 text-left hover:bg-muted/50 transition-colors"
+                      >
+                        <div>
+                          <p className="text-sm font-medium">{device.name}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {device.connections.length} connection{device.connections.length !== 1 ? "s" : ""}
+                            {device.owned ? " · Owned" : " · Shared"}
+                          </p>
+                        </div>
+                        <span className="text-xs text-primary">Select →</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
                 <div className="space-y-1.5">
                   <Label>URL</Label>
                   <Input
@@ -406,11 +637,10 @@ export default function SettingsPage() {
                       setPlexConfig((prev) => ({ ...prev, token: e.target.value }));
                       setSaved(false);
                     }}
-                    placeholder="Paste your Plex token"
+                    placeholder="Paste your Plex token (or use Discover above)"
                   />
                   <p className="text-xs text-muted-foreground">
-                    Find your token: Plex Web → Settings → Troubleshooting → Your Account Token.
-                    Or append <code className="font-mono">?X-Plex-Token=</code> to any Plex API URL and copy the value shown.
+                    Manual entry: Plex Web → Settings → Troubleshooting → Your Account Token.
                   </p>
                 </div>
               </CardContent>
@@ -658,10 +888,135 @@ export default function SettingsPage() {
                                 Can change model
                               </span>
                             </label>
+
+                            {/* Rate limit */}
+                            <label className="flex items-center gap-1.5 text-sm">
+                              <span className="text-muted-foreground">Limit:</span>
+                              <input
+                                type="number"
+                                min={1}
+                                value={user.rateLimitMessages}
+                                onChange={(e) =>
+                                  updateUser(user.id, {
+                                    rateLimitMessages: Math.max(1, parseInt(e.target.value, 10) || 1),
+                                  })
+                                }
+                                className="w-16 rounded border bg-background px-2 py-0.5 text-sm"
+                              />
+                              <span className="text-muted-foreground">messages per</span>
+                              <select
+                                value={user.rateLimitPeriod}
+                                onChange={(e) =>
+                                  updateUser(user.id, {
+                                    rateLimitPeriod: e.target.value as UserEntry["rateLimitPeriod"],
+                                  })
+                                }
+                                className="rounded border bg-background px-2 py-0.5 text-sm"
+                              >
+                                <option value="hour">hour</option>
+                                <option value="day">day</option>
+                                <option value="week">week</option>
+                                <option value="month">month</option>
+                              </select>
+                            </label>
                           </div>
                         </div>
                       </div>
                     ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* ===== TAB 5: Logs ===== */}
+          <TabsContent value="logs" className="mt-4">
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">Application Logs</CardTitle>
+                <CardDescription>
+                  View and download log files from <code className="font-mono text-xs">/config/logs/</code>.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {logFilesLoading ? (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Spinner size={14} /> Loading…
+                  </div>
+                ) : (
+                  <div className="flex gap-4 min-h-64">
+                    {/* File list */}
+                    <div className="w-48 shrink-0 space-y-1">
+                      {logFiles.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">No log files found.</p>
+                      ) : (
+                        logFiles.map((f) => (
+                          <button
+                            key={f.name}
+                            onClick={() => loadLogContent(f.name)}
+                            className={`w-full text-left rounded-lg px-3 py-2 text-sm transition-colors ${
+                              selectedLogFile === f.name
+                                ? "bg-primary/10 text-primary"
+                                : "hover:bg-muted text-foreground"
+                            }`}
+                          >
+                            <p className="font-medium truncate flex items-center gap-1.5">
+                              <FileText size={13} />
+                              {f.name}
+                            </p>
+                            <p className="text-xs text-muted-foreground mt-0.5">
+                              {(f.size / 1024).toFixed(1)} KB
+                            </p>
+                          </button>
+                        ))
+                      )}
+                    </div>
+
+                    {/* Log content viewer */}
+                    {selectedLogFile && (
+                      <div className="flex-1 min-w-0 flex flex-col gap-2">
+                        {/* Toolbar */}
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <p className="text-xs text-muted-foreground">
+                            {logShowing < logTotalLines
+                              ? `Showing last ${logShowing} of ${logTotalLines} lines`
+                              : `${logTotalLines} lines`}
+                          </p>
+                          <div className="flex items-center gap-2">
+                            {logShowing < logTotalLines && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 text-xs"
+                                onClick={() => loadLogContent(selectedLogFile, true)}
+                                disabled={logContentLoading}
+                              >
+                                Load Full
+                              </Button>
+                            )}
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 text-xs gap-1"
+                              onClick={() => window.open(`/api/settings/logs/${encodeURIComponent(selectedLogFile)}?download=true`)}
+                            >
+                              <Download size={12} />
+                              Download
+                            </Button>
+                          </div>
+                        </div>
+
+                        {logContentLoading ? (
+                          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                            <Spinner size={14} /> Loading…
+                          </div>
+                        ) : (
+                          <pre className="font-mono text-xs bg-muted/50 rounded-lg p-3 max-h-96 overflow-auto whitespace-pre-wrap break-all">
+                            {logContent || "(empty)"}
+                          </pre>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </CardContent>

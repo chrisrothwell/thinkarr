@@ -5,6 +5,7 @@ import { getDb, schema } from "@/lib/db";
 import { eq, asc } from "drizzle-orm";
 import { initializeTools } from "@/lib/tools/init";
 import { getOpenAITools, executeTool, hasTools } from "@/lib/tools/registry";
+import { logger } from "@/lib/logger";
 import type {
   TextDeltaEvent,
   ToolCallStartEvent,
@@ -194,6 +195,7 @@ export async function* orchestrate(
       }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "LLM request failed";
+      logger.error("LLM request failed", { conversationId, error: msg });
       yield { type: "error", message: msg };
       return;
     }
@@ -230,6 +232,7 @@ export async function* orchestrate(
 
     // 4. Execute each tool call
     for (const tc of toolCalls) {
+      logger.info("Tool call", { conversationId, toolName: tc.function.name });
       yield {
         type: "tool_call_start",
         toolCallId: tc.id,

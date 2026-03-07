@@ -1,4 +1,5 @@
 import { getConfig } from "@/lib/config";
+import { logger } from "@/lib/logger";
 
 function getOverseerrConfig() {
   const url = getConfig("overseerr.url");
@@ -9,7 +10,10 @@ function getOverseerrConfig() {
 
 async function overseerrFetch(path: string, options?: RequestInit) {
   const { url, apiKey } = getOverseerrConfig();
-  const res = await fetch(`${url}/api/v1${path}`, {
+  const fullUrl = `${url}/api/v1${path}`;
+  const method = (options?.method ?? "GET").toUpperCase();
+  logger.info("Overseerr API request", { method, url: fullUrl, body: options?.body ?? undefined });
+  const res = await fetch(fullUrl, {
     ...options,
     headers: {
       "X-Api-Key": apiKey,
@@ -18,8 +22,19 @@ async function overseerrFetch(path: string, options?: RequestInit) {
     },
     signal: AbortSignal.timeout(15000),
   });
-  if (!res.ok) throw new Error(`Overseerr API error: HTTP ${res.status}`);
-  return res.json();
+  if (!res.ok) {
+    let detail = "";
+    let rawBody: unknown;
+    try {
+      rawBody = await res.json();
+      detail = (rawBody as Record<string, string>).message || (rawBody as Record<string, string>).error || JSON.stringify(rawBody);
+    } catch { /* ignore parse failure */ }
+    logger.warn("Overseerr API error", { method, url: fullUrl, status: res.status, body: rawBody });
+    throw new Error(`Overseerr API error: HTTP ${res.status}${detail ? ` — ${detail}` : ""}`);
+  }
+  const data = await res.json();
+  logger.info("Overseerr API response", { method, url: fullUrl, status: res.status, body: JSON.stringify(data).slice(0, 5000) });
+  return data;
 }
 
 export interface OverseerrSeasonStatus {
@@ -35,6 +50,8 @@ export interface OverseerrSearchResult {
   overview?: string;
   releaseDate?: string;
   mediaStatus: string;
+  posterUrl?: string;       // Full TMDB poster URL (https://image.tmdb.org/t/p/w300/...)
+  imdbId?: string;          // IMDB ID (e.g. "tt1234567") when available
   // TV-specific
   seasonCount?: number;
   seasons?: OverseerrSeasonStatus[];
@@ -43,7 +60,7 @@ export interface OverseerrSearchResult {
 function mediaStatusLabel(info?: Record<string, unknown>): string {
   if (!info) return "Not Requested";
   switch (info.status) {
-    case 1: return "Unknown";
+    case 1: return "Not Requested"; // Overseerr "Unknown" = tracked but nothing requested
     case 2: return "Pending";
     case 3: return "Processing";
     case 4: return "Partially Available";
@@ -64,11 +81,30 @@ function seasonStatusLabel(status: number): string {
 
 export async function search(query: string): Promise<OverseerrSearchResult[]> {
   const data = await overseerrFetch(`/search?query=${encodeURIComponent(query)}&page=1&language=en`);
-  return (data?.results || []).slice(0, 10).map((r: Record<string, unknown>) => {
+  const raw = (data?.results || []).slice(0, 10) as Record<string, unknown>[];
+
+  // Fetch TV details in parallel to get numberOfSeasons (not in search results)
+  const tvDetailMap = new Map<number, number>();
+  await Promise.all(
+    raw
+      .filter((r) => r.mediaType === "tv")
+      .map(async (r) => {
+        try {
+          const detail = await overseerrFetch(`/tv/${r.id as number}`);
+          const count = detail?.numberOfSeasons as number | undefined;
+          if (count) tvDetailMap.set(r.id as number, count);
+        } catch { /* non-fatal — seasonCount stays undefined */ }
+      }),
+  );
+
+  return raw.map((r) => {
     const mediaInfo = r.mediaInfo as Record<string, unknown> | undefined;
     const isTV = r.mediaType === "tv";
     const rawSeasons = (mediaInfo?.seasons as Record<string, unknown>[]) || [];
 
+    const posterPath = r.posterPath as string | undefined;
+    const extIds = r.externalIds as Record<string, unknown> | undefined;
+    const imdbId = (r.imdbId as string | undefined) ?? (extIds?.imdbId as string | undefined);
     return {
       id: r.id as number,
       mediaType: r.mediaType as string,
@@ -77,7 +113,9 @@ export async function search(query: string): Promise<OverseerrSearchResult[]> {
       overview: (r.overview as string | undefined)?.substring(0, 300),
       releaseDate: (r.releaseDate || r.firstAirDate) as string | undefined,
       mediaStatus: mediaStatusLabel(mediaInfo),
-      seasonCount: isTV ? (r.numberOfSeasons as number | undefined) : undefined,
+      posterUrl: posterPath ? `https://image.tmdb.org/t/p/w300${posterPath}` : undefined,
+      imdbId: imdbId || undefined,
+      seasonCount: isTV ? (tvDetailMap.get(r.id as number) ?? (r.numberOfSeasons as number | undefined)) : undefined,
       seasons: isTV && rawSeasons.length > 0
         ? rawSeasons
             .filter((s) => (s.seasonNumber as number) > 0)

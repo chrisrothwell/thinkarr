@@ -8,14 +8,16 @@ Before reading files or exploring directories, always use qmd to search for info
 
 Available tools:
 
-- `qmd search “query”` — fast keyword search (BM25)
+- `qmd search “query” -c "collection"` — fast keyword search (BM25)
 
-- `qmd query “query”` — hybrid search with reranking (best quality)
+- `qmd query “query” -c "collection"` — hybrid search with reranking (best quality)
 
-- `qmd vsearch “query”` — semantic vector search
+- `qmd vsearch “query” -c "collection"` — semantic vector search
 
-- `qmd get <file>` — retrieve a specific document
+- `qmd get <file> -c "collection"` — retrieve a specific document
 
 Use qmd search for quick lookups and qmd query for complex questions.
 
 Use Read/Glob only if qmd doesn’t return enough results.
+
+The collection name for this project is "thinkarr".  Example command: qmd get todo.md -c thinkarr

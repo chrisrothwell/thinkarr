@@ -1,0 +1,82 @@
+import { z } from "zod";
+import { defineTool } from "./registry";
+import { buildThumbUrl, getPlexMachineId } from "@/lib/services/plex";
+import { getConfig } from "@/lib/config";
+import type { DisplayTitle } from "@/types/titles";
+
+const titleInputSchema = z.object({
+  mediaType: z.enum(["movie", "tv", "episode"]),
+  title: z.string(),
+  year: z.number().nullish(),
+  summary: z.string().nullish(),
+  rating: z.number().nullish(),
+  thumbPath: z.string().nullish(),
+  plexKey: z.string().nullish(),
+  overseerrId: z.number().nullish(),
+  overseerrMediaType: z.enum(["movie", "tv"]).nullish(),
+  imdbId: z.string().nullish(),
+  mediaStatus: z.enum(["available", "partial", "pending", "not_requested"]),
+  cast: z.array(z.string()).nullish(),
+  airDate: z.string().nullish(),
+  showTitle: z.string().nullish(),
+  seasonNumber: z.number().nullish(),
+  episodeNumber: z.number().nullish(),
+});
+
+export function registerDisplayTitlesTool() {
+  defineTool({
+    name: "display_titles",
+    description: `Display rich title cards for movies, TV shows, or episodes in the chat UI.
+Call this tool after searching Plex or Overseerr — even when titles are not in Plex.
+
+mediaStatus mapping:
+- "available": title exists in the Plex library
+- "partial": TV show exists in Plex but not all seasons
+- "pending": requested in Overseerr but not yet downloaded
+- "not_requested": not in Plex and not in Overseerr
+
+Field sources:
+- plexKey: Plex result "key" field (e.g. "/library/metadata/123") — enables Watch Now button
+- thumbPath: Plex result "thumb" field for Plex titles; Overseerr result "posterUrl" field for non-Plex titles
+- overseerrId: Overseerr result "id" field — enables Request button
+- overseerrMediaType: "movie" or "tv" — required alongside overseerrId for requests
+- seasonNumber: REQUIRED for season cards — the Request button uses this to request only that season
+- For Overseerr-only titles (not in Plex): pass posterUrl as thumbPath, omit plexKey
+
+IMPORTANT — multi-season TV shows:
+If an Overseerr TV result has seasonCount > 1, you MUST call this tool with one entry per season (S1 through S{seasonCount}), not one entry for the whole show. Set seasonNumber on each entry. Do NOT create a single card for a multi-season show — it will cause the request to fail.`,
+    schema: z.object({
+      titles: z.array(titleInputSchema).min(1).max(10),
+    }),
+    handler: async (args) => {
+      const plexUrl = getConfig("plex.url");
+      const baseUrl = plexUrl ? plexUrl.replace(/\/$/, "") : undefined;
+      const machineId = baseUrl ? await getPlexMachineId() : undefined;
+
+      const displayTitles: DisplayTitle[] = args.titles.map((t) => ({
+        mediaType: t.mediaType,
+        title: t.title,
+        year: t.year ?? undefined,
+        summary: t.summary ?? undefined,
+        rating: t.rating ?? undefined,
+        thumbUrl: t.thumbPath
+          ? (t.thumbPath.startsWith("http") ? t.thumbPath : buildThumbUrl(t.thumbPath))
+          : undefined,
+        plexKey: t.plexKey ?? undefined,
+        plexUrl: baseUrl,
+        plexMachineId: machineId,
+        overseerrId: t.overseerrId ?? undefined,
+        overseerrMediaType: t.overseerrMediaType ?? undefined,
+        imdbId: t.imdbId ?? undefined,
+        mediaStatus: t.mediaStatus,
+        cast: t.cast ?? undefined,
+        airDate: t.airDate ?? undefined,
+        showTitle: t.showTitle ?? undefined,
+        seasonNumber: t.seasonNumber ?? undefined,
+        episodeNumber: t.episodeNumber ?? undefined,
+      }));
+
+      return { displayTitles };
+    },
+  });
+}

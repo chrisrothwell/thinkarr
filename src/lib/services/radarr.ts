@@ -1,4 +1,5 @@
 import { getConfig } from "@/lib/config";
+import { logger } from "@/lib/logger";
 
 function getRadarrConfig() {
   const url = getConfig("radarr.url");
@@ -9,12 +10,19 @@ function getRadarrConfig() {
 
 async function radarrFetch(path: string) {
   const { url, apiKey } = getRadarrConfig();
-  const res = await fetch(`${url}/api/v3${path}`, {
+  const fullUrl = `${url}/api/v3${path}`;
+  logger.info("Radarr API request", { method: "GET", url: fullUrl });
+  const res = await fetch(fullUrl, {
     headers: { "X-Api-Key": apiKey },
     signal: AbortSignal.timeout(15000),
   });
-  if (!res.ok) throw new Error(`Radarr API error: HTTP ${res.status}`);
-  return res.json();
+  if (!res.ok) {
+    logger.warn("Radarr API error", { url: fullUrl, status: res.status });
+    throw new Error(`Radarr API error: HTTP ${res.status}`);
+  }
+  const data = await res.json();
+  logger.info("Radarr API response", { url: fullUrl, status: res.status, body: JSON.stringify(data).slice(0, 5000) });
+  return data;
 }
 
 export interface RadarrMovie {

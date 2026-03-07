@@ -1,10 +1,12 @@
 import { cn } from "@/lib/utils";
 import { MessageContent } from "./message-content";
 import { ToolCall } from "./tool-call";
+import { TitleCarousel } from "./title-carousel";
 import { Avatar } from "@/components/ui/avatar";
 import { Bot } from "lucide-react";
 import type { Message } from "@/types";
 import type { ToolCallDisplay } from "@/types/chat";
+import type { DisplayTitle } from "@/types/titles";
 
 interface MessageBubbleProps {
   message: Message;
@@ -31,30 +33,49 @@ export function MessageBubble({ message, toolCalls, userAvatar, userName }: Mess
         {/* Tool calls rendered before the text content */}
         {hasToolCalls && (
           <div className="mb-2">
-            {toolCalls.map((tc) => (
-              <ToolCall key={tc.id} toolCall={tc} />
-            ))}
+            {toolCalls.map((tc) => {
+              if (tc.name === "display_titles" && tc.status === "done" && tc.result) {
+                try {
+                  const parsed = JSON.parse(tc.result) as { displayTitles: DisplayTitle[] };
+                  if (parsed.displayTitles?.length > 0) {
+                    return (
+                      <div key={tc.id}>
+                        <ToolCall toolCall={tc} />
+                        <div className="mt-2">
+                          <TitleCarousel titles={parsed.displayTitles} />
+                        </div>
+                      </div>
+                    );
+                  }
+                } catch {
+                  // fall through to standard ToolCall
+                }
+              }
+              return <ToolCall key={tc.id} toolCall={tc} />;
+            })}
           </div>
         )}
 
-        <div
-          className={cn(
-            "inline-block rounded-2xl px-4 py-2.5 text-sm",
-            isUser
-              ? "bg-primary text-primary-foreground"
-              : "bg-card text-card-foreground",
-          )}
-        >
-          {message.content ? (
-            isUser ? (
-              <p className="whitespace-pre-wrap">{message.content}</p>
+        {(message.content || !hasToolCalls) && (
+          <div
+            className={cn(
+              "inline-block rounded-2xl px-4 py-2.5 text-sm",
+              isUser
+                ? "bg-primary text-primary-foreground"
+                : "bg-card text-card-foreground",
+            )}
+          >
+            {message.content ? (
+              isUser ? (
+                <p className="whitespace-pre-wrap">{message.content}</p>
+              ) : (
+                <MessageContent content={message.content} />
+              )
             ) : (
-              <MessageContent content={message.content} />
-            )
-          ) : (
-            <span className="inline-block h-5 w-1 animate-pulse bg-muted-foreground/50 rounded-full" />
-          )}
-        </div>
+              <span className="inline-block h-5 w-1 animate-pulse bg-muted-foreground/50 rounded-full" />
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

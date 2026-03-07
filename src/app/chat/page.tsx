@@ -138,7 +138,7 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="flex h-screen">
+    <div className="flex h-[100dvh]">
       <Sidebar
         conversations={conversations}
         activeId={activeConversationId}

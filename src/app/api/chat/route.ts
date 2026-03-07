@@ -2,6 +2,8 @@ import { getSession } from "@/lib/auth/session";
 import { getDb, schema } from "@/lib/db";
 import { eq, and } from "drizzle-orm";
 import { orchestrate, generateTitle } from "@/lib/llm/orchestrator";
+import { getRateLimit, getPeriodStart, getNextPeriodStart, countUserMessagesSince } from "@/lib/config";
+import { logger } from "@/lib/logger";
 import type { ChatRequest } from "@/types/chat";
 
 export async function POST(request: Request) {
@@ -52,7 +54,31 @@ export async function POST(request: Request) {
     );
   }
 
-  // 4. Check if this is the first message (for auto-title)
+  // 4. Rate limit check
+  const rateLimit = getRateLimit(session.user.id);
+  const periodStart = getPeriodStart(rateLimit.period);
+  const messageCount = countUserMessagesSince(session.user.id, periodStart);
+  if (messageCount >= rateLimit.messages) {
+    logger.warn("Rate limit hit", { userId: session.user.id, messageCount, limit: rateLimit.messages });
+    const resetAt = getNextPeriodStart(rateLimit.period);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const resetStr = `${pad(resetAt.getDate())}/${months[resetAt.getMonth()]}/${String(resetAt.getFullYear()).slice(2)} ${pad(resetAt.getHours())}:${pad(resetAt.getMinutes())}`;
+    const encoder = new TextEncoder();
+    const limitStream = new ReadableStream({
+      start(controller) {
+        const event = { type: "error", message: `Your Session Limit has expired and will refresh on ${resetStr}.` };
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        controller.close();
+      },
+    });
+    return new Response(limitStream, {
+      headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" },
+    });
+  }
+
+  // 5. Check if this is the first message (for auto-title)
   const isFirstMessage = conversation.title === "New Chat";
 
   // 5. Stream SSE response

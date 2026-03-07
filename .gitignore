@@ -3,6 +3,7 @@ secrets.txt
 
 #dev config
 .config/
+config/
 
 # Logs
 logs
