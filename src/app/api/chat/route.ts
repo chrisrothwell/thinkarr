@@ -3,6 +3,7 @@ import { getDb, schema } from "@/lib/db";
 import { eq, and } from "drizzle-orm";
 import { orchestrate, generateTitle } from "@/lib/llm/orchestrator";
 import { getRateLimit, getPeriodStart, getNextPeriodStart, countUserMessagesSince } from "@/lib/config";
+import { logger } from "@/lib/logger";
 import type { ChatRequest } from "@/types/chat";
 
 export async function POST(request: Request) {
@@ -58,6 +59,7 @@ export async function POST(request: Request) {
   const periodStart = getPeriodStart(rateLimit.period);
   const messageCount = countUserMessagesSince(session.user.id, periodStart);
   if (messageCount >= rateLimit.messages) {
+    logger.warn("Rate limit hit", { userId: session.user.id, messageCount, limit: rateLimit.messages });
     const resetAt = getNextPeriodStart(rateLimit.period);
     const pad = (n: number) => String(n).padStart(2, "0");
     const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];

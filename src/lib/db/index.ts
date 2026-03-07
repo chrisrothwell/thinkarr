@@ -4,6 +4,7 @@ import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import * as schema from "./schema";
 import path from "path";
 import fs from "fs";
+import { logger } from "@/lib/logger";
 
 const DB_DIR = process.env.CONFIG_DIR || (process.platform === "win32" ? "./.config" : "/config");
 const DB_PATH = path.join(DB_DIR, "thinkarr.db");
@@ -17,11 +18,13 @@ export function getDb() {
     sqlite.pragma("journal_mode = WAL");
     sqlite.pragma("foreign_keys = ON");
     _db = drizzle(sqlite, { schema });
+    logger.info("Database initialized", { path: DB_PATH });
 
     // Auto-run migrations on first connection
     const migrationsPath = path.join(process.cwd(), "drizzle");
     if (fs.existsSync(migrationsPath)) {
       migrate(drizzle(sqlite), { migrationsFolder: migrationsPath });
+      logger.info("Database migrations applied", { migrationsPath });
     }
   }
   return _db;

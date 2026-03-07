@@ -1,10 +1,12 @@
 import { cn } from "@/lib/utils";
 import { MessageContent } from "./message-content";
 import { ToolCall } from "./tool-call";
+import { TitleCarousel } from "./title-carousel";
 import { Avatar } from "@/components/ui/avatar";
 import { Bot } from "lucide-react";
 import type { Message } from "@/types";
 import type { ToolCallDisplay } from "@/types/chat";
+import type { DisplayTitle } from "@/types/titles";
 
 interface MessageBubbleProps {
   message: Message;
@@ -31,9 +33,26 @@ export function MessageBubble({ message, toolCalls, userAvatar, userName }: Mess
         {/* Tool calls rendered before the text content */}
         {hasToolCalls && (
           <div className="mb-2">
-            {toolCalls.map((tc) => (
-              <ToolCall key={tc.id} toolCall={tc} />
-            ))}
+            {toolCalls.map((tc) => {
+              if (tc.name === "display_titles" && tc.status === "done" && tc.result) {
+                try {
+                  const parsed = JSON.parse(tc.result) as { displayTitles: DisplayTitle[] };
+                  if (parsed.displayTitles?.length > 0) {
+                    return (
+                      <div key={tc.id}>
+                        <ToolCall toolCall={tc} />
+                        <div className="mt-2">
+                          <TitleCarousel titles={parsed.displayTitles} />
+                        </div>
+                      </div>
+                    );
+                  }
+                } catch {
+                  // fall through to standard ToolCall
+                }
+              }
+              return <ToolCall key={tc.id} toolCall={tc} />;
+            })}
           </div>
         )}
 

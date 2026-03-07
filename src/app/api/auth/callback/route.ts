@@ -3,6 +3,7 @@ import { checkPlexPin, getPlexUser, checkUserHasLibraryAccess } from "@/lib/serv
 import { createSession } from "@/lib/auth/session";
 import { getDb, schema } from "@/lib/db";
 import { getConfig } from "@/lib/config";
+import { logger } from "@/lib/logger";
 import { eq } from "drizzle-orm";
 import type { ApiResponse } from "@/types/api";
 
@@ -56,6 +57,7 @@ export async function POST(request: Request) {
       if (plexServerUrl) {
         const hasAccess = await checkUserHasLibraryAccess(plexServerUrl, plexUser.authToken);
         if (!hasAccess) {
+          logger.warn("Library access denied", { plexUsername: plexUser.username, plexId: plexUser.id });
           return NextResponse.json<ApiResponse>(
             {
               success: false,
@@ -81,6 +83,7 @@ export async function POST(request: Request) {
         .where(eq(schema.users.plexId, plexUser.id))
         .run();
       userId = existing.id;
+      logger.info("User login", { userId, plexUsername: plexUser.username });
     } else {
       const result = db
         .insert(schema.users)
@@ -95,6 +98,7 @@ export async function POST(request: Request) {
         .returning({ id: schema.users.id })
         .get();
       userId = result.id;
+      logger.info("User registered", { userId, plexUsername: plexUser.username, isAdmin: userCount === 0 });
     }
 
     // Create session

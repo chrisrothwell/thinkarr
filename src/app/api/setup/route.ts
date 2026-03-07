@@ -2,10 +2,23 @@ import { NextResponse } from "next/server";
 import { getConfig, setConfig, isSetupComplete } from "@/lib/config";
 import type { SetupStatus, SetupSaveRequest, ApiResponse } from "@/types/api";
 
+function hasLlmConfigured(): boolean {
+  const endpoints = getConfig("llm.endpoints");
+  if (endpoints) {
+    try {
+      const parsed = JSON.parse(endpoints) as Array<{ enabled: boolean }>;
+      return parsed.some((ep) => ep.enabled);
+    } catch {
+      // fall through
+    }
+  }
+  return !!getConfig("llm.baseUrl");
+}
+
 export async function GET() {
   const status: SetupStatus = {
     complete: isSetupComplete(),
-    hasLlm: !!getConfig("llm.baseUrl"),
+    hasLlm: hasLlmConfigured(),
     hasPlex: !!getConfig("plex.url"),
     hasSonarr: !!getConfig("sonarr.url"),
     hasRadarr: !!getConfig("radarr.url"),

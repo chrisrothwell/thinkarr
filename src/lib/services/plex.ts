@@ -1,4 +1,5 @@
 import { getConfig } from "@/lib/config";
+import { logger } from "@/lib/logger";
 
 function getPlexConfig() {
   const url = getConfig("plex.url");
@@ -9,15 +10,22 @@ function getPlexConfig() {
 
 async function plexFetch(path: string) {
   const { url, token } = getPlexConfig();
-  const res = await fetch(`${url}${path}`, {
+  const fullUrl = `${url}${path}`;
+  logger.info("Plex API request", { method: "GET", url: fullUrl });
+  const res = await fetch(fullUrl, {
     headers: {
       "X-Plex-Token": token,
       Accept: "application/json",
     },
     signal: AbortSignal.timeout(15000),
   });
-  if (!res.ok) throw new Error(`Plex API error: HTTP ${res.status}`);
-  return res.json();
+  if (!res.ok) {
+    logger.warn("Plex API error", { url: fullUrl, status: res.status });
+    throw new Error(`Plex API error: HTTP ${res.status}`);
+  }
+  const data = await res.json();
+  logger.info("Plex API response", { url: fullUrl, status: res.status, body: JSON.stringify(data).slice(0, 5000) });
+  return data;
 }
 
 export interface PlexSearchResult {
@@ -27,6 +35,8 @@ export interface PlexSearchResult {
   summary?: string;
   rating?: number;
   key: string;
+  thumb?: string;           // Thumbnail path (e.g. /library/metadata/123/thumb/...)
+  cast?: string[];          // First 4 cast member names
   // Show-specific fields
   seasons?: number;         // Number of seasons (childCount)
   totalEpisodes?: number;   // Total episodes in library (leafCount)
@@ -41,6 +51,7 @@ export interface PlexSearchResult {
 function mapMetadata(item: Record<string, unknown>, type?: string): PlexSearchResult {
   const addedAt = item.addedAt as number | undefined;
   const resolvedType = (type || item.type) as string;
+  const roles = (item.Role as Array<{ tag: string }> | undefined) ?? [];
   return {
     title: item.title as string,
     year: item.year as number | undefined,
@@ -48,6 +59,8 @@ function mapMetadata(item: Record<string, unknown>, type?: string): PlexSearchRe
     summary: (item.summary as string | undefined)?.substring(0, 300),
     rating: item.rating as number | undefined,
     key: item.key as string,
+    thumb: item.thumb as string | undefined,
+    cast: roles.slice(0, 4).map((r) => r.tag),
     seasons: item.childCount as number | undefined,
     totalEpisodes: item.leafCount as number | undefined,
     watchedEpisodes: item.viewedLeafCount as number | undefined,
@@ -57,6 +70,30 @@ function mapMetadata(item: Record<string, unknown>, type?: string): PlexSearchRe
     seasonNumber: resolvedType === "episode" ? (item.parentIndex as number | undefined) : undefined,
     episodeNumber: resolvedType === "episode" ? (item.index as number | undefined) : undefined,
   };
+}
+
+let cachedMachineId: string | undefined;
+
+/** Returns the Plex server's machineIdentifier (cached in memory). */
+export async function getPlexMachineId(): Promise<string | undefined> {
+  if (cachedMachineId) return cachedMachineId;
+  try {
+    const data = await plexFetch("/");
+    const id = data?.MediaContainer?.machineIdentifier as string | undefined;
+    if (id) cachedMachineId = id;
+    return id;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Build a full thumbnail URL with Plex token appended. Returns undefined if Plex is not configured. */
+export function buildThumbUrl(thumbPath: string): string | undefined {
+  const url = getConfig("plex.url");
+  const token = getConfig("plex.token");
+  if (!url || !token || !thumbPath) return undefined;
+  const base = url.replace(/\/$/, "");
+  return `${base}${thumbPath}?X-Plex-Token=${token}`;
 }
 
 export async function searchLibrary(query: string): Promise<PlexSearchResult[]> {

@@ -19,6 +19,8 @@ import {
   RefreshCw,
   Copy,
   Search,
+  FileText,
+  Download,
 } from "lucide-react";
 import { DEFAULT_SYSTEM_PROMPT } from "@/lib/llm/default-prompt";
 
@@ -105,6 +107,16 @@ export default function SettingsPage() {
 
   // Test results
   const [testResults, setTestResults] = useState<Record<string, { success: boolean; message: string }>>({});
+
+  // Log state
+  const [logFiles, setLogFiles] = useState<{ name: string; size: number; modified: string }[]>([]);
+  const [logFilesLoading, setLogFilesLoading] = useState(false);
+  const [logFilesLoaded, setLogFilesLoaded] = useState(false);
+  const [selectedLogFile, setSelectedLogFile] = useState<string | null>(null);
+  const [logContent, setLogContent] = useState<string>("");
+  const [logContentLoading, setLogContentLoading] = useState(false);
+  const [logTotalLines, setLogTotalLines] = useState(0);
+  const [logShowing, setLogShowing] = useState(0);
 
   // --- Load data ---
   useEffect(() => {
@@ -333,6 +345,42 @@ export default function SettingsPage() {
     }
   }
 
+  // --- Logs ---
+  async function loadLogFiles() {
+    if (logFilesLoaded) return;
+    setLogFilesLoading(true);
+    try {
+      const res = await fetch("/api/settings/logs");
+      const data = await res.json();
+      if (data.success) setLogFiles(data.data || []);
+    } catch {
+      // Silent fail
+    } finally {
+      setLogFilesLoading(false);
+      setLogFilesLoaded(true);
+    }
+  }
+
+  async function loadLogContent(filename: string, full = false) {
+    setSelectedLogFile(filename);
+    setLogContentLoading(true);
+    setLogContent("");
+    try {
+      const url = `/api/settings/logs/${encodeURIComponent(filename)}${full ? "?full=true" : ""}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      if (data.success) {
+        setLogContent(data.data.content);
+        setLogTotalLines(data.data.totalLines);
+        setLogShowing(data.data.showing);
+      }
+    } catch {
+      setLogContent("Failed to load log file.");
+    } finally {
+      setLogContentLoading(false);
+    }
+  }
+
   // --- User management ---
   async function updateUser(userId: number, updates: Partial<Pick<UserEntry, "isAdmin" | "defaultModel" | "canChangeModel" | "rateLimitMessages" | "rateLimitPeriod">>) {
     try {
@@ -406,12 +454,13 @@ export default function SettingsPage() {
           </div>
         )}
 
-        <Tabs defaultValue="llm">
+        <Tabs defaultValue="llm" onValueChange={(v) => { if (v === "logs") loadLogFiles(); }}>
           <TabsList>
             <TabsTrigger value="llm">LLM Setup</TabsTrigger>
             <TabsTrigger value="services">Plex & Arrs</TabsTrigger>
             <TabsTrigger value="mcp">MCP</TabsTrigger>
             <TabsTrigger value="users">Users</TabsTrigger>
+            <TabsTrigger value="logs">Logs</TabsTrigger>
           </TabsList>
 
           {/* ===== TAB 1: LLM Setup ===== */}
@@ -873,6 +922,100 @@ export default function SettingsPage() {
                         </div>
                       </div>
                     ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* ===== TAB 5: Logs ===== */}
+          <TabsContent value="logs" className="mt-4">
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">Application Logs</CardTitle>
+                <CardDescription>
+                  View and download log files from <code className="font-mono text-xs">/config/logs/</code>.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {logFilesLoading ? (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Spinner size={14} /> Loading…
+                  </div>
+                ) : (
+                  <div className="flex gap-4 min-h-64">
+                    {/* File list */}
+                    <div className="w-48 shrink-0 space-y-1">
+                      {logFiles.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">No log files found.</p>
+                      ) : (
+                        logFiles.map((f) => (
+                          <button
+                            key={f.name}
+                            onClick={() => loadLogContent(f.name)}
+                            className={`w-full text-left rounded-lg px-3 py-2 text-sm transition-colors ${
+                              selectedLogFile === f.name
+                                ? "bg-primary/10 text-primary"
+                                : "hover:bg-muted text-foreground"
+                            }`}
+                          >
+                            <p className="font-medium truncate flex items-center gap-1.5">
+                              <FileText size={13} />
+                              {f.name}
+                            </p>
+                            <p className="text-xs text-muted-foreground mt-0.5">
+                              {(f.size / 1024).toFixed(1)} KB
+                            </p>
+                          </button>
+                        ))
+                      )}
+                    </div>
+
+                    {/* Log content viewer */}
+                    {selectedLogFile && (
+                      <div className="flex-1 min-w-0 flex flex-col gap-2">
+                        {/* Toolbar */}
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <p className="text-xs text-muted-foreground">
+                            {logShowing < logTotalLines
+                              ? `Showing last ${logShowing} of ${logTotalLines} lines`
+                              : `${logTotalLines} lines`}
+                          </p>
+                          <div className="flex items-center gap-2">
+                            {logShowing < logTotalLines && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 text-xs"
+                                onClick={() => loadLogContent(selectedLogFile, true)}
+                                disabled={logContentLoading}
+                              >
+                                Load Full
+                              </Button>
+                            )}
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 text-xs gap-1"
+                              onClick={() => window.open(`/api/settings/logs/${encodeURIComponent(selectedLogFile)}?download=true`)}
+                            >
+                              <Download size={12} />
+                              Download
+                            </Button>
+                          </div>
+                        </div>
+
+                        {logContentLoading ? (
+                          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                            <Spinner size={14} /> Loading…
+                          </div>
+                        ) : (
+                          <pre className="font-mono text-xs bg-muted/50 rounded-lg p-3 max-h-96 overflow-auto whitespace-pre-wrap break-all">
+                            {logContent || "(empty)"}
+                          </pre>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </CardContent>

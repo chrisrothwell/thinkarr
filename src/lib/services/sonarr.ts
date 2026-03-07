@@ -1,4 +1,5 @@
 import { getConfig } from "@/lib/config";
+import { logger } from "@/lib/logger";
 
 function getSonarrConfig() {
   const url = getConfig("sonarr.url");
@@ -9,12 +10,19 @@ function getSonarrConfig() {
 
 async function sonarrFetch(path: string) {
   const { url, apiKey } = getSonarrConfig();
-  const res = await fetch(`${url}/api/v3${path}`, {
+  const fullUrl = `${url}/api/v3${path}`;
+  logger.info("Sonarr API request", { method: "GET", url: fullUrl });
+  const res = await fetch(fullUrl, {
     headers: { "X-Api-Key": apiKey },
     signal: AbortSignal.timeout(15000),
   });
-  if (!res.ok) throw new Error(`Sonarr API error: HTTP ${res.status}`);
-  return res.json();
+  if (!res.ok) {
+    logger.warn("Sonarr API error", { url: fullUrl, status: res.status });
+    throw new Error(`Sonarr API error: HTTP ${res.status}`);
+  }
+  const data = await res.json();
+  logger.info("Sonarr API response", { url: fullUrl, status: res.status, body: JSON.stringify(data).slice(0, 5000) });
+  return data;
 }
 
 export interface SonarrSeries {

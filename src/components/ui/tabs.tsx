@@ -17,14 +17,20 @@ export function Tabs({
   defaultValue,
   children,
   className,
+  onValueChange,
 }: {
   defaultValue: string;
   children: ReactNode;
   className?: string;
+  onValueChange?: (value: string) => void;
 }) {
   const [activeTab, setActiveTab] = useState(defaultValue);
+  function handleSetActiveTab(tab: string) {
+    setActiveTab(tab);
+    onValueChange?.(tab);
+  }
   return (
-    <TabsContext.Provider value={{ activeTab, setActiveTab }}>
+    <TabsContext.Provider value={{ activeTab, setActiveTab: handleSetActiveTab }}>
       <div className={className}>{children}</div>
     </TabsContext.Provider>
   );

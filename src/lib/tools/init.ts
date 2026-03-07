@@ -3,6 +3,7 @@ import { registerPlexTools } from "./plex-tools";
 import { registerSonarrTools } from "./sonarr-tools";
 import { registerRadarrTools } from "./radarr-tools";
 import { registerOverseerrTools } from "./overseerr-tools";
+import { registerDisplayTitlesTool } from "./display-titles-tool";
 
 let initialized = false;
 
@@ -10,6 +11,9 @@ let initialized = false;
 export function initializeTools() {
   if (initialized) return;
   initialized = true;
+
+  // Always register display_titles (no service dependency)
+  registerDisplayTitlesTool();
 
   // Always register Plex tools (required service)
   if (getConfig("plex.url")) {

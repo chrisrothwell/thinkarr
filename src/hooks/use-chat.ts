@@ -159,6 +159,18 @@ export function useChat(conversationId: string | null, options?: UseChatOptions)
         streamingRef.current = false;
         setStreaming(false);
         abortRef.current = null;
+        // Reload messages from server so tool call results (including display_titles
+        // carousels) are persisted in state and survive subsequent messages.
+        try {
+          const res = await fetch(`/api/conversations/${convId}`);
+          const data = await res.json();
+          if (data.success && data.data.messages) {
+            setMessages(data.data.messages);
+            setToolCalls(new Map());
+          }
+        } catch {
+          // Best-effort — messages stay as optimistic state if reload fails
+        }
       }
     },
     [conversationId, streaming],
