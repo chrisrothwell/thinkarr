@@ -34,3 +34,9 @@
 
 15. [x] IMPROVEMENT - log readability, pretty print json messages for ease of debugging.
 
+16. BUG - The title carousel does not reliably display left and right navigation arrows, making it non-obvious to users that they can scroll through results. The arrows appear inconsistently — sometimes shown, sometimes not — so users may not realise the carousel is scrollable.
+
+17. IMPROVEMENT - The system prompt is user-editable, but app updates may ship an improved default system prompt. Separate the concept of a default system prompt (shipped with the app) and a custom system prompt (user-edited). Add a "Reset to Default" button in Settings that restores the custom system prompt to the current default, so users can easily adopt improvements without losing the ability to customise.
+
+18. CRITICAL BUG - New users are incorrectly blocked from registering with the error "You do not have access to any media on this server, please contact the owner to get access to a Shared Library" even when they do have access to shared libraries. The Plex shared library access check is producing false negatives and preventing legitimate users from registering.
+
