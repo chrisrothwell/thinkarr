@@ -29,60 +29,40 @@ export async function POST(request: Request) {
   const baseUrl = plexUrl.replace(/\/$/, "");
   const results: Record<string, unknown> = {};
 
-  // 1. Fetch server users list via admin token
-  try {
-    const usersUrl = `${baseUrl}/home/users`;
-    logger.info("Plex access test: fetching server users", { url: usersUrl });
-    const res = await fetch(usersUrl, {
-      headers: { "X-Plex-Token": adminToken, Accept: "application/json" },
-      signal: AbortSignal.timeout(8000),
-    });
-    const status = res.status;
-    const text = await res.text();
-    let parsed: unknown;
-    try { parsed = JSON.parse(text); } catch { parsed = text; }
-    results.serverUsers = { status, data: parsed };
-    logger.info("Plex access test: server users response", { status, body: text.slice(0, 1000) });
-  } catch (err) {
-    results.serverUsers = { error: err instanceof Error ? err.message : String(err) };
-    logger.error("Plex access test: server users fetch failed", { error: String(err) });
-  }
-
-  // 2. Fetch library sections via admin token (baseline — should always work)
-  try {
-    const sectionsUrl = `${baseUrl}/library/sections`;
-    const res = await fetch(sectionsUrl, {
-      headers: { "X-Plex-Token": adminToken, Accept: "application/json" },
-      signal: AbortSignal.timeout(8000),
-    });
-    const status = res.status;
-    const text = await res.text();
-    let parsed: unknown;
-    try { parsed = JSON.parse(text); } catch { parsed = text; }
-    results.adminSections = { status, data: parsed };
-    logger.info("Plex access test: admin sections response", { status, body: text.slice(0, 1000) });
-  } catch (err) {
-    results.adminSections = { error: err instanceof Error ? err.message : String(err) };
-  }
-
-  // 3. If a user token was supplied, test it against /library/sections
-  if (body.userToken) {
-    const tokenHint = body.userToken.slice(0, 4) + "…";
+  async function plexGet(label: string, url: string, token: string) {
     try {
-      const sectionsUrl = `${baseUrl}/library/sections`;
-      const res = await fetch(sectionsUrl, {
-        headers: { "X-Plex-Token": body.userToken, Accept: "application/json" },
+      logger.info(`Plex access test: ${label}`, { url });
+      const res = await fetch(url, {
+        headers: { "X-Plex-Token": token, Accept: "application/json" },
         signal: AbortSignal.timeout(8000),
       });
       const status = res.status;
       const text = await res.text();
       let parsed: unknown;
       try { parsed = JSON.parse(text); } catch { parsed = text; }
-      results.userSections = { status, tokenHint, data: parsed };
-      logger.info("Plex access test: user sections response", { status, tokenHint, body: text.slice(0, 1000) });
+      logger.info(`Plex access test: ${label} response`, { status, body: text.slice(0, 1000) });
+      return { status, data: parsed };
     } catch (err) {
-      results.userSections = { error: err instanceof Error ? err.message : String(err), tokenHint };
+      const error = err instanceof Error ? err.message : String(err);
+      logger.error(`Plex access test: ${label} failed`, { url, error });
+      return { error };
     }
+  }
+
+  // 1. /accounts — server-linked user accounts (the correct endpoint for this Plex version)
+  results.serverAccounts = await plexGet("serverAccounts", `${baseUrl}/accounts`, adminToken);
+
+  // 2. /home/users — alternative user list endpoint (older Plex versions)
+  results.homeUsers = await plexGet("homeUsers", `${baseUrl}/home/users`, adminToken);
+
+  // 3. /library/sections via admin token (baseline — should always work)
+  results.adminSections = await plexGet("adminSections", `${baseUrl}/library/sections`, adminToken);
+
+  // 4. If a user token was supplied, test it against /library/sections
+  if (body.userToken) {
+    const tokenHint = body.userToken.slice(0, 4) + "…";
+    const r = await plexGet("userSections", `${baseUrl}/library/sections`, body.userToken);
+    results.userSections = { ...r, tokenHint };
   }
 
   return NextResponse.json<ApiResponse>({ success: true, data: results });
