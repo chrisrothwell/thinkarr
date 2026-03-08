@@ -1,12 +1,12 @@
 services:
   thinkarr:
     image: chrisrothwell/thinkarr:latest
-    build: .
     container_name: thinkarr
     environment:
-      - PUID=1029 #CHANGE_TO_YOUR_UID
-      - PGID=65536 #CHANGE_TO_YOUR_GID
-      - TZ=Asia/Singapore #CHANGE_TO_YOUR_TZ
+      - PUID=1000 #CHANGE_TO_YOUR_UID
+      - PGID=1000 #CHANGE_TO_YOUR_GID
+      - TZ=UTC #CHANGE_TO_YOUR_TZ
+      #- SECURE_COOKIES=true # Uncomment if running behind a reverse proxy (HTTPS)
     volumes:
       - ./config:/config
     ports:
@@ -14,4 +14,4 @@ services:
     #network_mode: plexbridge
     security_opt:
       - no-new-privileges:true
-    restart: always
+    restart: unless-stopped
