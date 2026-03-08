@@ -54,8 +54,9 @@ export async function POST(request: Request) {
     // The very first user (the admin) is always allowed through.
     if (!existing && userCount! > 0) {
       const plexServerUrl = getConfig("plex.url");
-      if (plexServerUrl) {
-        const hasAccess = await checkUserHasLibraryAccess(plexServerUrl, plexUser.authToken);
+      const plexAdminToken = getConfig("plex.token");
+      if (plexServerUrl && plexAdminToken) {
+        const hasAccess = await checkUserHasLibraryAccess(plexServerUrl, plexAdminToken, plexUser.id);
         if (!hasAccess) {
           logger.warn("Library access denied", { plexUsername: plexUser.username, plexId: plexUser.id });
           return NextResponse.json<ApiResponse>(

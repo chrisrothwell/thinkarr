@@ -62,21 +62,22 @@ export async function checkPlexPin(pinId: number): Promise<string | null> {
 }
 
 /**
- * Check if a user (identified by their personal Plex token) has access to at
- * least one library section on the configured Plex server. Returns false when
- * Plex is unreachable so callers can decide whether to block or allow.
+ * Check if a user (identified by their Plex ID) has access to the configured
+ * Plex server by querying /accounts with the admin token. This is more reliable
+ * than using the user's personal token, which the server may not accept directly.
+ * Returns false when Plex is unreachable so the check fails closed.
  */
 export async function checkUserHasLibraryAccess(
   serverUrl: string,
-  userToken: string,
+  adminToken: string,
+  plexId: string,
 ): Promise<boolean> {
-  const url = `${serverUrl.replace(/\/$/, "")}/library/sections`;
-  const tokenHint = userToken ? userToken.slice(0, 4) + "…" : "(empty)";
-  logger.info("Plex library access check", { url, tokenHint });
+  const url = `${serverUrl.replace(/\/$/, "")}/accounts`;
+  logger.info("Plex library access check", { url, plexId });
   try {
     const res = await fetch(url, {
       headers: {
-        "X-Plex-Token": userToken,
+        "X-Plex-Token": adminToken,
         Accept: "application/json",
       },
       signal: AbortSignal.timeout(8000),
@@ -89,26 +90,27 @@ export async function checkUserHasLibraryAccess(
         status: res.status,
         statusText: res.statusText,
         body: body.slice(0, 500),
-        tokenHint,
+        plexId,
       });
       return false;
     }
 
-    const data = await res.json() as { MediaContainer?: { Directory?: unknown[] } };
-    const sections = data?.MediaContainer?.Directory ?? [];
-    const sectionCount = Array.isArray(sections) ? sections.length : 0;
-    logger.info("Plex library access check — OK", { url, status: res.status, sectionCount, tokenHint });
-
-    if (sectionCount === 0) {
-      logger.warn("Plex library access check — no sections returned (denying)", { url, tokenHint });
-    }
-    return sectionCount > 0;
+    const data = await res.json() as { MediaContainer?: { Account?: Array<{ id: number }> } };
+    const accounts = data?.MediaContainer?.Account ?? [];
+    const hasAccess = accounts.some((a) => String(a.id) === String(plexId));
+    logger.info("Plex library access check — result", {
+      url,
+      plexId,
+      accountCount: accounts.length,
+      hasAccess,
+    });
+    return hasAccess;
   } catch (err) {
     // Network error — fail closed (deny) so the check cannot be bypassed by
     // making the Plex server temporarily unreachable.
     logger.error("Plex library access check — network error", {
       url,
-      tokenHint,
+      plexId,
       error: err instanceof Error ? err.message : String(err),
     });
     return false;
