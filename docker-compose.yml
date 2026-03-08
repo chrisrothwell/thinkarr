@@ -1,6 +1,6 @@
 services:
   thinkarr:
-    image: chrisrothwell/thinkarr:test
+    image: chrisrothwell/thinkarr:latest
     build: .
     container_name: thinkarr
     environment:
