@@ -2,10 +2,32 @@ import { readFileSync, rmSync, existsSync } from "fs";
 import { execSync } from "child_process";
 import { STATE_FILE, E2E_PORT } from "./global-setup";
 
+const isWindows = process.platform === "win32";
+
 function killPort(port: number): void {
   try {
-    // fuser -k <port>/tcp sends SIGKILL to all processes listening on the port
-    execSync(`fuser -k ${port}/tcp 2>/dev/null || true`, { stdio: "ignore" });
+    if (isWindows) {
+      // netstat finds the PID, taskkill terminates it
+      execSync(
+        `for /f "tokens=5" %p in ('netstat -ano ^| findstr :${port}') do taskkill /PID %p /F`,
+        { stdio: "ignore", shell: "cmd.exe" },
+      );
+    } else {
+      execSync(`fuser -k ${port}/tcp 2>/dev/null || true`, { stdio: "ignore" });
+    }
+  } catch {
+    // Best-effort
+  }
+}
+
+function killProcessTree(pid: number): void {
+  try {
+    if (isWindows) {
+      execSync(`taskkill /PID ${pid} /T /F`, { stdio: "ignore" });
+    } else {
+      // Negative PID kills the entire process group (spawned with detached:true)
+      process.kill(-pid, "SIGKILL");
+    }
   } catch {
     // Best-effort
   }
@@ -23,15 +45,11 @@ export default async function globalTeardown() {
     | { pid?: number; kill: (sig?: string) => void }
     | undefined;
   if (next?.pid) {
-    try {
-      process.kill(-next.pid, "SIGKILL");
-    } catch {
-      try { next.kill("SIGKILL"); } catch { /* ignore */ }
-    }
+    killProcessTree(next.pid);
   } else if (existsSync(STATE_FILE)) {
     try {
       const state = JSON.parse(readFileSync(STATE_FILE, "utf-8")) as { nextPid?: number };
-      if (state.nextPid) process.kill(-state.nextPid, "SIGKILL");
+      if (state.nextPid) killProcessTree(state.nextPid);
     } catch { /* ignore */ }
   }
 
