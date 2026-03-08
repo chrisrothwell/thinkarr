@@ -1,3 +1,5 @@
+import { logger } from "@/lib/logger";
+
 const PLEX_HEADERS = {
   Accept: "application/json",
   "X-Plex-Product": "Thinkarr",
@@ -68,18 +70,47 @@ export async function checkUserHasLibraryAccess(
   serverUrl: string,
   userToken: string,
 ): Promise<boolean> {
+  const url = `${serverUrl.replace(/\/$/, "")}/library/sections`;
+  const tokenHint = userToken ? userToken.slice(0, 4) + "…" : "(empty)";
+  logger.info("Plex library access check", { url, tokenHint });
   try {
-    const res = await fetch(`${serverUrl.replace(/\/$/, "")}/library/sections`, {
+    const res = await fetch(url, {
       headers: {
         "X-Plex-Token": userToken,
         Accept: "application/json",
       },
       signal: AbortSignal.timeout(8000),
     });
-    return res.ok;
-  } catch {
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => "(unreadable)");
+      logger.warn("Plex library access check — HTTP error", {
+        url,
+        status: res.status,
+        statusText: res.statusText,
+        body: body.slice(0, 500),
+        tokenHint,
+      });
+      return false;
+    }
+
+    const data = await res.json() as { MediaContainer?: { Directory?: unknown[] } };
+    const sections = data?.MediaContainer?.Directory ?? [];
+    const sectionCount = Array.isArray(sections) ? sections.length : 0;
+    logger.info("Plex library access check — OK", { url, status: res.status, sectionCount, tokenHint });
+
+    if (sectionCount === 0) {
+      logger.warn("Plex library access check — no sections returned (denying)", { url, tokenHint });
+    }
+    return sectionCount > 0;
+  } catch (err) {
     // Network error — fail closed (deny) so the check cannot be bypassed by
     // making the Plex server temporarily unreachable.
+    logger.error("Plex library access check — network error", {
+      url,
+      tokenHint,
+      error: err instanceof Error ? err.message : String(err),
+    });
     return false;
   }
 }
