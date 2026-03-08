@@ -52,9 +52,48 @@ jobs:
           path: playwright-report/
           retention-days: 7
 
+  docker-e2e:
+    name: Docker E2E Tests
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Build Docker image
+        run: docker build -t thinkarr:ci-test .
+        env:
+          NEXT_PUBLIC_APP_VERSION: ${{ github.ref_name }}
+
+      - name: E2E tests against Docker container
+        run: npm run test:e2e:docker
+        env:
+          CI: true
+          NEXT_TELEMETRY_DISABLED: "1"
+          E2E_DOCKER_IMAGE: thinkarr:ci-test
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report-docker
+          path: playwright-report/
+          retention-days: 7
+
   docker:
     name: Build & Push Docker Image
-    needs: test
+    needs: docker-e2e
     runs-on: ubuntu-latest
 
     steps:
