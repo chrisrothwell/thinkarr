@@ -23,7 +23,8 @@
       "mcp__qmd__query",
       "Bash(qmd query:*)",
       "Bash(ls:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(curl:*)"
     ]
   }
 }

@@ -8,3 +8,4 @@
 
 5. CRITICAL BUG - New users are incorrectly blocked from registering with the error "You do not have access to any media on this server, please contact the owner to get access to a Shared Library" even when they do have access to shared libraries. The Plex shared library access check is producing false negatives and preventing legitimate users from registering.
 
+6. ENHANCEMENT - logs should use the timestamp from the TZ variable set by docker compose.
