@@ -6,6 +6,4 @@
 
 4. IMPROVEMENT - The system prompt is user-editable, but app updates may ship an improved default system prompt. Separate the concept of a default system prompt (shipped with the app) and a custom system prompt (user-edited). Add a "Reset to Default" button in Settings that restores the custom system prompt to the current default, so users can easily adopt improvements without losing the ability to customise.
 
-5. CRITICAL BUG - New users are incorrectly blocked from registering with the error "You do not have access to any media on this server, please contact the owner to get access to a Shared Library" even when they do have access to shared libraries. The Plex shared library access check is producing false negatives and preventing legitimate users from registering.
-
-6. ENHANCEMENT - logs should use the timestamp from the TZ variable set by docker compose.
+5. ENHANCEMENT - logs should use the timestamp from the TZ variable set by docker compose.
