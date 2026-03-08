@@ -1,5 +1,9 @@
 # Thinkarr
 
+[![CI](https://github.com/chrisrothwell/thinkarr/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/chrisrothwell/thinkarr/actions/workflows/docker-publish.yml)
+[![Docker Pulls](https://img.shields.io/docker/pulls/chrisrothwell/thinkarr)](https://hub.docker.com/r/chrisrothwell/thinkarr)
+[![Docker Image Version](https://img.shields.io/docker/v/chrisrothwell/thinkarr?sort=semver)](https://hub.docker.com/r/chrisrothwell/thinkarr)
+
 LLM-powered chat assistant for managing your media stack. Connect your Plex, Sonarr, Radarr, and Overseerr instances and interact with them through a conversational AI interface.
 
 ## Features
