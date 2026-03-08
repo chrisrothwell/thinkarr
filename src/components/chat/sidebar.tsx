@@ -87,6 +87,8 @@ export function Sidebar({
             {group.conversations.map((conv) => (
               <div
                 key={conv.id}
+                data-testid="conversation-item"
+                data-conversation-id={conv.id}
                 className={cn(
                   "group flex items-center rounded-lg px-3 py-2 text-sm cursor-pointer transition-colors",
                   conv.id === activeId

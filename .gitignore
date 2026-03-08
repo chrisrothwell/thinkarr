@@ -144,3 +144,8 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# E2E test artifacts
+test-results/
+tests/e2e/.auth/
+tests/e2e/.server-state.json

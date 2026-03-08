@@ -8,6 +8,7 @@ export default defineConfig({
     setupFiles: ["./src/__tests__/setup.ts"],
     // forks required — better-sqlite3 is a native addon and is not thread-safe
     pool: "forks",
+    exclude: ["**/node_modules/**", "**/tests/e2e/**"],
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov"],

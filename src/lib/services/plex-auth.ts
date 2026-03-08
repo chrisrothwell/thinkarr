@@ -1,5 +1,8 @@
 import { logger } from "@/lib/logger";
 
+// Allow overriding the Plex API base for E2E testing
+const PLEX_API_BASE = process.env.PLEX_API_BASE ?? "https://plex.tv";
+
 const PLEX_HEADERS = {
   Accept: "application/json",
   "X-Plex-Product": "Thinkarr",
@@ -23,7 +26,7 @@ export interface PlexUser {
 
 /** Request a new Plex PIN for the OAuth flow. */
 export async function createPlexPin(): Promise<PlexPin> {
-  const res = await fetch("https://plex.tv/api/v2/pins", {
+  const res = await fetch(`${PLEX_API_BASE}/api/v2/pins`, {
     method: "POST",
     headers: {
       ...PLEX_HEADERS,
@@ -49,7 +52,7 @@ export async function createPlexPin(): Promise<PlexPin> {
 
 /** Check if a Plex PIN has been claimed. Returns the auth token if claimed, null otherwise. */
 export async function checkPlexPin(pinId: number): Promise<string | null> {
-  const res = await fetch(`https://plex.tv/api/v2/pins/${pinId}`, {
+  const res = await fetch(`${PLEX_API_BASE}/api/v2/pins/${pinId}`, {
     headers: PLEX_HEADERS,
   });
 
@@ -119,7 +122,7 @@ export async function checkUserHasLibraryAccess(
 
 /** Fetch user info from a Plex auth token. */
 export async function getPlexUser(authToken: string): Promise<PlexUser> {
-  const res = await fetch("https://plex.tv/api/v2/user", {
+  const res = await fetch(`${PLEX_API_BASE}/api/v2/user`, {
     headers: {
       ...PLEX_HEADERS,
       "X-Plex-Token": authToken,
