@@ -396,4 +396,31 @@ describe("POST /api/auth/callback — returning user", () => {
 
     expect(checkUserHasLibraryAccess).not.toHaveBeenCalled();
   });
+
+  it("accumulates a new session without removing existing ones when a returning user logs in", async () => {
+    // Seed user
+    const [user] = testDb
+      .insert(schema.users)
+      .values({ plexId: MOCK_PLEX_USER.id, plexUsername: "returning", isAdmin: true, createdAt: new Date() })
+      .returning({ id: schema.users.id })
+      .all();
+
+    // Seed an existing session
+    const expiry = new Date(Date.now() + 86400000);
+    testDb
+      .insert(schema.sessions)
+      .values([{ id: "existing-session", userId: user.id, expiresAt: expiry, createdAt: new Date() }])
+      .run();
+
+    vi.mocked(checkPlexPin).mockResolvedValue("new-token");
+    vi.mocked(getPlexUser).mockResolvedValue(MOCK_PLEX_USER);
+
+    const res = await callbackPOST(callbackReq(12));
+    expect(res.status).toBe(200);
+
+    // A new session is added; existing sessions are preserved
+    const sessionsAfter = sqlite.prepare("SELECT * FROM sessions").all() as { id: string }[];
+    expect(sessionsAfter.length).toBeGreaterThanOrEqual(2);
+    expect(sessionsAfter.some((s) => s.id === "existing-session")).toBe(true);
+  });
 });

@@ -87,13 +87,18 @@ export async function getPlexMachineId(): Promise<string | undefined> {
   }
 }
 
-/** Build a full thumbnail URL with Plex token appended. Returns undefined if Plex is not configured. */
+/**
+ * Build a thumbnail URL that routes through the server-side proxy.
+ * The proxy fetches the image from Plex using the stored token so the
+ * token is never exposed to the browser.
+ *
+ * Returns undefined if Plex is not configured or thumbPath is empty.
+ */
 export function buildThumbUrl(thumbPath: string): string | undefined {
   const url = getConfig("plex.url");
   const token = getConfig("plex.token");
   if (!url || !token || !thumbPath) return undefined;
-  const base = url.replace(/\/$/, "");
-  return `${base}${thumbPath}?X-Plex-Token=${token}`;
+  return `/api/plex/thumb?path=${encodeURIComponent(thumbPath)}`;
 }
 
 export async function searchLibrary(query: string): Promise<PlexSearchResult[]> {

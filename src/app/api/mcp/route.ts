@@ -25,11 +25,15 @@ function authenticateMcp(request: Request): { permission: McpPermission; userId?
   // Check for X-User-Id header for user-scoped operations
   const userIdHeader = request.headers.get("x-user-id");
   if (userIdHeader) {
+    const parsedUserId = parseInt(userIdHeader, 10);
+    if (!Number.isSafeInteger(parsedUserId) || parsedUserId <= 0 || parsedUserId > 2_147_483_647) {
+      return null;
+    }
     const db = getDb();
     const user = db
       .select()
       .from(schema.users)
-      .where(eq(schema.users.id, parseInt(userIdHeader, 10)))
+      .where(eq(schema.users.id, parsedUserId))
       .get();
     if (user) {
       return {
