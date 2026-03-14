@@ -11,6 +11,8 @@ FROM node:22-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+ARG APP_VERSION=dev
+ENV NEXT_PUBLIC_APP_VERSION=$APP_VERSION
 RUN npm run build
 
 # Stage 3: Production runner
@@ -39,5 +41,8 @@ RUN chmod +x /entrypoint.sh
 
 EXPOSE 3000
 VOLUME /config
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+  CMD wget -qO- http://localhost:3000/api/health || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]

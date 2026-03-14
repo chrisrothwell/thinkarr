@@ -1,5 +1,9 @@
 # Thinkarr
 
+[![CI](https://github.com/chrisrothwell/thinkarr/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/chrisrothwell/thinkarr/actions/workflows/docker-publish.yml)
+[![Docker Pulls](https://img.shields.io/docker/pulls/chrisrothwell/thinkarr)](https://hub.docker.com/r/chrisrothwell/thinkarr)
+[![Docker Image Version](https://img.shields.io/docker/v/chrisrothwell/thinkarr?sort=semver)](https://hub.docker.com/r/chrisrothwell/thinkarr)
+
 LLM-powered chat assistant for managing your media stack. Connect your Plex, Sonarr, Radarr, and Overseerr instances and interact with them through a conversational AI interface.
 
 ## Features
@@ -19,7 +23,7 @@ LLM-powered chat assistant for managing your media stack. Connect your Plex, Son
 # docker-compose.yml
 services:
   thinkarr:
-    image: thinkarr
+    image: chrisrothwell/thinkarr:latest
     container_name: thinkarr
     ports:
       - "3000:3000"
@@ -28,6 +32,10 @@ services:
     environment:
       - PUID=1000
       - PGID=1000
+      - TZ=UTC
+      #- SECURE_COOKIES=true # Uncomment if behind a reverse proxy (HTTPS)
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
 ```
 
@@ -57,8 +65,10 @@ All configuration is stored in an SQLite database at `/config/thinkarr.db`. Sett
 |----------|---------|-------------|
 | `PUID` | `1000` | User ID for file permissions |
 | `PGID` | `1000` | Group ID for file permissions |
+| `TZ` | `UTC` | Timezone (e.g. `America/New_York`) |
 | `CONFIG_DIR` | `/config` | Directory for database and config |
 | `PORT` | `3000` | Server port |
+| `SECURE_COOKIES` | `false` | Set to `true` when running behind a reverse proxy with HTTPS. Required for login to work correctly with Nginx Proxy Manager, Traefik, SWAG, etc. |
 
 ## Development
 

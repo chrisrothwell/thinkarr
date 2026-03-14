@@ -20,7 +20,10 @@ export function MessageBubble({ message, toolCalls, userAvatar, userName }: Mess
   const hasToolCalls = toolCalls && toolCalls.length > 0;
 
   return (
-    <div className={cn("flex gap-3 px-4 py-3", isUser && "flex-row-reverse")}>
+    <div
+      className={cn("flex gap-3 px-4 py-3", isUser && "flex-row-reverse")}
+      data-testid={isUser ? "message-user" : "message-assistant"}
+    >
       {isUser ? (
         <Avatar src={userAvatar} fallback={userName || "U"} size="sm" />
       ) : (

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -32,6 +32,14 @@ export function Sidebar({
 }: SidebarProps) {
   const router = useRouter();
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [publicIp, setPublicIp] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("https://api.ipify.org?format=json")
+      .then((r) => r.json())
+      .then((d) => setPublicIp(d.ip))
+      .catch(() => {});
+  }, []);
 
   async function handleLogout() {
     await fetch("/api/auth/session", { method: "DELETE" });
@@ -79,6 +87,8 @@ export function Sidebar({
             {group.conversations.map((conv) => (
               <div
                 key={conv.id}
+                data-testid="conversation-item"
+                data-conversation-id={conv.id}
                 className={cn(
                   "group flex items-center rounded-lg px-3 py-2 text-sm cursor-pointer transition-colors",
                   conv.id === activeId
@@ -109,6 +119,14 @@ export function Sidebar({
 
       {/* Service status traffic lights */}
       <ServiceStatus />
+
+      {/* Version */}
+      {process.env.NEXT_PUBLIC_APP_VERSION && (
+        <div className="px-3 pb-1 text-xs text-muted-foreground/60">
+          {process.env.NEXT_PUBLIC_APP_VERSION}
+          {publicIp && ` on ${publicIp}`}
+        </div>
+      )}
 
       {/* User menu */}
       {user && (
