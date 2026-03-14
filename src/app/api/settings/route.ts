@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { getConfig, setConfig } from "@/lib/config";
 import { logger } from "@/lib/logger";
+import { validateServiceUrl } from "@/lib/security/url-validation";
 import type { ApiResponse } from "@/types/api";
 
 export interface LlmEndpoint {
@@ -117,6 +118,20 @@ export async function PATCH(request: Request) {
       }
       return ep;
     });
+
+    // Validate all baseUrls before saving
+    for (const ep of endpoints) {
+      if (ep.baseUrl) {
+        const check = validateServiceUrl(ep.baseUrl);
+        if (!check.valid) {
+          return NextResponse.json<ApiResponse>(
+            { success: false, error: `LLM endpoint "${ep.name}" has invalid baseUrl: ${check.error}` },
+            { status: 400 },
+          );
+        }
+      }
+    }
+
     // Ensure exactly one endpoint is marked as default; fall back to first enabled
     const hasDefault = endpoints.some((e) => e.isDefault && e.enabled);
     if (!hasDefault) {
@@ -132,6 +147,12 @@ export async function PATCH(request: Request) {
       setConfig("llm.apiKey", primary.apiKey, true);
       setConfig("llm.model", primary.model);
     }
+
+    logger.info("SETTINGS_CHANGE", {
+      adminUserId: session.user.id,
+      section: "llmEndpoints",
+      endpointIds: endpoints.map((e) => e.id),
+    });
   }
 
   // Handle arr services
@@ -146,11 +167,31 @@ export async function PATCH(request: Request) {
     const sectionData = body[section] as Record<string, string> | undefined;
     if (!sectionData) continue;
 
+    const changedKeys: string[] = [];
     for (const [key, encrypted] of Object.entries(config.keys)) {
       const value = sectionData[key];
       if (value && value !== "••••••••") {
+        // Validate URL fields before saving
+        if (key === "url") {
+          const check = validateServiceUrl(value);
+          if (!check.valid) {
+            return NextResponse.json<ApiResponse>(
+              { success: false, error: `${section}.url is invalid: ${check.error}` },
+              { status: 400 },
+            );
+          }
+        }
         setConfig(`${section}.${key}`, value, encrypted);
+        changedKeys.push(encrypted ? `${key}=[redacted]` : `${key}=${value}`);
       }
+    }
+
+    if (changedKeys.length > 0) {
+      logger.info("SETTINGS_CHANGE", {
+        adminUserId: session.user.id,
+        section,
+        changed: changedKeys,
+      });
     }
   }
 

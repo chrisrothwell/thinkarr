@@ -396,4 +396,38 @@ describe("POST /api/auth/callback — returning user", () => {
 
     expect(checkUserHasLibraryAccess).not.toHaveBeenCalled();
   });
+
+  it("revokes existing sessions when a returning user logs in", async () => {
+    // Seed user
+    const [user] = testDb
+      .insert(schema.users)
+      .values({ plexId: MOCK_PLEX_USER.id, plexUsername: "returning", isAdmin: true, createdAt: new Date() })
+      .returning({ id: schema.users.id })
+      .all();
+
+    // Seed two old sessions for this user
+    const expiry = new Date(Date.now() + 86400000);
+    testDb
+      .insert(schema.sessions)
+      .values([
+        { id: "old-session-1", userId: user.id, expiresAt: expiry, createdAt: new Date() },
+        { id: "old-session-2", userId: user.id, expiresAt: expiry, createdAt: new Date() },
+      ])
+      .run();
+
+    const sessionsBefore = sqlite.prepare("SELECT * FROM sessions").all();
+    expect(sessionsBefore).toHaveLength(2);
+
+    vi.mocked(checkPlexPin).mockResolvedValue("new-token");
+    vi.mocked(getPlexUser).mockResolvedValue(MOCK_PLEX_USER);
+
+    const res = await callbackPOST(callbackReq(12));
+    expect(res.status).toBe(200);
+
+    // Old sessions should be gone; one new session created
+    const sessionsAfter = sqlite.prepare("SELECT * FROM sessions").all() as { id: string }[];
+    expect(sessionsAfter).toHaveLength(1);
+    expect(sessionsAfter[0].id).not.toBe("old-session-1");
+    expect(sessionsAfter[0].id).not.toBe("old-session-2");
+  });
 });

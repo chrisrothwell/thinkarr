@@ -95,6 +95,13 @@ export async function getSession(): Promise<SessionWithUser | null> {
   };
 }
 
+/** Revoke all existing sessions for a user. Called when a user re-authenticates to prevent
+ *  stale sessions (e.g. from a previous device) from remaining active. */
+export function deleteUserSessions(userId: number): void {
+  const db = getDb();
+  db.delete(schema.sessions).where(eq(schema.sessions.userId, userId)).run();
+}
+
 /** Destroy a session by ID and clear the cookie. */
 export async function destroySession(): Promise<void> {
   const cookieStore = await cookies();

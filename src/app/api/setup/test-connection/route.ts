@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { testConnection } from "@/lib/services/test-connection";
 import { getConfig } from "@/lib/config";
+import { validateServiceUrl } from "@/lib/security/url-validation";
 import type { TestConnectionRequest, TestConnectionResponse, ApiResponse } from "@/types/api";
 
 const MASK = "••••••••";
@@ -59,6 +60,14 @@ export async function POST(request: Request) {
   if (!body.type || !body.url) {
     return NextResponse.json<ApiResponse>(
       { success: false, error: "type and url are required" },
+      { status: 400 },
+    );
+  }
+
+  const urlCheck = validateServiceUrl(body.url);
+  if (!urlCheck.valid) {
+    return NextResponse.json<ApiResponse>(
+      { success: false, error: `Invalid URL: ${urlCheck.error}` },
       { status: 400 },
     );
   }
