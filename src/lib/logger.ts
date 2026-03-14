@@ -14,9 +14,29 @@ if (process.env.NEXT_PHASE !== "phase-production-build") {
 
 const isBuild = process.env.NEXT_PHASE === "phase-production-build";
 
-// Use local time from the TZ env var rather than UTC
+/**
+ * Format a Date as "YYYY-MM-DD HH:MM:SS" in the timezone set by the TZ
+ * environment variable. Uses Intl.DateTimeFormat with explicit 2-digit
+ * options so the output is stable across ICU/CLDR versions.
+ */
+export function formatLocalTimestamp(date: Date = new Date()): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+    ...(process.env.TZ ? { timeZone: process.env.TZ } : {}),
+  }).formatToParts(date);
+  const p: Partial<Record<Intl.DateTimeFormatPartTypes, string>> = {};
+  for (const { type, value } of parts) p[type] = value;
+  return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}`;
+}
+
 const localTimestamp = winston.format.timestamp({
-  format: () => new Date().toLocaleString("sv"),
+  format: () => formatLocalTimestamp(),
 });
 
 const logger = winston.createLogger({

@@ -1,11 +1,9 @@
 import { describe, it, expect, afterEach } from "vitest";
+import { formatLocalTimestamp } from "@/lib/logger";
 
 /**
- * Tests that log timestamps respect the TZ environment variable.
- *
- * Winston's default timestamp() uses Date.toISOString() which is always UTC.
- * Our custom format uses Date.toLocaleString('sv') which uses local time,
- * and Node.js derives local time from the TZ env var.
+ * Tests that log timestamps respect the TZ environment variable and always
+ * produce zero-padded YYYY-MM-DD HH:MM:SS output regardless of ICU/CLDR version.
  */
 
 const originalTZ = process.env.TZ;
@@ -18,41 +16,37 @@ afterEach(() => {
   }
 });
 
-describe("log timestamp format", () => {
-  it("produces YYYY-MM-DD HH:MM:SS format", () => {
-    const result = new Date().toLocaleString("sv");
-    expect(result).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+describe("formatLocalTimestamp", () => {
+  it("produces zero-padded YYYY-MM-DD HH:MM:SS format", () => {
+    // Use a date with single-digit month and day to verify zero-padding
+    const date = new Date("2024-01-05T08:03:07.000Z");
+    process.env.TZ = "UTC";
+    expect(formatLocalTimestamp(date)).toBe("2024-01-05 08:03:07");
   });
 
   it("reflects TZ=UTC — timestamp matches UTC time", () => {
     process.env.TZ = "UTC";
-    const now = new Date();
-    const local = now.toLocaleString("sv");
-    const utc = now.toISOString().slice(0, 19).replace("T", " ");
-    expect(local).toBe(utc);
+    const date = new Date("2024-06-15T15:30:45.000Z");
+    expect(formatLocalTimestamp(date)).toBe("2024-06-15 15:30:45");
   });
 
-  it("reflects TZ=America/New_York — timestamp differs from UTC in winter", () => {
+  it("reflects TZ=America/New_York — UTC-5 offset in winter", () => {
     process.env.TZ = "America/New_York";
     // 2024-01-15 15:00:00 UTC = 2024-01-15 10:00:00 EST (UTC-5)
     const date = new Date("2024-01-15T15:00:00.000Z");
-    const local = date.toLocaleString("sv");
-    expect(local).toBe("2024-01-15 10:00:00");
+    expect(formatLocalTimestamp(date)).toBe("2024-01-15 10:00:00");
   });
 
-  it("reflects TZ=Europe/London — timestamp matches UTC in winter (no offset)", () => {
+  it("reflects TZ=Europe/London — UTC+0 in winter", () => {
     process.env.TZ = "Europe/London";
-    // London is UTC+0 in January
     const date = new Date("2024-01-15T15:00:00.000Z");
-    const local = date.toLocaleString("sv");
-    expect(local).toBe("2024-01-15 15:00:00");
+    expect(formatLocalTimestamp(date)).toBe("2024-01-15 15:00:00");
   });
 
-  it("reflects TZ=Asia/Tokyo — timestamp is UTC+9", () => {
+  it("reflects TZ=Asia/Tokyo — UTC+9", () => {
     process.env.TZ = "Asia/Tokyo";
-    // 2024-01-15 15:00:00 UTC = 2024-01-16 00:00:00 JST (UTC+9)
+    // 2024-01-15 15:00:00 UTC = 2024-01-16 00:00:00 JST
     const date = new Date("2024-01-15T15:00:00.000Z");
-    const local = date.toLocaleString("sv");
-    expect(local).toBe("2024-01-16 00:00:00");
+    expect(formatLocalTimestamp(date)).toBe("2024-01-16 00:00:00");
   });
 });
