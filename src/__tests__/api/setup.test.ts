@@ -2,7 +2,7 @@
  * Integration tests for /api/setup
  *
  * Tests status reporting and the initial config save flow.
- * No auth is required for setup endpoints.
+ * POST /api/setup requires an admin session.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -17,6 +17,18 @@ let testDb: ReturnType<typeof drizzle<typeof schema>>;
 
 vi.mock("@/lib/db", () => ({ getDb: () => testDb, schema }));
 
+const mockAdminSession = {
+  sessionId: "test-session",
+  user: { id: 1, plexId: "plex1", plexUsername: "admin", plexEmail: "a@b.com", plexAvatarUrl: null, isAdmin: true },
+};
+const mockUserSession = {
+  sessionId: "test-session-2",
+  user: { id: 2, plexId: "plex2", plexUsername: "user", plexEmail: "u@b.com", plexAvatarUrl: null, isAdmin: false },
+};
+
+const mockGetSession = vi.fn();
+vi.mock("@/lib/auth/session", () => ({ getSession: () => mockGetSession() }));
+
 import { GET, POST } from "@/app/api/setup/route";
 
 beforeEach(() => {
@@ -24,6 +36,7 @@ beforeEach(() => {
   sqlite.pragma("foreign_keys = ON");
   testDb = drizzle(sqlite, { schema });
   migrate(testDb, { migrationsFolder: path.join(process.cwd(), "drizzle") });
+  mockGetSession.mockResolvedValue(mockAdminSession);
 });
 
 afterEach(() => {
@@ -63,6 +76,28 @@ describe("POST /api/setup", () => {
     llm: { baseUrl: "http://llm.local", apiKey: "key", model: "gpt-4" },
     plex: { url: "http://plex.local", token: "plextoken" },
   };
+
+  it("returns 403 when not authenticated", async () => {
+    mockGetSession.mockResolvedValueOnce(null);
+    const req = new Request("http://localhost/api/setup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(validBody),
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(403);
+  });
+
+  it("returns 403 for non-admin user", async () => {
+    mockGetSession.mockResolvedValueOnce(mockUserSession);
+    const req = new Request("http://localhost/api/setup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(validBody),
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(403);
+  });
 
   it("returns 400 for empty body", async () => {
     const req = new Request("http://localhost/api/setup", {

@@ -83,6 +83,15 @@ jobs:
           NEXT_TELEMETRY_DISABLED: "1"
           E2E_DOCKER_IMAGE: thinkarr:ci-test
 
+      - name: Scan Docker image for vulnerabilities
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: thinkarr:ci-test
+          format: table
+          exit-code: '1'
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+
       - name: Upload Playwright report
         uses: actions/upload-artifact@v4
         if: failure()
@@ -122,6 +131,7 @@ jobs:
             type=raw,value=latest
 
       - name: Build and push Docker image
+        id: push
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -131,3 +141,17 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             APP_VERSION=${{ github.ref_name }}
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: chrisrothwell/thinkarr@${{ steps.push.outputs.digest }}
+          artifact-name: sbom-${{ github.ref_name }}.spdx.json
+          output-file: sbom-${{ github.ref_name }}.spdx.json
+
+      - name: Upload SBOM as release asset
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ github.ref_name }}
+          path: sbom-${{ github.ref_name }}.spdx.json
+          retention-days: 90

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { getConfig, setConfig } from "@/lib/config";
+import { logger } from "@/lib/logger";
 import type { ApiResponse } from "@/types/api";
 
 export interface LlmEndpoint {
@@ -55,6 +56,7 @@ function getMaskedEndpoints(): LlmEndpoint[] {
 export async function GET() {
   const session = await getSession();
   if (!session || !session.user.isAdmin) {
+    logger.warn("ADMIN_ACCESS_DENIED", { userId: session?.user.id, path: "GET /api/settings" });
     return NextResponse.json<ApiResponse>(
       { success: false, error: "Admin access required" },
       { status: 403 },
@@ -87,6 +89,7 @@ export async function GET() {
 export async function PATCH(request: Request) {
   const session = await getSession();
   if (!session || !session.user.isAdmin) {
+    logger.warn("ADMIN_ACCESS_DENIED", { userId: session?.user.id, path: "PATCH /api/settings" });
     return NextResponse.json<ApiResponse>(
       { success: false, error: "Admin access required" },
       { status: 403 },

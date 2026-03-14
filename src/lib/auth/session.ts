@@ -1,4 +1,4 @@
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { v4 as uuidv4 } from "uuid";
 import { getDb, schema } from "@/lib/db";
 import { eq, and, gt } from "drizzle-orm";
@@ -6,6 +6,29 @@ import type { User } from "@/types";
 
 const SESSION_COOKIE = "thinkarr_session";
 const SESSION_MAX_AGE_DAYS = 30;
+
+/**
+ * Determine whether the session cookie should be marked Secure.
+ *
+ * Three modes via SECURE_COOKIES env var:
+ *   "true"  — always set Secure (user has confirmed HTTPS everywhere)
+ *   "false" — never set Secure (plain HTTP LAN deployment, the default)
+ *   "auto"  — trust X-Forwarded-Proto from the upstream reverse proxy;
+ *             sets Secure only when the proxy signals HTTPS
+ *
+ * Note: only trust X-Forwarded-Proto in "auto" mode when the app is behind
+ * a reverse proxy you control. In direct-internet deployments, this header
+ * could be spoofed, making the cookie insecure rather than more secure (the
+ * worst outcome is a non-Secure cookie, not a security escalation).
+ */
+async function shouldUseSecureCookie(): Promise<boolean> {
+  const mode = process.env.SECURE_COOKIES ?? "false";
+  if (mode === "true") return true;
+  if (mode === "false") return false;
+  // auto: check the forwarded protocol header set by the reverse proxy
+  const headerStore = await headers();
+  return headerStore.get("x-forwarded-proto") === "https";
+}
 
 export interface SessionWithUser {
   sessionId: string;
@@ -23,12 +46,9 @@ export async function createSession(userId: number): Promise<string> {
     .run();
 
   const cookieStore = await cookies();
-  // SECURE_COOKIES=true must be set explicitly — Docker deployments commonly run
-  // over plain HTTP on a local network, so defaulting to secure:true would
-  // prevent the cookie from being sent and break authentication.
   cookieStore.set(SESSION_COOKIE, sessionId, {
     httpOnly: true,
-    secure: process.env.SECURE_COOKIES === "true",
+    secure: await shouldUseSecureCookie(),
     sameSite: "lax",
     path: "/",
     maxAge: SESSION_MAX_AGE_DAYS * 24 * 60 * 60,

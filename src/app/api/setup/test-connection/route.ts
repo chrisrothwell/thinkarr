@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { getSession } from "@/lib/auth/session";
 import { testConnection } from "@/lib/services/test-connection";
 import { getConfig } from "@/lib/config";
 import type { TestConnectionRequest, TestConnectionResponse, ApiResponse } from "@/types/api";
@@ -37,6 +38,14 @@ function resolveApiKey(body: TestConnectionRequest): string {
 }
 
 export async function POST(request: Request) {
+  const session = await getSession();
+  if (!session || !session.user.isAdmin) {
+    return NextResponse.json<ApiResponse>(
+      { success: false, error: "Admin access required" },
+      { status: 403 },
+    );
+  }
+
   let body: TestConnectionRequest;
   try {
     body = await request.json();

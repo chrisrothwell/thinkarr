@@ -34,6 +34,13 @@ export async function POST(request: Request) {
     );
   }
 
+  if (body.message.length > 4000) {
+    return new Response(
+      JSON.stringify({ success: false, error: "Message too long (max 4000 characters)" }),
+      { status: 400, headers: { "Content-Type": "application/json" } },
+    );
+  }
+
   // 3. Verify conversation ownership
   const db = getDb();
   const conversation = db
