@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
 
 interface ServiceStatusItem {
@@ -15,27 +15,22 @@ const STATUS_COLORS = {
   red: "bg-red-500",
 } as const;
 
+async function fetchServiceStatus(): Promise<ServiceStatusItem[]> {
+  const res = await fetch("/api/services/status");
+  const data = await res.json();
+  return data.success ? data.data.services : [];
+}
+
 export function ServiceStatus() {
   const [services, setServices] = useState<ServiceStatusItem[]>([]);
   const [expanded, setExpanded] = useState(false);
 
-  const fetchStatus = useCallback(async () => {
-    try {
-      const res = await fetch("/api/services/status");
-      const data = await res.json();
-      if (data.success) {
-        setServices(data.data.services);
-      }
-    } catch {
-      // Silently fail — will retry on next poll
-    }
-  }, []);
-
   useEffect(() => {
-    fetchStatus();
-    const interval = setInterval(fetchStatus, 60000); // Poll every 60s
+    const poll = () => fetchServiceStatus().then(setServices).catch(() => {});
+    poll();
+    const interval = setInterval(poll, 60000); // Poll every 60s
     return () => clearInterval(interval);
-  }, [fetchStatus]);
+  }, []);
 
   if (services.length === 0) return null;
 
