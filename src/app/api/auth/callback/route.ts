@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { checkPlexPin, getPlexUser, checkUserHasLibraryAccess } from "@/lib/services/plex-auth";
-import { createSession, deleteUserSessions } from "@/lib/auth/session";
+import { createSession } from "@/lib/auth/session";
 import { checkAuthRateLimit, getClientIp } from "@/lib/auth/rate-limit";
 import { getDb, schema } from "@/lib/db";
 import { getConfig } from "@/lib/config";
@@ -94,8 +94,6 @@ export async function POST(request: Request) {
         .where(eq(schema.users.plexId, plexUser.id))
         .run();
       userId = existing.id;
-      // Revoke all previous sessions so stale sessions on other devices are invalidated
-      deleteUserSessions(userId);
       logger.info("User login", { userId, plexUsername: plexUser.username });
     } else {
       const result = db
