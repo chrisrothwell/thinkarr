@@ -14,10 +14,15 @@ if (process.env.NEXT_PHASE !== "phase-production-build") {
 
 const isBuild = process.env.NEXT_PHASE === "phase-production-build";
 
+// Use local time from the TZ env var rather than UTC
+const localTimestamp = winston.format.timestamp({
+  format: () => new Date().toLocaleString("sv"),
+});
+
 const logger = winston.createLogger({
   level: "info",
   format: winston.format.combine(
-    winston.format.timestamp(),
+    localTimestamp,
     winston.format.errors({ stack: true }),
     winston.format.json()
   ),
@@ -38,7 +43,7 @@ const logger = winston.createLogger({
         datePattern: "YYYY-MM-DD",
         maxFiles: "14d",
         maxSize: "20m",
-        format: winston.format.combine(winston.format.timestamp(), winston.format.json()),
+        format: winston.format.combine(localTimestamp, winston.format.json()),
       }),
     ]),
   ],
