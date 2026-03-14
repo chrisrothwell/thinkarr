@@ -46,3 +46,13 @@ The collection name for this project is "thinkarr".  Example command: qmd get PL
 
 ### Releases (main → Docker)
 Only the human merges `dev` → `main`. Docker deploys are triggered by git tags (`v*`) applied to `main` by the human.
+
+## Rule: tests for every change
+
+For every feature or bug fix, check whether a unit or E2E test already covers the changed behaviour.
+
+- If no test exists, add one as part of the same PR — do not open a separate PR for tests.
+- Unit tests live in `src/__tests__/` and use Vitest.
+- E2E tests live in `tests/e2e/` and use Playwright.
+- Prefer unit tests for logic/API behaviour; prefer E2E tests only for UI interactions that can't be covered at the unit level.
+- If an existing test already covers the behaviour, no new test is needed — but do not remove or weaken existing tests.
