@@ -20,7 +20,7 @@ Use qmd search for quick lookups and qmd query for complex questions.
 
 Use Read/Glob only if qmd doesn’t return enough results.
 
-The collection name for this project is "thinkarr".  Example command: qmd get todo.md -c thinkarr
+The collection name for this project is "thinkarr".  Example command: qmd get PLAN.MD -c thinkarr
 
 ## Rule: branch and merge strategy
 
