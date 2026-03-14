@@ -10,26 +10,10 @@
  *   2. UI level (here) — the error appears inline in the chat, not as a crash
  */
 
-import { test, expect, request } from "@playwright/test";
-import { BASE_URL } from "./global-setup";
-
-// Seed messages via API to exhaust the rate limit without going through the UI
-async function seedMessagesToLimit(sessionCookie: string, convId: string, count: number) {
-  const ctx = await request.newContext({ baseURL: BASE_URL });
-
-  for (let i = 0; i < count; i++) {
-    await ctx.post("/api/chat", {
-      headers: { Cookie: sessionCookie },
-      // We can't easily seed raw DB messages through the API in E2E tests,
-      // so we set the user's rate limit via the settings API instead.
-    });
-  }
-
-  await ctx.dispose();
-}
+import { test, expect } from "@playwright/test";
 
 test.describe("Rate limit UI", () => {
-  test("rate limit error appears inline when limit is exceeded", async ({ page, context }) => {
+  test("rate limit error appears inline when limit is exceeded", async ({ page, context, request }) => {
     await page.goto("/chat");
 
     // Lower the rate limit to 0 via settings API so the next message is blocked.
@@ -38,8 +22,7 @@ test.describe("Rate limit UI", () => {
     const sessionCookie = cookies.map((c) => `${c.name}=${c.value}`).join("; ");
 
     // Get the current user id from the session
-    const apiCtx = await request.newContext({ baseURL: BASE_URL });
-    const sessionRes = await apiCtx.get("/api/auth/session", {
+    const sessionRes = await request.get("/api/auth/session", {
       headers: { Cookie: sessionCookie },
     });
     const { data: sessionData } = await sessionRes.json();
@@ -52,11 +35,10 @@ test.describe("Rate limit UI", () => {
     }
 
     // Set rate limit to 0 messages/day so the very next chat message is blocked
-    await apiCtx.patch("/api/settings/users", {
+    await request.patch("/api/settings/users", {
       headers: { Cookie: sessionCookie },
       data: { userId, rateLimitMessages: 0, rateLimitPeriod: "day" },
     });
-    await apiCtx.dispose();
 
     // Now send a chat message — it should be blocked
     await page.getByPlaceholder("Type a message...").fill("This should be rate limited");
