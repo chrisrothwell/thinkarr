@@ -7,8 +7,8 @@
  *      via 127.0.0.1 and binds port 3000 directly on the host
  *   3. Verify the container is running as the expected PUID/PGID and that
  *      /config is owned correctly
- *   4. Configure the app via POST /api/setup
- *   5. Create the admin user by completing the Plex OAuth flow
+ *   4. Create the admin user by completing the Plex OAuth flow
+ *   5. Configure the app via POST /api/setup (requires admin session from step 4)
  *   6. Save the admin session cookie as Playwright storage state
  */
 
@@ -103,9 +103,26 @@ export default async function globalSetup(_config: FullConfig) {
   }
   console.log(`[e2e-docker] /config ownership: ${configOwner} ✓`);
 
-  // 7. Configure the app via POST /api/setup (LLM + Plex)
+  // 7. Create admin user via Plex OAuth flow first — POST /api/setup now
+  //    requires an admin session, so we must establish one before configuring.
+  //    The first user to complete OAuth is always promoted to admin with no
+  //    library-access check, so no app config is needed at this stage.
   const apiCtx = await request.newContext({ baseURL: DOCKER_BASE_URL });
 
+  const pinRes = await apiCtx.post("/api/auth/plex");
+  const { data: pinData } = await pinRes.json();
+
+  const callbackRes = await apiCtx.post("/api/auth/callback", {
+    data: { pinId: pinData.id },
+  });
+  if (!callbackRes.ok()) {
+    throw new Error(
+      `POST /api/auth/callback failed: ${callbackRes.status()} ${await callbackRes.text()}`,
+    );
+  }
+  console.log("[e2e-docker] Admin session created");
+
+  // 8. Configure the app via POST /api/setup (LLM + Plex) — authenticated as admin
   const setupRes = await apiCtx.post("/api/setup", {
     data: {
       llm: {
@@ -123,20 +140,6 @@ export default async function globalSetup(_config: FullConfig) {
     throw new Error(`POST /api/setup failed: ${setupRes.status()} ${await setupRes.text()}`);
   }
   console.log("[e2e-docker] App configured");
-
-  // 8. Create admin user via Plex OAuth flow
-  const pinRes = await apiCtx.post("/api/auth/plex");
-  const { data: pinData } = await pinRes.json();
-
-  const callbackRes = await apiCtx.post("/api/auth/callback", {
-    data: { pinId: pinData.id },
-  });
-  if (!callbackRes.ok()) {
-    throw new Error(
-      `POST /api/auth/callback failed: ${callbackRes.status()} ${await callbackRes.text()}`,
-    );
-  }
-  console.log("[e2e-docker] Admin session created");
 
   // 9. Save admin session as Playwright storage state
   await apiCtx.storageState({ path: ADMIN_AUTH_FILE });
