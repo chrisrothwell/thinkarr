@@ -5,6 +5,12 @@ on:
     branches:
       - dev
       - main
+    paths-ignore:
+      - '**.md'
+      - '**.MD'
+      - '.claude/**'
+      - 'docker-compose.yml'
+      - 'LICENSE'
 
 jobs:
   test:
