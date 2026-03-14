@@ -58,17 +58,16 @@ export default async function globalSetup(config: FullConfig) {
   const configDir = mkdtempSync(path.join(tmpdir(), "thinkarr-e2e-"));
   console.log(`[e2e] Temp config dir:   ${configDir}`);
 
-  // 3. Determine command: prefer built app (next start), fall back to next dev
-  const { existsSync } = await import("fs");
-  const hasBuild = existsSync(path.join(process.cwd(), ".next", "BUILD_ID"));
-  const cmd = hasBuild
-    ? ["node_modules/.bin/next", "start", "--port", String(E2E_PORT)]
-    : ["node_modules/.bin/next", "dev", "--port", String(E2E_PORT), "--turbopack"];
+  // 3. Always use next dev for E2E — standalone requires manual static asset copying
+  //    which is error-prone across platforms. Dev mode is sufficient for behaviour testing.
+  const nextScript = path.join(process.cwd(), "node_modules", "next", "dist", "bin", "next");
+  const cmd = [process.execPath, nextScript, "dev", "--port", String(E2E_PORT), "--turbopack"];
 
   console.log(`[e2e] Starting Next.js:  ${cmd.join(" ")}`);
 
   const nextProcess: ChildProcess = spawn(cmd[0], cmd.slice(1), {
     cwd: process.cwd(),
+
     env: {
       ...process.env,
       PORT: String(E2E_PORT),
