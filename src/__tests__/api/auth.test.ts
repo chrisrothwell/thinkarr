@@ -43,6 +43,9 @@ vi.mock("next/headers", () => ({
     set: vi.fn(),
     delete: vi.fn(),
   })),
+  headers: vi.fn(async () => ({
+    get: vi.fn().mockReturnValue(null),
+  })),
 }));
 
 // ---------------------------------------------------------------------------
@@ -56,6 +59,8 @@ import {
   getPlexUser,
   checkUserHasLibraryAccess,
 } from "@/lib/services/plex-auth";
+import { cookies, headers } from "next/headers";
+import { _resetRateLimits } from "@/lib/auth/rate-limit";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -97,6 +102,7 @@ beforeEach(() => {
   sqlite.pragma("foreign_keys = ON");
   testDb = drizzle(sqlite, { schema });
   migrate(testDb, { migrationsFolder: path.join(process.cwd(), "drizzle") });
+  _resetRateLimits();
   vi.clearAllMocks();
 });
 
@@ -134,6 +140,19 @@ describe("POST /api/auth/plex", () => {
 // ---------------------------------------------------------------------------
 // POST /api/auth/callback — exchange PIN for session
 // ---------------------------------------------------------------------------
+
+describe("POST /api/auth/callback — rate limiting", () => {
+  it("returns 429 after 10 failed attempts from the same IP", async () => {
+    vi.mocked(checkPlexPin).mockResolvedValue(null); // always pending
+
+    for (let i = 0; i < 10; i++) {
+      await callbackPOST(callbackReq(i));
+    }
+
+    const res = await callbackPOST(callbackReq(99));
+    expect(res.status).toBe(429);
+  });
+});
 
 describe("POST /api/auth/callback — validation", () => {
   it("returns 400 when pinId is missing", async () => {
@@ -257,6 +276,73 @@ describe("POST /api/auth/callback — subsequent users", () => {
     const res = await callbackPOST(callbackReq(5));
     expect(res.status).toBe(200);
     expect(checkUserHasLibraryAccess).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cookie Secure flag — SECURE_COOKIES modes
+// ---------------------------------------------------------------------------
+
+describe("createSession — SECURE_COOKIES modes", () => {
+  const originalEnv = process.env.SECURE_COOKIES;
+
+  afterEach(() => {
+    if (originalEnv === undefined) delete process.env.SECURE_COOKIES;
+    else process.env.SECURE_COOKIES = originalEnv;
+  });
+
+  it("sets secure=false by default (no env var)", async () => {
+    delete process.env.SECURE_COOKIES;
+    const mockSet = vi.fn();
+    vi.mocked(cookies).mockResolvedValueOnce({ get: vi.fn(), set: mockSet, delete: vi.fn() } as never);
+    vi.mocked(checkPlexPin).mockResolvedValue("token");
+    vi.mocked(getPlexUser).mockResolvedValue(MOCK_PLEX_USER);
+
+    await callbackPOST(callbackReq(20));
+
+    const cookieOptions = mockSet.mock.calls[0]?.[2];
+    expect(cookieOptions?.secure).toBe(false);
+  });
+
+  it("sets secure=true when SECURE_COOKIES=true", async () => {
+    process.env.SECURE_COOKIES = "true";
+    const mockSet = vi.fn();
+    vi.mocked(cookies).mockResolvedValueOnce({ get: vi.fn(), set: mockSet, delete: vi.fn() } as never);
+    vi.mocked(checkPlexPin).mockResolvedValue("token");
+    vi.mocked(getPlexUser).mockResolvedValue({ ...MOCK_PLEX_USER, id: "plex-secure" });
+
+    await callbackPOST(callbackReq(21));
+
+    const cookieOptions = mockSet.mock.calls[0]?.[2];
+    expect(cookieOptions?.secure).toBe(true);
+  });
+
+  it("sets secure=true in auto mode when X-Forwarded-Proto is https", async () => {
+    process.env.SECURE_COOKIES = "auto";
+    const mockSet = vi.fn();
+    vi.mocked(cookies).mockResolvedValueOnce({ get: vi.fn(), set: mockSet, delete: vi.fn() } as never);
+    vi.mocked(headers).mockResolvedValueOnce({ get: (h: string) => h === "x-forwarded-proto" ? "https" : null } as never);
+    vi.mocked(checkPlexPin).mockResolvedValue("token");
+    vi.mocked(getPlexUser).mockResolvedValue({ ...MOCK_PLEX_USER, id: "plex-auto-https" });
+
+    await callbackPOST(callbackReq(22));
+
+    const cookieOptions = mockSet.mock.calls[0]?.[2];
+    expect(cookieOptions?.secure).toBe(true);
+  });
+
+  it("sets secure=false in auto mode when X-Forwarded-Proto is http", async () => {
+    process.env.SECURE_COOKIES = "auto";
+    const mockSet = vi.fn();
+    vi.mocked(cookies).mockResolvedValueOnce({ get: vi.fn(), set: mockSet, delete: vi.fn() } as never);
+    vi.mocked(headers).mockResolvedValueOnce({ get: (h: string) => h === "x-forwarded-proto" ? "http" : null } as never);
+    vi.mocked(checkPlexPin).mockResolvedValue("token");
+    vi.mocked(getPlexUser).mockResolvedValue({ ...MOCK_PLEX_USER, id: "plex-auto-http" });
+
+    await callbackPOST(callbackReq(23));
+
+    const cookieOptions = mockSet.mock.calls[0]?.[2];
+    expect(cookieOptions?.secure).toBe(false);
   });
 });
 

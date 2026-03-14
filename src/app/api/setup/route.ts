@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { getSession } from "@/lib/auth/session";
 import { getConfig, setConfig, isSetupComplete } from "@/lib/config";
 import type { SetupStatus, SetupSaveRequest, ApiResponse } from "@/types/api";
 
@@ -32,6 +33,14 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const session = await getSession();
+  if (!session || !session.user.isAdmin) {
+    return NextResponse.json<ApiResponse>(
+      { success: false, error: "Admin access required" },
+      { status: 403 },
+    );
+  }
+
   if (isSetupComplete()) {
     return NextResponse.json<ApiResponse>(
       { success: false, error: "Setup already complete. Use settings to reconfigure." },

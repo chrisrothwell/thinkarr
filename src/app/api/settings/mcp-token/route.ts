@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { v4 as uuidv4 } from "uuid";
+import { randomBytes } from "crypto";
 import { getSession } from "@/lib/auth/session";
 import { getConfig, setConfig } from "@/lib/config";
 import type { ApiResponse } from "@/types/api";
@@ -15,7 +15,7 @@ export async function GET() {
 
   let token = getConfig("mcp.bearerToken");
   if (!token) {
-    token = uuidv4();
+    token = randomBytes(32).toString("hex");
     setConfig("mcp.bearerToken", token, true);
   }
 
@@ -34,7 +34,7 @@ export async function POST() {
     );
   }
 
-  const token = uuidv4();
+  const token = randomBytes(32).toString("hex");
   setConfig("mcp.bearerToken", token, true);
 
   return NextResponse.json<ApiResponse>({

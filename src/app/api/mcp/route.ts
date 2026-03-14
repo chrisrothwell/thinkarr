@@ -3,6 +3,8 @@ import { getConfig } from "@/lib/config";
 import { initializeTools } from "@/lib/tools/init";
 import { getOpenAITools, executeTool, hasTools } from "@/lib/tools/registry";
 import { getDb, schema } from "@/lib/db";
+import { logger } from "@/lib/logger";
+import { getClientIp } from "@/lib/auth/rate-limit";
 import { eq } from "drizzle-orm";
 
 type McpPermission = "admin" | "user";
@@ -86,6 +88,7 @@ function canExecuteTool(toolName: string, permission: McpPermission): boolean {
 export async function GET(request: Request) {
   const auth = authenticateMcp(request);
   if (!auth) {
+    logger.warn("MCP_AUTH_FAILURE", { ip: getClientIp(request), path: "GET /api/mcp" });
     return NextResponse.json(
       { error: "Unauthorized. Provide a valid Bearer token." },
       { status: 401 },
@@ -111,6 +114,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const auth = authenticateMcp(request);
   if (!auth) {
+    logger.warn("MCP_AUTH_FAILURE", { ip: getClientIp(request), path: "POST /api/mcp" });
     return NextResponse.json(
       { error: "Unauthorized. Provide a valid Bearer token." },
       { status: 401 },
@@ -155,6 +159,7 @@ export async function POST(request: Request) {
 
     // Permission check
     if (!canExecuteTool(toolName, auth.permission)) {
+      logger.warn("MCP_PERMISSION_DENIED", { tool: toolName, permission: auth.permission, userId: auth.userId });
       return NextResponse.json(
         { error: `Permission denied: ${auth.permission} cannot execute ${toolName}` },
         { status: 403 },
@@ -164,6 +169,8 @@ export async function POST(request: Request) {
     const args = typeof body.arguments === "string"
       ? body.arguments
       : JSON.stringify(body.arguments || {});
+
+    logger.info("MCP_TOOL_EXEC", { tool: toolName, permission: auth.permission, userId: auth.userId });
 
     try {
       const result = await executeTool(toolName, args);

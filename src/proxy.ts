@@ -5,6 +5,13 @@ const PUBLIC_PATHS = ["/setup", "/login", "/api/setup", "/api/auth", "/api/mcp"]
 const SESSION_COOKIE = "thinkarr_session";
 
 export function proxy(request: NextRequest) {
+  // Defence-in-depth: block the header used in CVE-2025-29927 style middleware
+  // bypass attacks. Next.js uses this header internally for subrequests — it
+  // must never arrive from an external client.
+  if (request.headers.get("x-middleware-subrequest")) {
+    return NextResponse.json({ success: false, error: "Forbidden" }, { status: 403 });
+  }
+
   const { pathname } = request.nextUrl;
 
   // Allow public paths
