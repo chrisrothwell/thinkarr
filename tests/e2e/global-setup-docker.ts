@@ -77,11 +77,14 @@ export default async function globalSetup(_config: FullConfig) {
   await waitForServer(DOCKER_BASE_URL);
   console.log("[e2e-docker] Container is ready");
 
-  // 5. Verify PUID/PGID — confirms entrypoint.sh ran correctly
-  const [uid, gid] = execSync(`docker exec ${CONTAINER_NAME} sh -c 'id -u && id -g'`)
-    .toString()
-    .trim()
-    .split("\n");
+  // 5. Verify PUID/PGID — check PID 1's actual UID/GID from /proc, not the
+  //    docker exec session which always runs as root regardless of su-exec
+  const uid = execSync(
+    `docker exec ${CONTAINER_NAME} sh -c 'cat /proc/1/status | grep "^Uid:" | awk "{print \\$2}"'`,
+  ).toString().trim();
+  const gid = execSync(
+    `docker exec ${CONTAINER_NAME} sh -c 'cat /proc/1/status | grep "^Gid:" | awk "{print \\$2}"'`,
+  ).toString().trim();
   if (uid !== TEST_PUID || gid !== TEST_PGID) {
     throw new Error(
       `Container running as UID=${uid} GID=${gid}, expected ${TEST_PUID}:${TEST_PGID}`,
