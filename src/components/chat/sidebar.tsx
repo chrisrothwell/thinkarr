@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Avatar } from "@/components/ui/avatar";
 import { MessageSquarePlus, Trash2, LogOut, PanelLeftClose, PanelLeft, Settings } from "lucide-react";
 import { ServiceStatus } from "./service-status";
+import { Badge } from "@/components/ui/badge";
 import type { Conversation, User } from "@/types";
 
 interface SidebarProps {
@@ -122,9 +123,14 @@ export function Sidebar({
 
       {/* Version */}
       {process.env.NEXT_PUBLIC_APP_VERSION && (
-        <div className="px-3 pb-1 text-xs text-muted-foreground/60">
-          {process.env.NEXT_PUBLIC_APP_VERSION}
-          {publicIp && ` on ${publicIp}`}
+        <div className="px-3 pb-1 flex items-center gap-1.5 text-xs text-muted-foreground/60">
+          <span>{process.env.NEXT_PUBLIC_APP_VERSION}</span>
+          {process.env.NEXT_PUBLIC_APP_VERSION.includes("-") && (
+            <Badge variant="secondary" className="px-1.5 py-0 text-[10px] font-semibold">
+              BETA
+            </Badge>
+          )}
+          {publicIp && <span>on {publicIp}</span>}
         </div>
       )}
 
