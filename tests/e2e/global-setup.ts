@@ -14,7 +14,7 @@
  *      teardown can clean everything up
  */
 
-import { chromium, FullConfig, request } from "@playwright/test";
+import { FullConfig, request } from "@playwright/test";
 import { spawn, ChildProcess } from "child_process";
 import { mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
@@ -48,7 +48,7 @@ async function waitForServer(url: string, timeoutMs = 60_000): Promise<void> {
 // Global setup entry point
 // ---------------------------------------------------------------------------
 
-export default async function globalSetup(config: FullConfig) {
+export default async function globalSetup(_: FullConfig) {
   // 1. Start mock servers
   const mocks = await startMockServers();
   console.log(`[e2e] Mock Plex server:  ${mocks.plexUrl}`);
