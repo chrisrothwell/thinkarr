@@ -73,10 +73,15 @@ feature branches → dev → beta → main
 - Bypass CI with `--no-verify`
 
 ### Releases
-Only the human manages the release flow:
-1. Merge `dev` → `beta` to publish a `:beta` Docker image for testing
-2. If stable, bump version in `package.json` on `dev`, merge `dev` → `beta` → `main`
-3. Apply a `v*` tag to `main` to trigger the `:latest` Docker publish
+Only the human manages the release flow. All version bumps go through PRs — never commit directly to `dev`, `beta`, or `main`.
+
+1. Open a PR from a `claude/bump-version-*` branch into `dev` bumping `package.json` to `1.1.0-beta.1`
+2. Merge `dev` → `beta` via PR → CI publishes `:beta` Docker image
+3. Test the `:beta` image
+4. If fixes needed: more feature PRs → `dev`, then another `dev` → `beta` PR
+5. When stable: open a PR bumping `package.json` to `1.1.0` into `dev`
+6. Merge `dev` → `beta` → `main` via PRs
+7. Apply `v1.1.0` tag to `main` → CI publishes `:latest` Docker image
 
 ## Rule: keep PLAN.md up to date
 
