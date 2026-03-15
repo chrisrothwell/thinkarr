@@ -104,6 +104,7 @@ jobs:
           exit-code: '1'
           severity: CRITICAL,HIGH
           ignore-unfixed: true
+          trivyignores: .trivyignore
 
       - name: Upload Playwright report
         uses: actions/upload-artifact@v4
