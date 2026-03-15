@@ -30,7 +30,7 @@ export function registerPlexTools() {
 
   defineTool({
     name: "plex_get_recently_added",
-    description: "Get recently added content in the Plex library.",
+    description: "Get recently added content in the Plex library. Returns up to 10 items, deduplicated by show for TV series. Each result includes a 'type' field ('movie', 'show', 'season', or 'episode') to differentiate content types. TV seasons and episodes include 'showTitle' for the parent series name.",
     schema: z.object({}),
     handler: async () => plex.getRecentlyAdded(),
   });

@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import pkg from "./package.json";
 
 // Security headers safe for both HTTP (LAN) and HTTPS (reverse proxy) deployments.
 // DO NOT add Strict-Transport-Security here — HSTS must only be set by the
@@ -33,6 +34,9 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  env: {
+    NEXT_PUBLIC_APP_VERSION: pkg.version,
+  },
   serverExternalPackages: ["better-sqlite3", "winston", "winston-daily-rotate-file"],
   async headers() {
     return [

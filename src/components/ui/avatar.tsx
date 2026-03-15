@@ -23,6 +23,7 @@ export function Avatar({ src, fallback, className, size = "md" }: AvatarProps) {
       )}
     >
       {src ? (
+        // eslint-disable-next-line @next/next/no-img-element
         <img src={src} alt={fallback} className="h-full w-full object-cover" />
       ) : (
         <span className="font-medium text-muted-foreground">

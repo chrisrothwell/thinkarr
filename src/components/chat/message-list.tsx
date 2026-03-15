@@ -76,7 +76,7 @@ export function MessageList({ messages, toolCalls, userAvatar, userName }: Messa
 
   if (messages.length === 0) {
     return (
-      <div className="flex flex-1 items-center justify-center">
+      <div className="flex flex-1 items-center justify-center" data-testid="empty-chat-state">
         <div className="text-center">
           <h2 className="text-xl font-semibold text-foreground mb-2">Thinkarr</h2>
           <p className="text-sm text-muted-foreground">

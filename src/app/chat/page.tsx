@@ -137,6 +137,8 @@ export default function ChatPage() {
     );
   }
 
+  const appVersion = process.env.NEXT_PUBLIC_APP_VERSION;
+
   return (
     <div className="flex h-[100dvh]">
       <Sidebar
@@ -177,8 +179,25 @@ export default function ChatPage() {
         <MessageList
           messages={messages}
           toolCalls={toolCalls}
-          userAvatar={user?.plexAvatarUrl}
-          userName={user?.plexUsername}
+          userAvatar={
+            // When admin views another user's conversation, show that user's avatar
+            (() => {
+              const activeConv = conversations.find((c) => c.id === activeConversationId);
+              if (activeConv && activeConv.userId !== user?.id && activeConv.ownerAvatarUrl !== undefined) {
+                return activeConv.ownerAvatarUrl;
+              }
+              return user?.plexAvatarUrl;
+            })()
+          }
+          userName={
+            (() => {
+              const activeConv = conversations.find((c) => c.id === activeConversationId);
+              if (activeConv && activeConv.userId !== user?.id && activeConv.ownerName) {
+                return activeConv.ownerName;
+              }
+              return user?.plexUsername;
+            })()
+          }
         />
 
         {error && (
@@ -192,6 +211,13 @@ export default function ChatPage() {
           disabled={streaming}
         />
       </main>
+      {appVersion && (
+        <div className="fixed bottom-2 left-2 z-10 pointer-events-none">
+          <span className="text-[10px] text-muted-foreground/40 font-mono select-none">
+            v{appVersion}
+          </span>
+        </div>
+      )}
     </div>
   );
 }

@@ -94,6 +94,32 @@ export function getNextPeriodStart(period: RateLimitPeriod): Date {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Per-user MCP tokens
+// ---------------------------------------------------------------------------
+
+export function getUserMcpToken(userId: number): string | null {
+  return getConfig(`user.${userId}.mcpToken`);
+}
+
+export function setUserMcpToken(userId: number, token: string): void {
+  setConfig(`user.${userId}.mcpToken`, token, true);
+}
+
+/**
+ * Look up which user owns a given MCP token.
+ * Iterates all users — fast enough for small deployments (SQLite, single-server).
+ */
+export function getUserIdByMcpToken(token: string): number | null {
+  const db = getDb();
+  const users = db.select({ id: schema.users.id }).from(schema.users).all();
+  for (const user of users) {
+    const userToken = getConfig(`user.${user.id}.mcpToken`);
+    if (userToken && userToken === token) return user.id;
+  }
+  return null;
+}
+
 /** Count user-role messages sent by a user since `since`. */
 export function countUserMessagesSince(userId: number, since: Date): number {
   const db = getDb();

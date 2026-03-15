@@ -90,9 +90,10 @@ test.describe("Conversation history", () => {
     await page.keyboard.press("Enter");
     await expect(page.getByTestId("message-assistant")).toContainText("Here", { timeout: 15_000 });
 
-    // Start a new chat (clears the current view)
+    // Start a new chat (clears the current view) — wait for the empty state to appear
+    // rather than waiting for messages to disappear, which is more reliable under CI load.
     await page.getByRole("button", { name: /new chat/i }).click();
-    await expect(page.getByTestId("message-user")).not.toBeVisible({ timeout: 5_000 });
+    await expect(page.getByTestId("empty-chat-state")).toBeVisible({ timeout: 10_000 });
 
     // Click the conversation in the sidebar to reload it
     await page.getByTestId("conversation-item").first().click();

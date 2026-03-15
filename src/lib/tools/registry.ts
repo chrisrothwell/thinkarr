@@ -29,7 +29,8 @@ export function getOpenAITools(): OpenAI.ChatCompletionTool[] {
   return Array.from(tools.values()).map((tool) => {
     const jsonSchema = z.toJSONSchema(tool.schema) as Record<string, unknown>;
     // Remove $schema that OpenAI doesn't want
-    const { $schema: _, ...parameters } = jsonSchema;
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { $schema: _schema, ...parameters } = jsonSchema;
     return {
       type: "function" as const,
       function: {
