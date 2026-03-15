@@ -56,6 +56,17 @@ The collection name for this project is "thinkarr".  Example command: qmd get PL
 ### Releases (main → Docker)
 Only the human merges `dev` → `main`. Docker deploys are triggered by git tags (`v*`) applied to `main` by the human.
 
+## Rule: keep PLAN.md up to date
+
+For every PR, update `PLAN.md` to reflect what was built or changed:
+
+- Add a new phase section (or append to the current one) documenting features and bug fixes
+- Update the **file structure** if new files were added
+- Update the **config keys table** if new `app_config` keys were introduced
+- Update the **API routes table** if new routes were added or existing ones changed
+
+Do this as a separate commit on the same branch before pushing, so the PR includes the documentation alongside the code.
+
 ## Rule: tests for every change
 
 For every feature or bug fix, check whether a unit or E2E test already covers the changed behaviour.
