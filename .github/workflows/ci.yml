@@ -7,6 +7,12 @@ on:
       - main
       - beta
 
+# Least-privilege: read-only by default for all jobs.
+# pull-requests: read is required by dorny/paths-filter on PR events.
+permissions:
+  contents: read
+  pull-requests: read
+
 jobs:
   # Detect which files changed so expensive jobs can be skipped for docs-only PRs.
   # The workflow always triggers (required by branch protection), but test/e2e only

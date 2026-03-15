@@ -7,6 +7,10 @@ on:
     branches:
       - beta
 
+# Default: read-only. Jobs that need more grant it explicitly.
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Test
@@ -118,6 +122,8 @@ jobs:
     name: Build & Push Docker Image
     needs: docker-e2e
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # required for anchore/sbom-action to attach SBOM to release
 
     steps:
       - uses: actions/checkout@v4
