@@ -2,6 +2,15 @@
 
 Details of the build are in PLAN.MD - refer to this for details of file structure and what has been built.
 
+## Project context
+
+Thinkarr is a **publicly shipped, self-hostable application** distributed to end users via Docker Hub. Users pull and run the image themselves — treat it like a public product, not an internal or personal tool. This affects decisions around:
+
+- **Versioning** — semver matters; bump patch for bug fixes, minor for new features, major for breaking changes
+- **Release notes** — changes visible to users should be documented
+- **Breaking changes** — DB migrations must be safe for existing installs; config/env var changes need backward compat or a clear migration path
+- **Docker image quality** — entrypoint, env vars, volume mounts, and default config are all user-facing interfaces
+
 ## Rule: always use qmd before reading files
 
 Before reading files or exploring directories, always use qmd to search for information in local projects.
