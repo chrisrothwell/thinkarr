@@ -66,6 +66,8 @@ interface UserEntry {
   canChangeModel: boolean;
   rateLimitMessages: number;
   rateLimitPeriod: "hour" | "day" | "week" | "month";
+  mcpToken?: string;
+  mcpTokenLoading?: boolean;
 }
 
 // --- Helpers ---
@@ -398,6 +400,45 @@ export default function SettingsPage() {
     }
   }
 
+  // --- Per-user MCP tokens ---
+  async function loadUserMcpToken(userId: number) {
+    setUsers((prev) =>
+      prev.map((u) => (u.id === userId ? { ...u, mcpTokenLoading: true } : u)),
+    );
+    try {
+      const res = await fetch(`/api/settings/mcp-token/user/${userId}`);
+      const data = await res.json();
+      if (data.success) {
+        setUsers((prev) =>
+          prev.map((u) => (u.id === userId ? { ...u, mcpToken: data.data.token, mcpTokenLoading: false } : u)),
+        );
+      }
+    } catch {
+      setUsers((prev) =>
+        prev.map((u) => (u.id === userId ? { ...u, mcpTokenLoading: false } : u)),
+      );
+    }
+  }
+
+  async function regenerateUserMcpToken(userId: number) {
+    setUsers((prev) =>
+      prev.map((u) => (u.id === userId ? { ...u, mcpTokenLoading: true } : u)),
+    );
+    try {
+      const res = await fetch(`/api/settings/mcp-token/user/${userId}`, { method: "POST" });
+      const data = await res.json();
+      if (data.success) {
+        setUsers((prev) =>
+          prev.map((u) => (u.id === userId ? { ...u, mcpToken: data.data.token, mcpTokenLoading: false } : u)),
+        );
+      }
+    } catch {
+      setUsers((prev) =>
+        prev.map((u) => (u.id === userId ? { ...u, mcpTokenLoading: false } : u)),
+      );
+    }
+  }
+
   // The master admin is the user with the lowest ID — their role cannot be changed
   const masterAdminId = users.length > 0 ? Math.min(...users.map((u) => u.id)) : -1;
 
@@ -532,7 +573,22 @@ export default function SettingsPage() {
                     />
                   </div>
                   <div className="space-y-1.5">
-                    <Label>System Prompt</Label>
+                    <div className="flex items-center justify-between">
+                      <Label>System Prompt</Label>
+                      {ep.systemPrompt && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 text-xs text-muted-foreground px-2"
+                          onClick={() => {
+                            updateEndpoint(ep.id, "systemPrompt", "");
+                            setSaved(false);
+                          }}
+                        >
+                          Reset to Default
+                        </Button>
+                      )}
+                    </div>
                     <Textarea
                       value={ep.systemPrompt}
                       onChange={(e) => updateEndpoint(ep.id, "systemPrompt", e.target.value)}
@@ -919,6 +975,45 @@ export default function SettingsPage() {
                                 <option value="month">month</option>
                               </select>
                             </label>
+                          </div>
+
+                          {/* Per-user MCP token */}
+                          <div className="mt-2">
+                            {user.mcpToken ? (
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs text-muted-foreground">MCP token:</span>
+                                <code className="flex-1 truncate rounded bg-muted px-2 py-0.5 text-xs font-mono max-w-[200px]">
+                                  {user.mcpToken}
+                                </code>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-6 w-6"
+                                  onClick={() => copyToClipboard(user.mcpToken!)}
+                                >
+                                  <Copy size={12} />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-6 w-6"
+                                  onClick={() => regenerateUserMcpToken(user.id)}
+                                  disabled={user.mcpTokenLoading}
+                                >
+                                  {user.mcpTokenLoading ? <Spinner size={12} /> : <RefreshCw size={12} />}
+                                </Button>
+                              </div>
+                            ) : (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 text-xs text-muted-foreground px-2"
+                                onClick={() => loadUserMcpToken(user.id)}
+                                disabled={user.mcpTokenLoading}
+                              >
+                                {user.mcpTokenLoading ? <Spinner size={12} /> : "Show MCP token"}
+                              </Button>
+                            )}
                           </div>
                         </div>
                       </div>

@@ -1,3 +1,6 @@
+# Base image is pinned to a specific digest to prevent supply-chain attacks via
+# tag mutation. Dependabot will open PRs to keep this current automatically.
+# To refresh manually: docker pull node:22-alpine && docker inspect node:22-alpine --format '{{index .RepoDigests 0}}'
 # Stage 1: Install dependencies
 FROM node:22-alpine AS deps
 WORKDIR /app
@@ -25,7 +28,8 @@ ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
 ENV TZ=UTC
 
-RUN apk add --no-cache shadow su-exec tzdata && \
+RUN apk upgrade --no-cache zlib && \
+    apk add --no-cache shadow su-exec tzdata && \
     mkdir -p /config && \
     chown node:node /config
 

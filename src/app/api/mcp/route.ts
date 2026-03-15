@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
-import { getConfig } from "@/lib/config";
+import { getConfig, getUserIdByMcpToken } from "@/lib/config";
 import { initializeTools } from "@/lib/tools/init";
 import { getOpenAITools, executeTool, hasTools } from "@/lib/tools/registry";
 import { getDb, schema } from "@/lib/db";
+import { logger } from "@/lib/logger";
+import { getClientIp } from "@/lib/auth/rate-limit";
 import { eq } from "drizzle-orm";
 
 type McpPermission = "admin" | "user";
@@ -18,27 +20,39 @@ function authenticateMcp(request: Request): { permission: McpPermission; userId?
   const token = authHeader.slice(7);
   const storedToken = getConfig("mcp.bearerToken");
 
-  if (!storedToken || token !== storedToken) return null;
+  // Check global admin token (backward compat)
+  if (storedToken && token === storedToken) {
+    // Admin token — can optionally scope to a user via X-User-Id
+    const userIdHeader = request.headers.get("x-user-id");
+    if (userIdHeader) {
+      const parsedUserId = parseInt(userIdHeader, 10);
+      if (!Number.isSafeInteger(parsedUserId) || parsedUserId <= 0 || parsedUserId > 2_147_483_647) {
+        return null;
+      }
+      const db = getDb();
+      const user = db
+        .select()
+        .from(schema.users)
+        .where(eq(schema.users.id, parsedUserId))
+        .get();
+      if (user) {
+        return { permission: user.isAdmin ? "admin" : "user", userId: user.id };
+      }
+    }
+    return { permission: "admin" };
+  }
 
-  // Check for X-User-Id header for user-scoped operations
-  const userIdHeader = request.headers.get("x-user-id");
-  if (userIdHeader) {
+  // Check per-user tokens — token automatically scopes to that user's permission level
+  const userId = getUserIdByMcpToken(token);
+  if (userId !== null) {
     const db = getDb();
-    const user = db
-      .select()
-      .from(schema.users)
-      .where(eq(schema.users.id, parseInt(userIdHeader, 10)))
-      .get();
+    const user = db.select().from(schema.users).where(eq(schema.users.id, userId)).get();
     if (user) {
-      return {
-        permission: user.isAdmin ? "admin" : "user",
-        userId: user.id,
-      };
+      return { permission: user.isAdmin ? "admin" : "user", userId: user.id };
     }
   }
 
-  // No user context — treat as admin (bearer token is admin-level)
-  return { permission: "admin" };
+  return null;
 }
 
 /**
@@ -86,6 +100,7 @@ function canExecuteTool(toolName: string, permission: McpPermission): boolean {
 export async function GET(request: Request) {
   const auth = authenticateMcp(request);
   if (!auth) {
+    logger.warn("MCP_AUTH_FAILURE", { ip: getClientIp(request), path: "GET /api/mcp" });
     return NextResponse.json(
       { error: "Unauthorized. Provide a valid Bearer token." },
       { status: 401 },
@@ -111,6 +126,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const auth = authenticateMcp(request);
   if (!auth) {
+    logger.warn("MCP_AUTH_FAILURE", { ip: getClientIp(request), path: "POST /api/mcp" });
     return NextResponse.json(
       { error: "Unauthorized. Provide a valid Bearer token." },
       { status: 401 },
@@ -155,6 +171,7 @@ export async function POST(request: Request) {
 
     // Permission check
     if (!canExecuteTool(toolName, auth.permission)) {
+      logger.warn("MCP_PERMISSION_DENIED", { tool: toolName, permission: auth.permission, userId: auth.userId });
       return NextResponse.json(
         { error: `Permission denied: ${auth.permission} cannot execute ${toolName}` },
         { status: 403 },
@@ -164,6 +181,8 @@ export async function POST(request: Request) {
     const args = typeof body.arguments === "string"
       ? body.arguments
       : JSON.stringify(body.arguments || {});
+
+    logger.info("MCP_TOOL_EXEC", { tool: toolName, permission: auth.permission, userId: auth.userId });
 
     try {
       const result = await executeTool(toolName, args);

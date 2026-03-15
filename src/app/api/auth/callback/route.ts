@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { checkPlexPin, getPlexUser, checkUserHasLibraryAccess } from "@/lib/services/plex-auth";
 import { createSession } from "@/lib/auth/session";
+import { checkAuthRateLimit, getClientIp } from "@/lib/auth/rate-limit";
 import { getDb, schema } from "@/lib/db";
 import { getConfig } from "@/lib/config";
 import { logger } from "@/lib/logger";
@@ -8,6 +9,15 @@ import { eq } from "drizzle-orm";
 import type { ApiResponse } from "@/types/api";
 
 export async function POST(request: Request) {
+  const ip = getClientIp(request);
+  if (!checkAuthRateLimit(ip)) {
+    logger.warn("Auth rate limit exceeded", { ip });
+    return NextResponse.json<ApiResponse>(
+      { success: false, error: "Too many attempts. Please wait before trying again." },
+      { status: 429 },
+    );
+  }
+
   let body: { pinId: number };
   try {
     body = await request.json();

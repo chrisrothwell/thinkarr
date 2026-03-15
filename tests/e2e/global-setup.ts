@@ -5,9 +5,9 @@
  *   1. Start mock Plex and LLM HTTP servers on random ports
  *   2. Start the Next.js server on port 3001, pointed at the mock services
  *      and an isolated temp database directory
- *   3. Configure the app via POST /api/setup
- *   4. Create the admin user by completing the Plex OAuth flow against the
+ *   3. Create the admin user by completing the Plex OAuth flow against the
  *      mock Plex server (POST /api/auth/plex → POST /api/auth/callback)
+ *   4. Configure the app via POST /api/setup (requires admin session from step 3)
  *   5. Save the admin session cookie as Playwright storage state so tests
  *      can reuse it without repeating the login flow
  *   6. Write server state (PIDs, URLs, temp dir) to a JSON file so global
@@ -97,9 +97,26 @@ export default async function globalSetup(config: FullConfig) {
   await waitForServer(BASE_URL);
   console.log("[e2e] Next.js is ready");
 
-  // 5. Configure the app via POST /api/setup (LLM + Plex)
+  // 5. Create admin user via Plex OAuth flow first — POST /api/setup now
+  //    requires an admin session, so we must establish one before configuring.
+  //    The first user to complete OAuth is always promoted to admin with no
+  //    library-access check, so no app config is needed at this stage.
   const apiCtx = await request.newContext({ baseURL: BASE_URL });
 
+  //    Step 1: request a PIN (mock returns pin id 10001 immediately)
+  const pinRes = await apiCtx.post("/api/auth/plex");
+  const { data: pinData } = await pinRes.json();
+
+  //    Step 2: exchange PIN for session (mock marks pin as claimed instantly)
+  const callbackRes = await apiCtx.post("/api/auth/callback", {
+    data: { pinId: pinData.id },
+  });
+  if (!callbackRes.ok()) {
+    throw new Error(`POST /api/auth/callback failed: ${callbackRes.status()} ${await callbackRes.text()}`);
+  }
+  console.log("[e2e] Admin session created");
+
+  // 6. Configure the app via POST /api/setup (LLM + Plex) — authenticated as admin
   const setupRes = await apiCtx.post("/api/setup", {
     data: {
       llm: {
@@ -118,20 +135,6 @@ export default async function globalSetup(config: FullConfig) {
     throw new Error(`POST /api/setup failed: ${setupRes.status()} ${await setupRes.text()}`);
   }
   console.log("[e2e] App configured");
-
-  // 6. Create admin user via Plex OAuth flow
-  //    Step 1: request a PIN (mock returns pin id 10001 immediately)
-  const pinRes = await apiCtx.post("/api/auth/plex");
-  const { data: pinData } = await pinRes.json();
-
-  //    Step 2: exchange PIN for session (mock marks pin as claimed instantly)
-  const callbackRes = await apiCtx.post("/api/auth/callback", {
-    data: { pinId: pinData.id },
-  });
-  if (!callbackRes.ok()) {
-    throw new Error(`POST /api/auth/callback failed: ${callbackRes.status()} ${await callbackRes.text()}`);
-  }
-  console.log("[e2e] Admin session created");
 
   // 7. Save admin session as Playwright storage state
   await apiCtx.storageState({ path: ADMIN_AUTH_FILE });

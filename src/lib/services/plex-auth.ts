@@ -1,4 +1,5 @@
 import { logger } from "@/lib/logger";
+import { validateServiceUrl } from "@/lib/security/url-validation";
 
 // Allow overriding the Plex API base for E2E testing
 const PLEX_API_BASE = process.env.PLEX_API_BASE ?? "https://plex.tv";
@@ -75,6 +76,11 @@ export async function checkUserHasLibraryAccess(
   adminToken: string,
   plexId: string,
 ): Promise<boolean> {
+  const check = validateServiceUrl(serverUrl);
+  if (!check.valid) {
+    logger.warn("Plex library access check — invalid URL rejected", { serverUrl, error: check.error });
+    return false;
+  }
   const url = `${serverUrl.replace(/\/$/, "")}/accounts`;
   logger.info("Plex library access check", { url, plexId });
   try {

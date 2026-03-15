@@ -143,6 +143,22 @@ describe("POST /api/chat — input validation", () => {
     const res = await POST(chatRequest({ conversationId: "c1", message: "   " }));
     expect(res.status).toBe(400);
   });
+
+  it("returns 400 when message exceeds 4000 characters", async () => {
+    const res = await POST(chatRequest({ conversationId: "c1", message: "a".repeat(4001) }));
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toMatch(/too long/i);
+  });
+
+  it("accepts a message of exactly 4000 characters", async () => {
+    const uid = seedUser(testDb);
+    const convId = seedConversation(testDb, uid);
+    mockState.sessionCookie = seedSession(testDb, uid);
+    const res = await POST(chatRequest({ conversationId: convId, message: "a".repeat(4000) }));
+    // 200 OK with SSE stream — not a validation error
+    expect(res.status).toBe(200);
+  });
 });
 
 describe("POST /api/chat — conversation ownership", () => {

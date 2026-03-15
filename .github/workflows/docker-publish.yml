@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - 'v*'
+    branches:
+      - beta
+
+# Default: read-only. Jobs that need more grant it explicitly.
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -13,6 +19,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Strip leading 'v' from tag names so APP_VERSION is always a bare
+      # version string (e.g. '1.1.0' not 'v1.1.0', 'beta' stays 'beta').
+      - name: Set version
+        run: echo "APP_VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -20,6 +31,14 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Dependency audit
+        run: npm audit --audit-level=high
+
+      - name: SAST scan
+        run: |
+          pip install semgrep --quiet
+          semgrep --config=p/typescript --config=p/nextjs --config=p/owasp-top-ten src/ --error
 
       - name: Lint
         run: npm run lint
@@ -33,7 +52,7 @@ jobs:
       - name: Build
         run: npm run build
         env:
-          NEXT_PUBLIC_APP_VERSION: ${{ github.ref_name }}
+          NEXT_PUBLIC_APP_VERSION: ${{ env.APP_VERSION }}
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
@@ -73,8 +92,6 @@ jobs:
 
       - name: Build Docker image
         run: docker build -t thinkarr:ci-test .
-        env:
-          NEXT_PUBLIC_APP_VERSION: ${{ github.ref_name }}
 
       - name: E2E tests against Docker container
         run: npm run test:e2e:docker
@@ -82,6 +99,16 @@ jobs:
           CI: true
           NEXT_TELEMETRY_DISABLED: "1"
           E2E_DOCKER_IMAGE: thinkarr:ci-test
+
+      - name: Scan Docker image for vulnerabilities
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: thinkarr:ci-test
+          format: table
+          exit-code: '1'
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          trivyignores: .trivyignore
 
       - name: Upload Playwright report
         uses: actions/upload-artifact@v4
@@ -95,9 +122,14 @@ jobs:
     name: Build & Push Docker Image
     needs: docker-e2e
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # required for anchore/sbom-action to attach SBOM to release
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set version
+        run: echo "APP_VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -117,11 +149,14 @@ jobs:
         with:
           images: chrisrothwell/thinkarr
           tags: |
+            type=ref,event=branch,enable=${{ github.ref == 'refs/heads/beta' }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-') }}
+            type=raw,value=beta,enable=${{ startsWith(github.ref, 'refs/tags/') && contains(github.ref_name, '-') }}
 
       - name: Build and push Docker image
+        id: push
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -130,4 +165,18 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            APP_VERSION=${{ github.ref_name }}
+            APP_VERSION=${{ env.APP_VERSION }}
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: chrisrothwell/thinkarr@${{ steps.push.outputs.digest }}
+          artifact-name: sbom-${{ env.APP_VERSION }}.spdx.json
+          output-file: sbom-${{ env.APP_VERSION }}.spdx.json
+
+      - name: Upload SBOM as release asset
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ env.APP_VERSION }}
+          path: sbom-${{ env.APP_VERSION }}.spdx.json
+          retention-days: 90

@@ -42,18 +42,37 @@ export interface PlexSearchResult {
   totalEpisodes?: number;   // Total episodes in library (leafCount)
   watchedEpisodes?: number; // Episodes watched (viewedLeafCount)
   dateAdded?: string;       // ISO date string (addedAt Unix → ISO)
-  // Episode-specific fields
-  showTitle?: string;       // Parent show title (grandparentTitle)
-  seasonNumber?: number;    // Season number (parentIndex)
-  episodeNumber?: number;   // Episode number within season (index)
+  // Episode / season fields — parent show context
+  showTitle?: string;       // Parent show title (grandparentTitle for episode, parentTitle for season)
+  seasonNumber?: number;    // Season number (parentIndex for episode, index for season)
+  episodeNumber?: number;   // Episode number within season (index, episode only)
 }
 
 function mapMetadata(item: Record<string, unknown>, type?: string): PlexSearchResult {
   const addedAt = item.addedAt as number | undefined;
   const resolvedType = (type || item.type) as string;
   const roles = (item.Role as Array<{ tag: string }> | undefined) ?? [];
+
+  // Derive parent show context depending on item type
+  let showTitle: string | undefined;
+  let seasonNumber: number | undefined;
+  let episodeNumber: number | undefined;
+
+  if (resolvedType === "episode") {
+    showTitle = item.grandparentTitle as string | undefined;
+    seasonNumber = item.parentIndex as number | undefined;
+    episodeNumber = item.index as number | undefined;
+  } else if (resolvedType === "season") {
+    // Season items have the show name in parentTitle and season number in index
+    showTitle = item.parentTitle as string | undefined;
+    seasonNumber = item.index as number | undefined;
+  }
+
   return {
-    title: item.title as string,
+    // For seasons, prefer the show title so callers don't see bare "Season N"
+    title: resolvedType === "season" && showTitle
+      ? `${showTitle} — Season ${seasonNumber ?? (item.index as number | undefined)}`
+      : (item.title as string),
     year: item.year as number | undefined,
     type: resolvedType,
     summary: (item.summary as string | undefined)?.substring(0, 300),
@@ -65,10 +84,9 @@ function mapMetadata(item: Record<string, unknown>, type?: string): PlexSearchRe
     totalEpisodes: item.leafCount as number | undefined,
     watchedEpisodes: item.viewedLeafCount as number | undefined,
     dateAdded: addedAt ? new Date(addedAt * 1000).toISOString().split("T")[0] : undefined,
-    // Episode fields — only populated when type is "episode"
-    showTitle: resolvedType === "episode" ? (item.grandparentTitle as string | undefined) : undefined,
-    seasonNumber: resolvedType === "episode" ? (item.parentIndex as number | undefined) : undefined,
-    episodeNumber: resolvedType === "episode" ? (item.index as number | undefined) : undefined,
+    showTitle,
+    seasonNumber,
+    episodeNumber,
   };
 }
 
@@ -87,13 +105,18 @@ export async function getPlexMachineId(): Promise<string | undefined> {
   }
 }
 
-/** Build a full thumbnail URL with Plex token appended. Returns undefined if Plex is not configured. */
+/**
+ * Build a thumbnail URL that routes through the server-side proxy.
+ * The proxy fetches the image from Plex using the stored token so the
+ * token is never exposed to the browser.
+ *
+ * Returns undefined if Plex is not configured or thumbPath is empty.
+ */
 export function buildThumbUrl(thumbPath: string): string | undefined {
   const url = getConfig("plex.url");
   const token = getConfig("plex.token");
   if (!url || !token || !thumbPath) return undefined;
-  const base = url.replace(/\/$/, "");
-  return `${base}${thumbPath}?X-Plex-Token=${token}`;
+  return `/api/plex/thumb?path=${encodeURIComponent(thumbPath)}`;
 }
 
 export async function searchLibrary(query: string): Promise<PlexSearchResult[]> {
@@ -113,8 +136,27 @@ export async function getOnDeck(): Promise<PlexSearchResult[]> {
 }
 
 export async function getRecentlyAdded(): Promise<PlexSearchResult[]> {
-  const data = await plexFetch("/library/recentlyAdded?X-Plex-Container-Start=0&X-Plex-Container-Size=10");
-  return (data?.MediaContainer?.Metadata || []).map((item: Record<string, unknown>) => mapMetadata(item));
+  const data = await plexFetch("/library/recentlyAdded?X-Plex-Container-Start=0&X-Plex-Container-Size=20");
+  const items: PlexSearchResult[] = (data?.MediaContainer?.Metadata || []).map(
+    (item: Record<string, unknown>) => mapMetadata(item),
+  );
+
+  // Deduplicate TV seasons/episodes by show title — keep one representative entry per show
+  // so the LLM doesn't receive 10 entries for the same series.
+  const seen = new Set<string>();
+  const deduped: PlexSearchResult[] = [];
+  for (const item of items) {
+    // Movies and shows use their own title as the dedup key; seasons/episodes use showTitle
+    const key = (item.type === "season" || item.type === "episode") && item.showTitle
+      ? `tv:${item.showTitle}`
+      : `${item.type}:${item.title}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      deduped.push(item);
+    }
+    if (deduped.length >= 10) break;
+  }
+  return deduped;
 }
 
 export async function checkAvailability(title: string): Promise<{ available: boolean; results: PlexSearchResult[] }> {

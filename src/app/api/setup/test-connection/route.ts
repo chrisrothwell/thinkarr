@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
+import { getSession } from "@/lib/auth/session";
 import { testConnection } from "@/lib/services/test-connection";
 import { getConfig } from "@/lib/config";
+import { validateServiceUrl } from "@/lib/security/url-validation";
 import type { TestConnectionRequest, TestConnectionResponse, ApiResponse } from "@/types/api";
 
 const MASK = "••••••••";
@@ -37,6 +39,14 @@ function resolveApiKey(body: TestConnectionRequest): string {
 }
 
 export async function POST(request: Request) {
+  const session = await getSession();
+  if (!session || !session.user.isAdmin) {
+    return NextResponse.json<ApiResponse>(
+      { success: false, error: "Admin access required" },
+      { status: 403 },
+    );
+  }
+
   let body: TestConnectionRequest;
   try {
     body = await request.json();
@@ -50,6 +60,14 @@ export async function POST(request: Request) {
   if (!body.type || !body.url) {
     return NextResponse.json<ApiResponse>(
       { success: false, error: "type and url are required" },
+      { status: 400 },
+    );
+  }
+
+  const urlCheck = validateServiceUrl(body.url);
+  if (!urlCheck.valid) {
+    return NextResponse.json<ApiResponse>(
+      { success: false, error: `Invalid URL: ${urlCheck.error}` },
       { status: 400 },
     );
   }

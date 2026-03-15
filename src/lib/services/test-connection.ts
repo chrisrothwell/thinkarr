@@ -1,4 +1,5 @@
 import type { TestConnectionRequest, TestConnectionResponse } from "@/types/api";
+import { validateServiceUrl } from "@/lib/security/url-validation";
 
 async function testLlm(url: string, apiKey: string, model?: string): Promise<TestConnectionResponse> {
   try {
@@ -33,6 +34,8 @@ async function testLlm(url: string, apiKey: string, model?: string): Promise<Tes
 }
 
 async function testPlex(url: string, token: string): Promise<TestConnectionResponse> {
+  const check = validateServiceUrl(url);
+  if (!check.valid) return { success: false, message: `Invalid URL: ${check.error}` };
   try {
     const res = await fetch(`${url.replace(/\/$/, "")}/identity`, {
       headers: { "X-Plex-Token": token, Accept: "application/json" },
@@ -55,6 +58,8 @@ async function testArrService(
   url: string,
   apiKey: string,
 ): Promise<TestConnectionResponse> {
+  const check = validateServiceUrl(url);
+  if (!check.valid) return { success: false, message: `Invalid URL: ${check.error}` };
   try {
     const base = url.replace(/\/$/, "");
     const res = await fetch(`${base}/api/v3/system/status`, {
@@ -74,6 +79,8 @@ async function testArrService(
 }
 
 async function testOverseerr(url: string, apiKey: string): Promise<TestConnectionResponse> {
+  const check = validateServiceUrl(url);
+  if (!check.valid) return { success: false, message: `Invalid URL: ${check.error}` };
   try {
     const base = url.replace(/\/$/, "");
     const res = await fetch(`${base}/api/v1/status`, {

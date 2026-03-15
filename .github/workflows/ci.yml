@@ -5,11 +5,53 @@ on:
     branches:
       - dev
       - main
+      - beta
+
+# Least-privilege: read-only by default for all jobs.
+# pull-requests: read is required by dorny/paths-filter on PR events.
+permissions:
+  contents: read
+  pull-requests: read
 
 jobs:
+  # Detect which files changed so expensive jobs can be skipped for docs-only PRs.
+  # The workflow always triggers (required by branch protection), but test/e2e only
+  # run when code-affecting files are modified.
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            code:
+              - 'src/**'
+              - 'tests/**'
+              - 'public/**'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'next.config.ts'
+              - 'tsconfig.json'
+              - 'eslint.config.mjs'
+              - 'vitest.config.ts'
+              - 'playwright.config.ts'
+              - 'playwright.docker.config.ts'
+              - 'postcss.config.mjs'
+              - 'drizzle.config.ts'
+              - 'drizzle/**'
+              - 'Dockerfile'
+              - 'entrypoint.sh'
+              - '.github/workflows/**'
+
   test:
     name: Lint, Type-check & Unit Tests
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
 
     steps:
       - uses: actions/checkout@v4
@@ -22,14 +64,33 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Dependency audit
+        run: |
+          npm audit --audit-level=high
+          # Write moderate/low findings to step summary (informational only)
+          MODERATE=$(npm audit --json 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('metadata',{}).get('vulnerabilities',{}).get('moderate',0))" 2>/dev/null || echo '?')
+          LOW=$(npm audit --json 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('metadata',{}).get('vulnerabilities',{}).get('low',0))" 2>/dev/null || echo '?')
+          echo "### npm audit" >> $GITHUB_STEP_SUMMARY
+          echo "Moderate: $MODERATE · Low: $LOW (informational — not blocking)" >> $GITHUB_STEP_SUMMARY
+
       - name: Lint
-        run: npm run lint
+        run: |
+          npm run lint -- --format json --output-file /tmp/lint.json 2>/dev/null || true
+          npm run lint
+          WARNINGS=$(cat /tmp/lint.json | python3 -c "import json,sys; d=json.load(sys.stdin); print(sum(f['warningCount'] for f in d))" 2>/dev/null || echo '?')
+          echo "### ESLint" >> $GITHUB_STEP_SUMMARY
+          echo "Warnings: $WARNINGS (informational — not blocking)" >> $GITHUB_STEP_SUMMARY
 
       - name: Type check
         run: npm run typecheck
 
       - name: Unit tests
         run: npm test
+
+      - name: SAST scan
+        run: |
+          pip install semgrep --quiet
+          semgrep --config=p/typescript --config=p/nextjs --config=p/owasp-top-ten src/ --error
 
       - name: Build
         run: npm run build
@@ -39,7 +100,8 @@ jobs:
   e2e:
     name: E2E Tests
     runs-on: ubuntu-latest
-    needs: test
+    needs: [changes, test]
+    if: needs.changes.outputs.code == 'true'
 
     steps:
       - uses: actions/checkout@v4
@@ -68,3 +130,21 @@ jobs:
           name: playwright-report-pr-${{ github.event.pull_request.number }}
           path: playwright-report/
           retention-days: 7
+
+  # Always runs — this is the single check required by branch protection rulesets.
+  # Passes if test/e2e succeeded or were skipped (docs-only PR).
+  # Fails if test or e2e failed.
+  ci-complete:
+    name: CI Complete
+    runs-on: ubuntu-latest
+    needs: [changes, test, e2e]
+    if: always()
+
+    steps:
+      - name: Check results
+        run: |
+          if [[ "${{ needs.test.result }}" == "failure" || "${{ needs.e2e.result }}" == "failure" ]]; then
+            echo "One or more required jobs failed."
+            exit 1
+          fi
+          echo "All checks passed or were skipped."

@@ -31,7 +31,7 @@ export function TitleCarousel({ titles }: TitleCarouselProps) {
       {/* Left arrow */}
       <button
         onClick={() => scroll("left")}
-        className="absolute left-0 top-1/2 -translate-y-1/2 -translate-x-3 z-10 hidden group-hover:flex items-center justify-center w-7 h-7 rounded-full bg-card border border-border shadow-sm hover:bg-muted transition-colors"
+        className="absolute left-0 top-1/2 -translate-y-1/2 -translate-x-3 z-10 flex items-center justify-center w-7 h-7 rounded-full bg-card border border-border shadow-sm hover:bg-muted transition-all opacity-0 group-hover:opacity-100"
         aria-label="Scroll left"
       >
         <ChevronLeft size={16} />
@@ -52,7 +52,7 @@ export function TitleCarousel({ titles }: TitleCarouselProps) {
       {/* Right arrow */}
       <button
         onClick={() => scroll("right")}
-        className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-3 z-10 hidden group-hover:flex items-center justify-center w-7 h-7 rounded-full bg-card border border-border shadow-sm hover:bg-muted transition-colors"
+        className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-3 z-10 flex items-center justify-center w-7 h-7 rounded-full bg-card border border-border shadow-sm hover:bg-muted transition-all opacity-0 group-hover:opacity-100"
         aria-label="Scroll right"
       >
         <ChevronRight size={16} />

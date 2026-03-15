@@ -82,6 +82,7 @@ export function TitleCard({ title }: TitleCardProps) {
     <div className="flex gap-3 rounded-xl border border-border bg-card p-3 w-full">
       {/* Thumbnail */}
       {title.thumbUrl ? (
+        // eslint-disable-next-line @next/next/no-img-element
         <img
           src={title.thumbUrl}
           alt={displayTitle}
