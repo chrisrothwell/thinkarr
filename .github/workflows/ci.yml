@@ -71,7 +71,9 @@ jobs:
         run: npm test
 
       - name: SAST scan
-        run: npx semgrep@latest --config=p/typescript --config=p/nextjs --config=p/owasp-top-ten src/ --error
+        run: |
+          pip install semgrep --quiet
+          semgrep --config=p/typescript --config=p/nextjs --config=p/owasp-top-ten src/ --error
 
       - name: Build
         run: npm run build
