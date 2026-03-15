@@ -1,4 +1,7 @@
 services:
+  # Beta testers: change the image tag to 'beta' and Watchtower will keep you
+  # on the latest pre-release automatically.
+  #   image: chrisrothwell/thinkarr:beta
   thinkarr:
     image: chrisrothwell/thinkarr:latest
     container_name: thinkarr
