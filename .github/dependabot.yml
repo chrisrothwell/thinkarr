@@ -2,18 +2,40 @@ version: 2
 updates:
   - package-ecosystem: npm
     directory: "/"
+    target-branch: dev
     schedule:
       interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
     groups:
       patch-updates:
-        update-types: [patch]
+        update-types:
+          - patch
+      minor-updates:
+        update-types:
+          - minor
+    ignore:
+      # drizzle-kit transitive @esbuild-kit chain — unfixable without
+      # breaking drizzle-kit; accepted moderate risk, dev-only exposure.
+      - dependency-name: "@esbuild-kit/core-utils"
+      - dependency-name: "@esbuild-kit/esm-loader"
 
   - package-ecosystem: docker
     directory: "/"
+    target-branch: dev
     schedule:
       interval: weekly
+      day: monday
+    labels:
+      - dependencies
 
   - package-ecosystem: github-actions
     directory: "/"
+    target-branch: dev
     schedule:
       interval: weekly
+      day: monday
+    labels:
+      - dependencies
