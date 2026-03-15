@@ -18,6 +18,9 @@ export function useChat(conversationId: string | null, options?: UseChatOptions)
   // Ref tracks streaming without stale-closure issues — loadMessages checks this
   // before overwriting state so it never races with an active SSE stream.
   const streamingRef = useRef(false);
+  // Tracks the current conversationId so async callbacks can detect stale fetches.
+  const conversationIdRef = useRef(conversationId);
+  conversationIdRef.current = conversationId;
   // Keep options in a ref so sendMessage can read the latest callbacks without
   // including the options object itself in the useCallback dependency array
   // (which would cause a new function on every render).
@@ -167,15 +170,20 @@ export function useChat(conversationId: string | null, options?: UseChatOptions)
         abortRef.current = null;
         // Reload messages from server so tool call results (including display_titles
         // carousels) are persisted in state and survive subsequent messages.
-        try {
-          const res = await fetch(`/api/conversations/${convId}`);
-          const data = await res.json();
-          if (data.success && data.data.messages) {
-            setMessages(data.data.messages);
-            setToolCalls(new Map());
+        // Guard: skip if the user has navigated away (e.g. clicked "New Chat")
+        // before this fetch resolves, otherwise the reload would overwrite the
+        // cleared state and break the empty-chat view.
+        if (conversationIdRef.current === convId) {
+          try {
+            const res = await fetch(`/api/conversations/${convId}`);
+            const data = await res.json();
+            if (data.success && data.data.messages && conversationIdRef.current === convId) {
+              setMessages(data.data.messages);
+              setToolCalls(new Map());
+            }
+          } catch {
+            // Best-effort — messages stay as optimistic state if reload fails
           }
-        } catch {
-          // Best-effort — messages stay as optimistic state if reload fails
         }
       }
     },
