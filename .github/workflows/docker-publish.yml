@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - 'v*'
+    branches:
+      - beta
 
 jobs:
   test:
@@ -12,6 +14,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      # Strip leading 'v' from tag names so APP_VERSION is always a bare
+      # version string (e.g. '1.1.0' not 'v1.1.0', 'beta' stays 'beta').
+      - name: Set version
+        run: echo "APP_VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
 
       - uses: actions/setup-node@v4
         with:
@@ -33,7 +40,7 @@ jobs:
       - name: Build
         run: npm run build
         env:
-          NEXT_PUBLIC_APP_VERSION: ${{ github.ref_name }}
+          NEXT_PUBLIC_APP_VERSION: ${{ env.APP_VERSION }}
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
@@ -73,8 +80,6 @@ jobs:
 
       - name: Build Docker image
         run: docker build -t thinkarr:ci-test .
-        env:
-          NEXT_PUBLIC_APP_VERSION: ${{ github.ref_name }}
 
       - name: E2E tests against Docker container
         run: npm run test:e2e:docker
@@ -108,6 +113,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set version
+        run: echo "APP_VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -126,9 +134,10 @@ jobs:
         with:
           images: chrisrothwell/thinkarr
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
+            type=ref,event=branch,enable=${{ github.ref == 'refs/heads/beta' }}
+            type=semver,pattern={{version}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
       - name: Build and push Docker image
         id: push
@@ -140,18 +149,18 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            APP_VERSION=${{ github.ref_name }}
+            APP_VERSION=${{ env.APP_VERSION }}
 
       - name: Generate SBOM
         uses: anchore/sbom-action@v0
         with:
           image: chrisrothwell/thinkarr@${{ steps.push.outputs.digest }}
-          artifact-name: sbom-${{ github.ref_name }}.spdx.json
-          output-file: sbom-${{ github.ref_name }}.spdx.json
+          artifact-name: sbom-${{ env.APP_VERSION }}.spdx.json
+          output-file: sbom-${{ env.APP_VERSION }}.spdx.json
 
       - name: Upload SBOM as release asset
         uses: actions/upload-artifact@v4
         with:
-          name: sbom-${{ github.ref_name }}
-          path: sbom-${{ github.ref_name }}.spdx.json
+          name: sbom-${{ env.APP_VERSION }}
+          path: sbom-${{ env.APP_VERSION }}.spdx.json
           retention-days: 90

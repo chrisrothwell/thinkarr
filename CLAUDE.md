@@ -33,11 +33,30 @@ The collection name for this project is "thinkarr".  Example command: qmd get PL
 
 ## Rule: branch and merge strategy
 
-**Never push directly to `main` or `dev`.** All changes must go through a PR.
+**Never push directly to `main`, `beta`, or `dev`.** All changes must go through a PR.
 
-### Branch naming
+### Branch model
+
+```
+feature branches → dev → beta → main
+```
+
+| Branch | Purpose |
+|--------|---------|
+| `dev` | Integration — all PRs target here |
+| `beta` | Staging — merged from `dev` when ready to test a release; triggers `:beta` Docker image |
+| `main` | Production — merged from `beta` only when stable; `v*` tag triggers `:latest` Docker image |
+
+### Docker tags produced
+
+| Git event | Docker tags |
+|-----------|-------------|
+| Push to `beta` | `:beta` |
+| `v*` tag on `main` | `:latest`, `:1.2.3`, `:1.2` |
+
+### Branch naming (Claude branches)
 - All Claude branches must be named: `claude/<short-description>-<random-id>`
-- Always branch off `dev`, not `main`
+- Always branch off `dev`, not `main` or `beta`
 
 ### Workflow for every task
 1. `git checkout dev && git pull origin dev`
@@ -48,13 +67,16 @@ The collection name for this project is "thinkarr".  Example command: qmd get PL
 6. Stop — do not merge the PR. Wait for CI to pass and the human to approve.
 
 ### Never do these
-- `git push origin dev` or `git push origin main`
+- `git push origin dev`, `git push origin beta`, or `git push origin main`
 - `gh pr merge` without explicit human instruction
 - Force push to any branch
 - Bypass CI with `--no-verify`
 
-### Releases (main → Docker)
-Only the human merges `dev` → `main`. Docker deploys are triggered by git tags (`v*`) applied to `main` by the human.
+### Releases
+Only the human manages the release flow:
+1. Merge `dev` → `beta` to publish a `:beta` Docker image for testing
+2. If stable, bump version in `package.json` on `dev`, merge `dev` → `beta` → `main`
+3. Apply a `v*` tag to `main` to trigger the `:latest` Docker publish
 
 ## Rule: keep PLAN.md up to date
 

@@ -214,7 +214,7 @@ export default function ChatPage() {
       {appVersion && (
         <div className="fixed bottom-2 left-2 z-10 pointer-events-none">
           <span className="text-[10px] text-muted-foreground/40 font-mono select-none">
-            v{appVersion}
+            {/^\d/.test(appVersion) ? `v${appVersion}` : appVersion}
           </span>
         </div>
       )}
