@@ -7,6 +7,12 @@ on:
       - main
       - beta
 
+# Least-privilege: read-only by default for all jobs.
+# pull-requests: read is required by dorny/paths-filter on PR events.
+permissions:
+  contents: read
+  pull-requests: read
+
 jobs:
   # Detect which files changed so expensive jobs can be skipped for docs-only PRs.
   # The workflow always triggers (required by branch protection), but test/e2e only
@@ -59,10 +65,21 @@ jobs:
         run: npm ci
 
       - name: Dependency audit
-        run: npm audit --audit-level=high
+        run: |
+          npm audit --audit-level=high
+          # Write moderate/low findings to step summary (informational only)
+          MODERATE=$(npm audit --json 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('metadata',{}).get('vulnerabilities',{}).get('moderate',0))" 2>/dev/null || echo '?')
+          LOW=$(npm audit --json 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('metadata',{}).get('vulnerabilities',{}).get('low',0))" 2>/dev/null || echo '?')
+          echo "### npm audit" >> $GITHUB_STEP_SUMMARY
+          echo "Moderate: $MODERATE · Low: $LOW (informational — not blocking)" >> $GITHUB_STEP_SUMMARY
 
       - name: Lint
-        run: npm run lint
+        run: |
+          npm run lint -- --format json --output-file /tmp/lint.json 2>/dev/null || true
+          npm run lint
+          WARNINGS=$(cat /tmp/lint.json | python3 -c "import json,sys; d=json.load(sys.stdin); print(sum(f['warningCount'] for f in d))" 2>/dev/null || echo '?')
+          echo "### ESLint" >> $GITHUB_STEP_SUMMARY
+          echo "Warnings: $WARNINGS (informational — not blocking)" >> $GITHUB_STEP_SUMMARY
 
       - name: Type check
         run: npm run typecheck

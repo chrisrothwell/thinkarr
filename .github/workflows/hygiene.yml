@@ -1,0 +1,89 @@
+name: Weekly Hygiene
+
+on:
+  schedule:
+    # Every Monday at 08:00 UTC
+    - cron: '0 8 * * 1'
+  workflow_dispatch:
+
+jobs:
+  hygiene:
+    name: Hygiene Report
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: npm audit (all severities)
+        id: audit
+        run: |
+          npm audit --json > audit.json 2>&1 || true
+          CRITICAL=$(cat audit.json | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('metadata',{}).get('vulnerabilities',{}).get('critical',0))")
+          HIGH=$(cat audit.json | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('metadata',{}).get('vulnerabilities',{}).get('high',0))")
+          MODERATE=$(cat audit.json | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('metadata',{}).get('vulnerabilities',{}).get('moderate',0))")
+          LOW=$(cat audit.json | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('metadata',{}).get('vulnerabilities',{}).get('low',0))")
+          echo "critical=$CRITICAL" >> $GITHUB_OUTPUT
+          echo "high=$HIGH" >> $GITHUB_OUTPUT
+          echo "moderate=$MODERATE" >> $GITHUB_OUTPUT
+          echo "low=$LOW" >> $GITHUB_OUTPUT
+          {
+            echo "## npm audit"
+            echo "| Severity | Count |"
+            echo "|----------|-------|"
+            echo "| 🔴 Critical | $CRITICAL |"
+            echo "| 🟠 High | $HIGH |"
+            echo "| 🟡 Moderate | $MODERATE |"
+            echo "| 🔵 Low | $LOW |"
+          } >> $GITHUB_STEP_SUMMARY
+
+      - name: ESLint (warnings + errors)
+        id: lint
+        run: |
+          npm run lint -- --format json --output-file lint.json 2>/dev/null || true
+          ERRORS=$(cat lint.json | python3 -c "import json,sys; d=json.load(sys.stdin); print(sum(f['errorCount'] for f in d))" 2>/dev/null || echo 0)
+          WARNINGS=$(cat lint.json | python3 -c "import json,sys; d=json.load(sys.stdin); print(sum(f['warningCount'] for f in d))" 2>/dev/null || echo 0)
+          echo "errors=$ERRORS" >> $GITHUB_OUTPUT
+          echo "warnings=$WARNINGS" >> $GITHUB_OUTPUT
+          {
+            echo "## ESLint"
+            echo "| Level | Count |"
+            echo "|-------|-------|"
+            echo "| 🔴 Errors | $ERRORS |"
+            echo "| 🟡 Warnings | $WARNINGS |"
+          } >> $GITHUB_STEP_SUMMARY
+
+      - name: SAST scan (Semgrep)
+        id: semgrep
+        run: |
+          pip install semgrep --quiet
+          semgrep --config=p/typescript --config=p/nextjs --config=p/owasp-top-ten src/ --json > semgrep.json 2>/dev/null || true
+          FINDINGS=$(cat semgrep.json | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d.get('results',[])))" 2>/dev/null || echo 0)
+          echo "findings=$FINDINGS" >> $GITHUB_OUTPUT
+          {
+            echo "## Semgrep SAST"
+            echo "| | Count |"
+            echo "|---|-------|"
+            echo "| 🔍 Findings | $FINDINGS |"
+          } >> $GITHUB_STEP_SUMMARY
+
+      - name: Fail if regressions detected
+        run: |
+          CRITICAL=${{ steps.audit.outputs.critical }}
+          HIGH=${{ steps.audit.outputs.high }}
+          ERRORS=${{ steps.lint.outputs.errors }}
+          FINDINGS=${{ steps.semgrep.outputs.findings }}
+          if [[ "$CRITICAL" -gt 0 || "$HIGH" -gt 0 || "$ERRORS" -gt 0 || "$FINDINGS" -gt 0 ]]; then
+            echo "❌ Regressions detected — see summary above."
+            exit 1
+          fi
+          echo "✅ No regressions. Moderate/low findings in summary are informational."
