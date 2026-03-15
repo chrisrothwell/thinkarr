@@ -47,12 +47,48 @@ feature branches → dev → beta → main
 Only the human manages the release flow. All version bumps go through PRs — never commit directly to `dev`, `beta`, or `main`.
 
 1. Open a PR from a `claude/bump-version-*` branch into `dev` bumping `package.json` to `1.1.0-beta.1`
-2. Merge `dev` → `beta` via PR → CI publishes `:beta` Docker image
-3. Test the `:beta` image
-4. If fixes needed: more feature PRs → `dev`, then another `dev` → `beta` PR
-5. When stable: open a PR bumping `package.json` to `1.1.0` into `dev`
-6. Merge `dev` → `beta` → `main` via PRs
-7. Apply `v1.1.0` tag to `main` → CI publishes `:latest` Docker image
+2. **Run local security checks** (see Rule below) — must pass before opening `dev → beta` PR
+3. Merge `dev` → `beta` via PR → CI publishes `:beta` Docker image
+4. Test the `:beta` image
+5. If fixes needed: more feature PRs → `dev`, then another `dev` → `beta` PR
+6. When stable: open a PR bumping `package.json` to `1.1.0` into `dev`
+7. Merge `dev` → `beta` → `main` via PRs
+8. Apply `v1.1.0` tag to `main` → CI publishes `:latest` Docker image
+
+## Rule: run local security checks before dev → beta
+
+Before opening a `dev → beta` PR, run all three checks locally and confirm they pass. This avoids wasted CI cycles on the beta pipeline.
+
+### 1. npm audit
+```bash
+npm run security:audit
+# Must exit 0 (no HIGH/CRITICAL vulnerabilities)
+```
+
+### 2. Semgrep SAST (requires semgrep installed via pipx in WSL2)
+```bash
+# Run from WSL2 terminal:
+cd /mnt/c/Users/me/Documents/git/thinkarr
+semgrep --config=p/typescript --config=p/nextjs --config=p/owasp-top-ten src/ --error
+# Must report 0 findings
+```
+
+### 3. Trivy Docker image scan (requires Docker running in WSL2)
+```bash
+# Build the image first:
+docker build -t thinkarr:local-test .
+
+# Run Trivy scan (from WSL2):
+docker run --rm \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v $(pwd)/.trivyignore:/.trivyignore \
+  aquasec/trivy:latest image thinkarr:local-test \
+  --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed --ignorefile /.trivyignore
+
+# Must exit 0 (no unfixed CRITICAL/HIGH findings outside .trivyignore)
+```
+
+Only open the `dev → beta` PR once all three pass locally.
 
 ## Rule: keep PLAN.md up to date
 
