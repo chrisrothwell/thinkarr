@@ -5,17 +5,47 @@ on:
     branches:
       - dev
       - main
-    paths-ignore:
-      - '**.md'
-      - '**.MD'
-      - '.claude/**'
-      - 'docker-compose.yml'
-      - 'LICENSE'
+      - beta
 
 jobs:
+  # Detect which files changed so expensive jobs can be skipped for docs-only PRs.
+  # The workflow always triggers (required by branch protection), but test/e2e only
+  # run when code-affecting files are modified.
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            code:
+              - 'src/**'
+              - 'tests/**'
+              - 'public/**'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'next.config.ts'
+              - 'tsconfig.json'
+              - 'eslint.config.mjs'
+              - 'vitest.config.ts'
+              - 'playwright.config.ts'
+              - 'playwright.docker.config.ts'
+              - 'postcss.config.mjs'
+              - 'drizzle.config.ts'
+              - 'drizzle/**'
+              - 'Dockerfile'
+              - 'entrypoint.sh'
+              - '.github/workflows/**'
+
   test:
     name: Lint, Type-check & Unit Tests
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
 
     steps:
       - uses: actions/checkout@v4
@@ -54,7 +84,8 @@ jobs:
   e2e:
     name: E2E Tests
     runs-on: ubuntu-latest
-    needs: test
+    needs: [changes, test]
+    if: needs.changes.outputs.code == 'true'
 
     steps:
       - uses: actions/checkout@v4
@@ -83,3 +114,21 @@ jobs:
           name: playwright-report-pr-${{ github.event.pull_request.number }}
           path: playwright-report/
           retention-days: 7
+
+  # Always runs — this is the single check required by branch protection rulesets.
+  # Passes if test/e2e succeeded or were skipped (docs-only PR).
+  # Fails if test or e2e failed.
+  ci-complete:
+    name: CI Complete
+    runs-on: ubuntu-latest
+    needs: [changes, test, e2e]
+    if: always()
+
+    steps:
+      - name: Check results
+        run: |
+          if [[ "${{ needs.test.result }}" == "failure" || "${{ needs.e2e.result }}" == "failure" ]]; then
+            echo "One or more required jobs failed."
+            exit 1
+          fi
+          echo "All checks passed or were skipped."
