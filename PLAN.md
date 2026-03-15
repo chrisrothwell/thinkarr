@@ -170,6 +170,13 @@ Build an LLM-powered chat frontend for media management (*arr stack). Users log 
 - [x] **Reset to Default system prompt (#7)** — "Reset to Default" button appears next to the System Prompt label in LLM Settings when the field is non-empty; clicking it clears the field so the system falls back to `DEFAULT_SYSTEM_PROMPT`. — `src/app/settings/page.tsx`
 - [x] **Version number in UI (#4)** — `NEXT_PUBLIC_APP_VERSION` exposed from `package.json` via `next.config.ts` env. Version displayed as `v{version}` in the bottom-left corner of the chat page (muted, non-interactive). — `next.config.ts`, `src/app/chat/page.tsx`
 
+### Phase 14: Coordinated Dependency Upgrades (issue #68)
+
+#### Dependency Upgrades
+- [x] **Vitest 3 → 4 + coverage-v8 upgrade (#64/#67)** — Bumped `vitest` from `^3.2.4` to `^4.1.0` and `@vitest/coverage-v8` from `^3.2.4` to `^4.1.0` (coupled package pair, must stay on same major). Added `vite@^6.0.0` as a direct dev dep to satisfy Vitest 4's peer dependency. All 152 unit tests pass. — `package.json`, `package-lock.json`
+- [x] **Drop redundant `eslint-plugin-jsx-a11y` direct dep** — `eslint-config-next` already bundles `eslint-plugin-jsx-a11y`; the direct entry was redundant. Removed to avoid future peer-dep conflicts. — `package.json`
+- [ ] **ESLint 9 → 10 deferred (#62)** — `eslint-plugin-react` (bundled inside `eslint-config-next@16.1.6`) uses the removed `context.getFilename()` API and is incompatible with ESLint 10. Upgrade deferred until `eslint-config-next` ships ESLint 10 support.
+
 ### Phase 13: React 19 Upgrade Fix
 
 #### Bug Fixes
