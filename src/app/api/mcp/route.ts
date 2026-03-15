@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getConfig } from "@/lib/config";
+import { getConfig, getUserIdByMcpToken } from "@/lib/config";
 import { initializeTools } from "@/lib/tools/init";
 import { getOpenAITools, executeTool, hasTools } from "@/lib/tools/registry";
 import { getDb, schema } from "@/lib/db";
@@ -20,31 +20,39 @@ function authenticateMcp(request: Request): { permission: McpPermission; userId?
   const token = authHeader.slice(7);
   const storedToken = getConfig("mcp.bearerToken");
 
-  if (!storedToken || token !== storedToken) return null;
-
-  // Check for X-User-Id header for user-scoped operations
-  const userIdHeader = request.headers.get("x-user-id");
-  if (userIdHeader) {
-    const parsedUserId = parseInt(userIdHeader, 10);
-    if (!Number.isSafeInteger(parsedUserId) || parsedUserId <= 0 || parsedUserId > 2_147_483_647) {
-      return null;
+  // Check global admin token (backward compat)
+  if (storedToken && token === storedToken) {
+    // Admin token — can optionally scope to a user via X-User-Id
+    const userIdHeader = request.headers.get("x-user-id");
+    if (userIdHeader) {
+      const parsedUserId = parseInt(userIdHeader, 10);
+      if (!Number.isSafeInteger(parsedUserId) || parsedUserId <= 0 || parsedUserId > 2_147_483_647) {
+        return null;
+      }
+      const db = getDb();
+      const user = db
+        .select()
+        .from(schema.users)
+        .where(eq(schema.users.id, parsedUserId))
+        .get();
+      if (user) {
+        return { permission: user.isAdmin ? "admin" : "user", userId: user.id };
+      }
     }
+    return { permission: "admin" };
+  }
+
+  // Check per-user tokens — token automatically scopes to that user's permission level
+  const userId = getUserIdByMcpToken(token);
+  if (userId !== null) {
     const db = getDb();
-    const user = db
-      .select()
-      .from(schema.users)
-      .where(eq(schema.users.id, parsedUserId))
-      .get();
+    const user = db.select().from(schema.users).where(eq(schema.users.id, userId)).get();
     if (user) {
-      return {
-        permission: user.isAdmin ? "admin" : "user",
-        userId: user.id,
-      };
+      return { permission: user.isAdmin ? "admin" : "user", userId: user.id };
     }
   }
 
-  // No user context — treat as admin (bearer token is admin-level)
-  return { permission: "admin" };
+  return null;
 }
 
 /**

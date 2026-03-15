@@ -28,6 +28,7 @@ export async function GET(request: Request) {
         createdAt: schema.conversations.createdAt,
         updatedAt: schema.conversations.updatedAt,
         ownerName: schema.users.plexUsername,
+        ownerAvatarUrl: schema.users.plexAvatarUrl,
       })
       .from(schema.conversations)
       .leftJoin(schema.users, eq(schema.conversations.userId, schema.users.id))
@@ -92,6 +93,7 @@ export async function POST(request: Request) {
       createdAt: now,
       updatedAt: now,
       ownerName: session.user.plexUsername,
+      ownerAvatarUrl: session.user.plexAvatarUrl,
     },
   });
 }

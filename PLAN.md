@@ -154,6 +154,25 @@ Build an LLM-powered chat frontend for media management (*arr stack). Users log 
 - [x] **Posterless titles** — Overseerr-only results (not in Plex) use TMDB `posterUrl` directly as `thumbPath`; `display-titles-tool.ts` detects `startsWith("http")` and passes through without wrapping in Plex token URL. — `src/lib/tools/display-titles-tool.ts`
 - [x] **`display_titles` Zod null rejection** — LLMs pass `null` for absent optional fields; schema now uses `.nullish()` (JSON Schema compatible, no transforms). Handler coerces `null → undefined` with `?? undefined`. — `src/lib/tools/display-titles-tool.ts`
 
+### Phase 12: Bug Fixes & Enhancements
+
+#### Security
+- [x] **Per-user MCP bearer tokens (#9)** — Each user now has an individual MCP bearer token stored as `user.{id}.mcpToken` in `app_config`. `getUserMcpToken`, `setUserMcpToken`, `getUserIdByMcpToken` helpers added to `config/index.ts`. `authenticateMcp()` in `mcp/route.ts` checks per-user tokens after the global admin token (backward compat preserved). New `GET/POST /api/settings/mcp-token/user/[userId]` route (admin only). Settings > Users tab shows per-user token with copy + regenerate. — `src/lib/config/index.ts`, `src/app/api/mcp/route.ts`, `src/app/api/settings/mcp-token/user/[userId]/route.ts`, `src/app/settings/page.tsx`
+
+#### Bug Fixes
+- [x] **Plex recently added wrong titles (#14) + missing parent context (#16)** — `mapMetadata()` now handles `type: "season"`: title becomes "Show Name — Season N" (using `parentTitle`), `showTitle` and `seasonNumber` populated. `getRecentlyAdded()` fetches 20 items then deduplicates TV entries by show title, returning at most 10 unique results. Tool description updated to document `type` field and deduplication behaviour. — `src/lib/services/plex.ts`, `src/lib/tools/plex-tools.ts`
+- [x] **Wrong avatar when admin views another user's conversation (#13)** — `ownerAvatarUrl` added to `Conversation` type and returned in the admin conversations query and `POST /api/conversations` response. `chat/page.tsx` detects when the active conversation belongs to a different user and passes that user's avatar/name to `MessageList`. — `src/types/index.ts`, `src/app/api/conversations/route.ts`, `src/app/chat/page.tsx`
+- [x] **Flaky E2E test (#23)** — Added `data-testid="empty-chat-state"` to the empty chat placeholder in `MessageList`. E2E test updated to wait for this element to appear (positive assertion) instead of waiting for messages to disappear (negative, timing-sensitive). — `src/components/chat/message-list.tsx`, `tests/e2e/chat.spec.ts`
+- [x] **Carousel arrows unreliable (#6)** — Changed from `hidden group-hover:flex` to `flex opacity-0 group-hover:opacity-100` (opacity transition is more reliable than display toggling under variable load). — `src/components/chat/title-carousel.tsx`
+- [x] **Thumbnails unreliable on tab return (#17)** — Extended Plex thumb proxy `Cache-Control` from `max-age=3600` to `max-age=86400, stale-while-revalidate=86400` so cached images serve immediately when returning to a tab. — `src/app/api/plex/thumb/route.ts`
+
+#### Features
+- [x] **Reset to Default system prompt (#7)** — "Reset to Default" button appears next to the System Prompt label in LLM Settings when the field is non-empty; clicking it clears the field so the system falls back to `DEFAULT_SYSTEM_PROMPT`. — `src/app/settings/page.tsx`
+- [x] **Version number in UI (#4)** — `NEXT_PUBLIC_APP_VERSION` exposed from `package.json` via `next.config.ts` env. Version displayed as `v{version}` in the bottom-left corner of the chat page (muted, non-interactive). — `next.config.ts`, `src/app/chat/page.tsx`
+
+#### Housekeeping
+- [x] **ESLint warnings resolved (#25)** — Added `eslint-disable` comments for intentional `<img>` usage in `avatar.tsx` and `title-card.tsx`; fixed unused destructuring var in `registry.ts`; moved `options` to a ref in `use-chat.ts` to satisfy `react-hooks/exhaustive-deps` without stale closures. Zero warnings. — `src/components/ui/avatar.tsx`, `src/components/chat/title-card.tsx`, `src/lib/tools/registry.ts`, `src/hooks/use-chat.ts`
+
 ## Current File Structure
 
 ```
@@ -183,7 +202,8 @@ src/
 │   │   │   └── status/route.ts      # GET service health status (traffic lights)
 │   │   ├── settings/
 │   │   │   ├── route.ts             # GET config (masked) / PATCH update (multi-LLM)
-│   │   │   ├── mcp-token/route.ts   # GET/POST bearer token management
+│   │   │   ├── mcp-token/route.ts   # GET/POST global admin bearer token management
+│   │   │   ├── mcp-token/user/[userId]/route.ts  # GET/POST per-user MCP token (admin only)
 │   │   │   ├── plex-connect/route.ts # POST Plex OAuth from settings
 │   │   │   ├── plex-devices/route.ts # GET discovered Plex servers via plex.tv API
 │   │   │   └── users/route.ts       # GET list / PATCH update user settings (incl. rate limits)
@@ -285,10 +305,11 @@ src/
 | sonarr.url / sonarr.apiKey | Sonarr connection |
 | radarr.url / radarr.apiKey | Radarr connection |
 | overseerr.url / overseerr.apiKey | Overseerr connection |
-| mcp.bearerToken | Bearer token for external MCP access |
+| mcp.bearerToken | Bearer token for external MCP access (admin-level, global) |
 | user.{id}.defaultModel | Per-user default model selection |
 | user.{id}.canChangeModel | Per-user permission to switch models |
 | user.{id}.rateLimit | JSON: `{"messages": number, "period": "hour"|"day"|"week"|"month"}` |
+| user.{id}.mcpToken | Per-user MCP bearer token (scoped to that user's permission level) |
 
 ## API Routes
 
@@ -313,8 +334,10 @@ src/
 | GET | /api/services/status | Get service health status (all 5 services) |
 | GET | /api/settings | Get config with multi-LLM endpoints (secrets masked, admin) |
 | PATCH | /api/settings | Update config including LLM endpoints (admin) |
-| GET | /api/settings/mcp-token | Get MCP bearer token (admin) |
-| POST | /api/settings/mcp-token | Regenerate MCP bearer token (admin) |
+| GET | /api/settings/mcp-token | Get global admin MCP bearer token (admin) |
+| POST | /api/settings/mcp-token | Regenerate global admin MCP bearer token (admin) |
+| GET | /api/settings/mcp-token/user/[userId] | Get per-user MCP token, auto-generate if missing (admin) |
+| POST | /api/settings/mcp-token/user/[userId] | Regenerate per-user MCP token (admin) |
 | POST | /api/settings/plex-connect | Plex OAuth from settings (create PIN / check claim) |
 | GET | /api/settings/users | List all users with settings incl. rate limits (admin) |
 | PATCH | /api/settings/users | Update user role/model/permissions/rate limit (admin) |

@@ -40,6 +40,9 @@ import {
   getPeriodStart,
   getNextPeriodStart,
   countUserMessagesSince,
+  getUserMcpToken,
+  setUserMcpToken,
+  getUserIdByMcpToken,
 } from "@/lib/config";
 
 // ---------------------------------------------------------------------------
@@ -172,6 +175,57 @@ describe("getNextPeriodStart", () => {
     const start = getPeriodStart("week");
     const next = getNextPeriodStart("week");
     expect(next.getTime() - start.getTime()).toBe(7 * 24 * 60 * 60 * 1000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-user MCP tokens
+// ---------------------------------------------------------------------------
+
+describe("getUserMcpToken / setUserMcpToken / getUserIdByMcpToken", () => {
+  function insertUser(plexId: string): number {
+    const r = testDb
+      .insert(schema.users)
+      .values({ plexId, plexUsername: plexId, isAdmin: false, createdAt: new Date() })
+      .run();
+    return Number(r.lastInsertRowid);
+  }
+
+  it("returns null when no token has been set", () => {
+    expect(getUserMcpToken(9999)).toBeNull();
+  });
+
+  it("stores and retrieves a token", () => {
+    const uid = insertUser("mcp-user-1");
+    setUserMcpToken(uid, "abc123");
+    expect(getUserMcpToken(uid)).toBe("abc123");
+  });
+
+  it("getUserIdByMcpToken returns the correct user id", () => {
+    const uid = insertUser("mcp-user-2");
+    setUserMcpToken(uid, "tok-xyz");
+    expect(getUserIdByMcpToken("tok-xyz")).toBe(uid);
+  });
+
+  it("getUserIdByMcpToken returns null for an unknown token", () => {
+    expect(getUserIdByMcpToken("no-such-token")).toBeNull();
+  });
+
+  it("different users have independent tokens", () => {
+    const uid1 = insertUser("mcp-user-3");
+    const uid2 = insertUser("mcp-user-4");
+    setUserMcpToken(uid1, "token-for-user1");
+    setUserMcpToken(uid2, "token-for-user2");
+    expect(getUserIdByMcpToken("token-for-user1")).toBe(uid1);
+    expect(getUserIdByMcpToken("token-for-user2")).toBe(uid2);
+  });
+
+  it("token update is reflected in lookup", () => {
+    const uid = insertUser("mcp-user-5");
+    setUserMcpToken(uid, "old-token");
+    setUserMcpToken(uid, "new-token");
+    expect(getUserIdByMcpToken("old-token")).toBeNull();
+    expect(getUserIdByMcpToken("new-token")).toBe(uid);
   });
 });
 

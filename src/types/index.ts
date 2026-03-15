@@ -20,6 +20,7 @@ export interface Conversation {
   createdAt: Date;
   updatedAt: Date;
   ownerName?: string;
+  ownerAvatarUrl?: string | null;
 }
 
 export interface Message {

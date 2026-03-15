@@ -18,6 +18,11 @@ export function useChat(conversationId: string | null, options?: UseChatOptions)
   // Ref tracks streaming without stale-closure issues — loadMessages checks this
   // before overwriting state so it never races with an active SSE stream.
   const streamingRef = useRef(false);
+  // Keep options in a ref so sendMessage can read the latest callbacks without
+  // including the options object itself in the useCallback dependency array
+  // (which would cause a new function on every render).
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
 
   const loadMessages = useCallback(async (convId: string) => {
     if (streamingRef.current) return;
@@ -108,7 +113,7 @@ export function useChat(conversationId: string | null, options?: UseChatOptions)
             try {
               const event = JSON.parse(payload);
               if (event.type === "title_update") {
-                options?.onTitleUpdate?.(event.conversationId, event.title);
+                optionsRef.current?.onTitleUpdate?.(event.conversationId, event.title);
               } else if (event.type === "text_delta") {
                 setMessages((prev) =>
                   prev.map((m) =>

@@ -58,7 +58,9 @@ export async function GET(request: Request) {
       status: 200,
       headers: {
         "Content-Type": contentType,
-        "Cache-Control": "private, max-age=3600",
+        // Cache for 24 h; serve stale for another 24 h while revalidating in the background.
+        // This prevents broken thumbnails when returning to a tab or switching windows.
+        "Cache-Control": "private, max-age=86400, stale-while-revalidate=86400",
       },
     });
   } catch {
