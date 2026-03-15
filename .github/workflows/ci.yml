@@ -71,10 +71,9 @@ jobs:
         run: npm test
 
       - name: SAST scan
-        # continue-on-error while we establish a clean baseline; remove once
-        # all existing findings are resolved and the scan is known-green.
-        continue-on-error: true
-        run: npx semgrep@latest --config=p/typescript --config=p/nextjs --config=p/owasp-top-ten src/ --error
+        run: |
+          pip install semgrep --quiet
+          semgrep --config=p/typescript --config=p/nextjs --config=p/owasp-top-ten src/ --error
 
       - name: Build
         run: npm run build

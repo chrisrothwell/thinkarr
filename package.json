@@ -15,7 +15,7 @@
     "test:e2e:docker": "playwright test --config playwright.docker.config.ts",
     "test:e2e:ui": "playwright test --ui",
     "security:audit": "npm audit --audit-level=high",
-    "security:scan": "npx semgrep@latest --config=p/typescript --config=p/nextjs --config=p/owasp-top-ten src/",
+    "security:scan": "semgrep --config=p/typescript --config=p/nextjs --config=p/owasp-top-ten src/",
     "security:trivy": "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image thinkarr:latest",
     "security:all": "npm run security:audit && npm run security:scan"
   },
