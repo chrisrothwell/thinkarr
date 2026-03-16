@@ -181,6 +181,11 @@ Build an LLM-powered chat frontend for media management (*arr stack). Users log 
 - [x] **Title length validation (#71)** — `POST /api/conversations` and `PATCH /api/conversations/[id]/title` now reject titles longer than 200 characters with HTTP 400. — `src/app/api/conversations/route.ts`, `src/app/api/conversations/[id]/title/route.ts`
 - [x] **Per-user API rate limiting (#71)** — New `checkUserApiRateLimit(userId)` utility (in-memory, 60 req/min per user, 1-minute sliding window). Applied to all `/api/conversations/*` and `/api/settings/*` routes; returns HTTP 429 when exceeded. Follows same pattern as existing auth IP rate limiter. — `src/lib/security/api-rate-limit.ts` (new), `src/app/api/conversations/route.ts`, `src/app/api/conversations/[id]/route.ts`, `src/app/api/conversations/[id]/title/route.ts`, `src/app/api/settings/route.ts`, `src/app/api/settings/users/route.ts`
 
+### Phase 16: PWA Support (issue #76)
+
+#### Features
+- [x] **PWA installability (#76)** — Added `public/manifest.json` (standalone display, dark theme color) and `public/sw.js` (minimal network-first service worker). Updated `layout.tsx` with `manifest` metadata and `appleWebApp` properties. New `PwaInstallBanner` component shows a dismissible banner at the top of the chat window on mobile only (`pointer: coarse` detection); on Android/Chrome it uses `beforeinstallprompt` to trigger native install, on iOS it shows manual Share → Add to Home Screen instructions (iOS 16.4+ required). New "General" settings tab has platform-aware install UI: desktop users see a redirect message, iOS users see manual steps, Android users get a direct Install button. A module-level singleton in `pwa.ts` (`storeDeferredPrompt`, `triggerPwaInstall`, `isPwaInstallAvailable`, `onPwaAvailabilityChange`) shares the deferred prompt across SPA page navigations; `isMobileDevice()` and `isIos()` helpers cover platform detection. `usePwaInstall` hook provides reactive access and registers the SW. Settings defaults to LLM Setup during initial setup, General otherwise. — `public/manifest.json` (new), `public/sw.js` (new), `src/lib/pwa.ts` (new), `src/hooks/use-pwa-install.ts` (new), `src/components/chat/pwa-install-banner.tsx` (new), `src/app/layout.tsx`, `src/app/chat/page.tsx`, `src/app/settings/page.tsx`, `src/__tests__/lib/pwa.test.ts` (new)
+
 ### Phase 14: Coordinated Dependency Upgrades (issue #68)
 
 #### Dependency Upgrades
@@ -203,6 +208,9 @@ Build an LLM-powered chat frontend for media management (*arr stack). Users log 
 ├── .dockerignore                    # Excludes node_modules, .next, etc.
 ├── entrypoint.sh                    # PUID/PGID user creation + server start
 ├── docker-compose.yml               # Development/example compose (with TZ)
+├── public/
+│   ├── manifest.json                # PWA web app manifest (standalone, dark theme)
+│   └── sw.js                        # Minimal service worker (network-first, required for PWA)
 ├── drizzle/
 │   └── 0000_short_gressill.sql      # Initial migration (5 tables)
 src/
@@ -248,6 +256,7 @@ src/
 │   └── favicon.ico
 ├── components/
 │   ├── chat/
+│   │   ├── pwa-install-banner.tsx   # Dismissible PWA install prompt banner (beforeinstallprompt)
 │   │   ├── chat-input.tsx           # Auto-resizing textarea + send/stop buttons
 │   │   ├── message-bubble.tsx       # User/assistant message styling + avatar + tool calls + TitleCarousel interception
 │   │   ├── message-content.tsx      # Markdown rendering (react-markdown + remark-gfm)
@@ -270,7 +279,8 @@ src/
 ├── hooks/
 │   ├── use-auto-scroll.ts           # Auto-scroll on new messages, respects manual scroll
 │   ├── use-chat.ts                  # Messages state, SSE streaming, send/stop, model override
-│   └── use-conversations.ts         # Conversation CRUD (list, create, delete, rename, viewAll)
+│   ├── use-conversations.ts         # Conversation CRUD (list, create, delete, rename, viewAll)
+│   └── use-pwa-install.ts           # Registers SW, captures beforeinstallprompt, exposes install()
 ├── lib/
 │   ├── auth/
 │   │   └── session.ts               # Session create/validate/destroy + cookie management
@@ -300,6 +310,7 @@ src/
 │   │   ├── registry.ts              # Tool registry (defineTool, getOpenAITools, executeTool) + tool logging
 │   │   └── sonarr-tools.ts          # Sonarr tool definitions (4 tools)
 │   ├── logger.ts                    # Winston singleton (Console + DailyRotateFile to /config/logs/)
+│   ├── pwa.ts                       # PWA banner dismissal helpers (isPwaBannerDismissed, dismiss, reset)
 │   ├── security/
 │   │   ├── api-rate-limit.ts        # Per-user in-memory rate limiter (60 req/min) for API endpoints
 │   │   └── url-validation.ts        # Service URL allowlist/blocklist validation

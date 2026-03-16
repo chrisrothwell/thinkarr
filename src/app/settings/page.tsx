@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { DEFAULT_SYSTEM_PROMPT } from "@/lib/llm/default-prompt";
 import { copyToClipboard } from "@/lib/utils";
+import { usePwaInstall } from "@/hooks/use-pwa-install";
 
 // --- Types ---
 
@@ -115,6 +116,9 @@ export default function SettingsPage() {
 
   // Test results
   const [testResults, setTestResults] = useState<Record<string, { success: boolean; message: string }>>({});
+
+  // PWA install (also registers SW and captures beforeinstallprompt)
+  const { isAvailable: pwaInstallAvailable, isMobile: pwaMobile, isIosDevice: pwaIsIos, install: triggerPwaInstall } = usePwaInstall();
 
   // Log state
   const [logFiles, setLogFiles] = useState<{ name: string; size: number; modified: string }[]>([]);
@@ -514,14 +518,59 @@ export default function SettingsPage() {
           </div>
         )}
 
-        <Tabs defaultValue="llm" onValueChange={(v) => { if (v === "logs") loadLogFiles(); }}>
+        <Tabs defaultValue={isInitialSetup ? "llm" : "general"} onValueChange={(v) => { if (v === "logs") loadLogFiles(); }}>
           <TabsList>
+            <TabsTrigger value="general">General</TabsTrigger>
             <TabsTrigger value="llm">LLM Setup</TabsTrigger>
             <TabsTrigger value="services">Plex & Arrs</TabsTrigger>
             <TabsTrigger value="mcp">MCP</TabsTrigger>
             <TabsTrigger value="users">Users</TabsTrigger>
             <TabsTrigger value="logs">Logs</TabsTrigger>
           </TabsList>
+
+          {/* ===== TAB: General ===== */}
+          <TabsContent value="general" className="mt-4 space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Install as App (PWA)</CardTitle>
+                <CardDescription>
+                  Thinkarr can be installed as a Progressive Web App for quick access from your
+                  home screen or taskbar.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {!pwaMobile ? (
+                  <p className="text-sm text-muted-foreground">
+                    PWA installation is only available on mobile devices. Open Thinkarr in Chrome
+                    or Safari on your phone or tablet to install it.
+                  </p>
+                ) : pwaIsIos ? (
+                  <p className="text-sm text-muted-foreground">
+                    To install on iOS, open Thinkarr in{" "}
+                    <span className="font-medium text-foreground">Safari</span>, tap the{" "}
+                    <span className="font-medium text-foreground">Share</span> button, then choose{" "}
+                    <span className="font-medium text-foreground">Add to Home Screen</span>.
+                    Requires iOS 16.4 or later for full functionality.
+                  </p>
+                ) : pwaInstallAvailable ? (
+                  <div className="flex items-center gap-3">
+                    <p className="flex-1 text-sm text-muted-foreground">
+                      Tap Install to add Thinkarr to your home screen for quick access.
+                    </p>
+                    <Button variant="outline" size="sm" onClick={() => triggerPwaInstall()}>
+                      <Download className="mr-2 h-4 w-4" />
+                      Install
+                    </Button>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    Installation is not currently available. This may be because the app is already
+                    installed, or the page was not served over HTTPS.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
 
           {/* ===== TAB 1: LLM Setup ===== */}
           <TabsContent value="llm" className="mt-4 space-y-4">
