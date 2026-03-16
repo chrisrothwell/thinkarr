@@ -390,3 +390,7 @@ src/
 | User | All query/read tools | request_movie, request_tv, monitor_series, monitor_movie | Own requests only, cannot delete others' requests |
 
 External MCP access uses bearer token (from `mcp.bearerToken` config). Optional `X-User-Id` header scopes operations to a specific user's permission level.
+
+### Phase 16: Version Bump to 1.1.1-beta.1
+
+- [x] Bump `package.json` version from `1.1.0-beta.1` to `1.1.1-beta.1`
