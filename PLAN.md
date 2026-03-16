@@ -170,6 +170,17 @@ Build an LLM-powered chat frontend for media management (*arr stack). Users log 
 - [x] **Reset to Default system prompt (#7)** — "Reset to Default" button appears next to the System Prompt label in LLM Settings when the field is non-empty; clicking it clears the field so the system falls back to `DEFAULT_SYSTEM_PROMPT`. — `src/app/settings/page.tsx`
 - [x] **Version number in UI (#4)** — `NEXT_PUBLIC_APP_VERSION` exposed from `package.json` via `next.config.ts` env. Version displayed as `v{version}` in the bottom-left corner of the chat page (muted, non-interactive). — `next.config.ts`, `src/app/chat/page.tsx`
 
+### Phase 15: Features & Security Hardening (#8, #15, #71)
+
+#### Features
+- [x] **User message stats in admin (#8)** — `GET /api/settings/users` now includes `msgCount24h`, `msgCount7d`, `msgCount30d` per user (using existing `countUserMessagesSince` helper). Settings > Users tab shows counts inline under the rate limit row as "Messages: N / 24h · N / 7d · N / 30d". — `src/app/api/settings/users/route.ts`, `src/app/settings/page.tsx`
+- [x] **Plex collection search (#15)** — New `plex_search_collection` MCP tool. Queries all library sections for a matching collection by name then returns the items within it. Underlying `searchCollections(name)` function iterates sections via `/library/sections`, finds a match via `/library/sections/{key}/collections?title=`, then fetches children via `/library/collections/{id}/children`. — `src/lib/services/plex.ts`, `src/lib/tools/plex-tools.ts`
+- [x] **Plex tag search (#15)** — New `plex_search_by_tag` MCP tool. Queries all movie and TV show sections for items tagged with a genre/mood/custom tag using `/library/sections/{key}/all?genre=`. — `src/lib/services/plex.ts`, `src/lib/tools/plex-tools.ts`
+
+#### Security
+- [x] **Title length validation (#71)** — `POST /api/conversations` and `PATCH /api/conversations/[id]/title` now reject titles longer than 200 characters with HTTP 400. — `src/app/api/conversations/route.ts`, `src/app/api/conversations/[id]/title/route.ts`
+- [x] **Per-user API rate limiting (#71)** — New `checkUserApiRateLimit(userId)` utility (in-memory, 60 req/min per user, 1-minute sliding window). Applied to all `/api/conversations/*` and `/api/settings/*` routes; returns HTTP 429 when exceeded. Follows same pattern as existing auth IP rate limiter. — `src/lib/security/api-rate-limit.ts` (new), `src/app/api/conversations/route.ts`, `src/app/api/conversations/[id]/route.ts`, `src/app/api/conversations/[id]/title/route.ts`, `src/app/api/settings/route.ts`, `src/app/api/settings/users/route.ts`
+
 ### Phase 14: Coordinated Dependency Upgrades (issue #68)
 
 #### Dependency Upgrades
@@ -284,11 +295,14 @@ src/
 │   │   ├── display-titles-tool.ts   # display_titles tool (builds DisplayTitle[], resolves thumbUrl + machineId)
 │   │   ├── init.ts                  # Auto-register tools based on configured services
 │   │   ├── overseerr-tools.ts       # Overseerr tool definitions (search + list_requests; request tools removed)
-│   │   ├── plex-tools.ts            # Plex tool definitions (4 tools)
+│   │   ├── plex-tools.ts            # Plex tool definitions (6 tools: search, availability, on deck, recently added, collection, tag)
 │   │   ├── radarr-tools.ts          # Radarr tool definitions (3 tools)
 │   │   ├── registry.ts              # Tool registry (defineTool, getOpenAITools, executeTool) + tool logging
 │   │   └── sonarr-tools.ts          # Sonarr tool definitions (4 tools)
 │   ├── logger.ts                    # Winston singleton (Console + DailyRotateFile to /config/logs/)
+│   ├── security/
+│   │   ├── api-rate-limit.ts        # Per-user in-memory rate limiter (60 req/min) for API endpoints
+│   │   └── url-validation.ts        # Service URL allowlist/blocklist validation
 │   └── utils.ts                     # cn() class merge utility
 └── types/
     ├── api.ts                       # SetupStatus, TestConnection, SetupSaveRequest types
@@ -362,7 +376,7 @@ src/
 
 | Server | Tools |
 |--------|-------|
-| Plex | plex_search_library, plex_get_on_deck, plex_get_recently_added, plex_check_availability |
+| Plex | plex_search_library, plex_get_on_deck, plex_get_recently_added, plex_check_availability, plex_search_collection, plex_search_by_tag |
 | Sonarr | sonarr_search_series, sonarr_get_series_status, sonarr_get_calendar, sonarr_get_queue |
 | Radarr | radarr_search_movie, radarr_get_movie_status, radarr_get_queue |
 | Overseerr | overseerr_search, overseerr_list_requests |

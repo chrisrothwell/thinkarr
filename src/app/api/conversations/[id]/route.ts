@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { getDb, schema } from "@/lib/db";
 import { eq, and, asc } from "drizzle-orm";
+import { checkUserApiRateLimit } from "@/lib/security/api-rate-limit";
 import type { ApiResponse } from "@/types/api";
 
 export async function GET(
@@ -13,6 +14,13 @@ export async function GET(
     return NextResponse.json<ApiResponse>(
       { success: false, error: "Not authenticated" },
       { status: 401 },
+    );
+  }
+
+  if (!checkUserApiRateLimit(session.user.id)) {
+    return NextResponse.json<ApiResponse>(
+      { success: false, error: "Too many requests. Please slow down." },
+      { status: 429 },
     );
   }
 
@@ -64,6 +72,13 @@ export async function DELETE(
     return NextResponse.json<ApiResponse>(
       { success: false, error: "Not authenticated" },
       { status: 401 },
+    );
+  }
+
+  if (!checkUserApiRateLimit(session.user.id)) {
+    return NextResponse.json<ApiResponse>(
+      { success: false, error: "Too many requests. Please slow down." },
+      { status: 429 },
     );
   }
 

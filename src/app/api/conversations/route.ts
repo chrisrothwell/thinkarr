@@ -3,7 +3,10 @@ import { v4 as uuidv4 } from "uuid";
 import { getSession } from "@/lib/auth/session";
 import { getDb, schema } from "@/lib/db";
 import { eq, desc } from "drizzle-orm";
+import { checkUserApiRateLimit } from "@/lib/security/api-rate-limit";
 import type { ApiResponse } from "@/types/api";
+
+const TITLE_MAX_LENGTH = 200;
 
 export async function GET(request: Request) {
   const session = await getSession();
@@ -11,6 +14,13 @@ export async function GET(request: Request) {
     return NextResponse.json<ApiResponse>(
       { success: false, error: "Not authenticated" },
       { status: 401 },
+    );
+  }
+
+  if (!checkUserApiRateLimit(session.user.id)) {
+    return NextResponse.json<ApiResponse>(
+      { success: false, error: "Too many requests. Please slow down." },
+      { status: 429 },
     );
   }
 
@@ -63,11 +73,25 @@ export async function POST(request: Request) {
     );
   }
 
+  if (!checkUserApiRateLimit(session.user.id)) {
+    return NextResponse.json<ApiResponse>(
+      { success: false, error: "Too many requests. Please slow down." },
+      { status: 429 },
+    );
+  }
+
   let body: { title?: string } = {};
   try {
     body = await request.json();
   } catch {
     // No body is fine — use default title
+  }
+
+  if (body.title && body.title.length > TITLE_MAX_LENGTH) {
+    return NextResponse.json<ApiResponse>(
+      { success: false, error: `title must not exceed ${TITLE_MAX_LENGTH} characters` },
+      { status: 400 },
+    );
   }
 
   const db = getDb();

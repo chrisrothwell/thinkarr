@@ -66,6 +66,9 @@ interface UserEntry {
   canChangeModel: boolean;
   rateLimitMessages: number;
   rateLimitPeriod: "hour" | "day" | "week" | "month";
+  msgCount24h: number;
+  msgCount7d: number;
+  msgCount30d: number;
   mcpToken?: string;
   mcpTokenLoading?: boolean;
 }
@@ -150,6 +153,9 @@ export default function SettingsPage() {
               ...u,
               rateLimitMessages: u.rateLimitMessages ?? 100,
               rateLimitPeriod: u.rateLimitPeriod ?? "day",
+              msgCount24h: u.msgCount24h ?? 0,
+              msgCount7d: u.msgCount7d ?? 0,
+              msgCount30d: u.msgCount30d ?? 0,
             })),
           );
         }
@@ -975,6 +981,13 @@ export default function SettingsPage() {
                                 <option value="month">month</option>
                               </select>
                             </label>
+                          </div>
+
+                          {/* Message stats */}
+                          <div className="mt-2 flex flex-wrap gap-3 text-xs text-muted-foreground">
+                            <span>Messages: <span className="font-medium text-foreground">{user.msgCount24h}</span> / 24h</span>
+                            <span><span className="font-medium text-foreground">{user.msgCount7d}</span> / 7d</span>
+                            <span><span className="font-medium text-foreground">{user.msgCount30d}</span> / 30d</span>
                           </div>
 
                           {/* Per-user MCP token */}

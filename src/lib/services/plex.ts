@@ -166,3 +166,61 @@ export async function checkAvailability(title: string): Promise<{ available: boo
     results: results.slice(0, 5),
   };
 }
+
+/**
+ * Find titles belonging to a named Plex collection.
+ * Searches all library sections for a matching collection name and returns
+ * the media items inside it.
+ */
+export async function searchCollections(collectionName: string): Promise<PlexSearchResult[]> {
+  const sectionsData = await plexFetch("/library/sections");
+  const sections: Array<{ key: string }> = sectionsData?.MediaContainer?.Directory || [];
+
+  for (const section of sections) {
+    const collectionsData = await plexFetch(
+      `/library/sections/${section.key}/collections?title=${encodeURIComponent(collectionName)}`,
+    );
+    const collections: Array<Record<string, unknown>> = collectionsData?.MediaContainer?.Metadata || [];
+
+    if (collections.length === 0) continue;
+
+    // Use the first matching collection; fetch its children
+    const collection = collections[0];
+    const collectionKey = (collection.ratingKey as string | undefined) || (collection.key as string | undefined);
+    if (!collectionKey) continue;
+
+    const childrenData = await plexFetch(`/library/collections/${collectionKey}/children`);
+    const items: Record<string, unknown>[] = childrenData?.MediaContainer?.Metadata || [];
+    return items.slice(0, 20).map((item) => mapMetadata(item));
+  }
+
+  return [];
+}
+
+/**
+ * Search the Plex library by tag (genre, mood, or custom tag).
+ * Queries all movie and TV sections for items tagged with the given value.
+ */
+export async function searchByTag(tag: string): Promise<PlexSearchResult[]> {
+  const sectionsData = await plexFetch("/library/sections");
+  const sections: Array<{ key: string; type: string }> = sectionsData?.MediaContainer?.Directory || [];
+
+  const results: PlexSearchResult[] = [];
+
+  for (const section of sections) {
+    // Only movie (type=movie) and show (type=show) sections support genre filtering
+    if (section.type !== "movie" && section.type !== "show") continue;
+
+    const plexType = section.type === "movie" ? "1" : "2";
+    const data = await plexFetch(
+      `/library/sections/${section.key}/all?type=${plexType}&genre=${encodeURIComponent(tag)}`,
+    );
+    const items: Record<string, unknown>[] = data?.MediaContainer?.Metadata || [];
+    for (const item of items) {
+      results.push(mapMetadata(item));
+      if (results.length >= 20) return results;
+    }
+  }
+
+  return results;
+}
