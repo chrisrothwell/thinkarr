@@ -13,7 +13,10 @@ import {
  * Returns reactive install availability and a function to trigger the install.
  */
 export function usePwaInstall() {
-  const [isAvailable, setIsAvailable] = useState(false);
+  // Initialise from the module singleton so components that mount after the
+  // prompt was captured (e.g. navigating to Settings) get the correct value
+  // without a synchronous setState call inside an effect.
+  const [isAvailable, setIsAvailable] = useState(() => isPwaInstallAvailable());
   const swRegistered = useRef(false);
 
   useEffect(() => {
@@ -24,9 +27,6 @@ export function usePwaInstall() {
         // SW registration failure is non-fatal
       });
     }
-
-    // Sync initial state from the module singleton (set by a previous mount)
-    setIsAvailable(isPwaInstallAvailable());
 
     function handleBeforeInstallPrompt(e: Event) {
       e.preventDefault();
