@@ -1,5 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { isPwaBannerDismissed, dismissPwaBanner, resetPwaBannerDismissal, PWA_DISMISSED_KEY } from "@/lib/pwa";
+import {
+  isPwaBannerDismissed,
+  dismissPwaBanner,
+  storeDeferredPrompt,
+  isPwaInstallAvailable,
+  onPwaAvailabilityChange,
+  triggerPwaInstall,
+  PWA_DISMISSED_KEY,
+} from "@/lib/pwa";
 
 // Provide a minimal localStorage mock backed by a Map
 function makeLocalStorageMock() {
@@ -13,6 +21,22 @@ function makeLocalStorageMock() {
   };
 }
 
+// Build a minimal BeforeInstallPromptEvent stub
+function makePromptEvent(outcome: "accepted" | "dismissed" = "accepted") {
+  return {
+    preventDefault: vi.fn(),
+    prompt: vi.fn().mockResolvedValue(undefined),
+    userChoice: Promise.resolve({ outcome }),
+  } as unknown as Event;
+}
+
+// Reset the module-level singleton between tests by storing then clearing
+function clearDeferredPrompt() {
+  // Force-clear by triggering a fake install so the singleton nulls itself out
+  // Use a private escape hatch: store a fake event then await triggerPwaInstall
+  return triggerPwaInstall(); // consumes whatever is stored
+}
+
 describe("pwa utilities", () => {
   let localStorageMock: ReturnType<typeof makeLocalStorageMock>;
 
@@ -24,6 +48,8 @@ describe("pwa utilities", () => {
       configurable: true,
     });
   });
+
+  // --- localStorage helpers ---
 
   describe("isPwaBannerDismissed", () => {
     it("returns false when nothing is stored", () => {
@@ -39,6 +65,11 @@ describe("pwa utilities", () => {
       localStorageMock.store.set(PWA_DISMISSED_KEY, "false");
       expect(isPwaBannerDismissed()).toBe(false);
     });
+
+    it("returns false when localStorage throws", () => {
+      localStorageMock.getItem.mockImplementationOnce(() => { throw new Error("quota"); });
+      expect(isPwaBannerDismissed()).toBe(false);
+    });
   });
 
   describe("dismissPwaBanner", () => {
@@ -52,37 +83,82 @@ describe("pwa utilities", () => {
       dismissPwaBanner();
       expect(isPwaBannerDismissed()).toBe(true);
     });
-  });
 
-  describe("resetPwaBannerDismissal", () => {
-    it("removes the key from localStorage", () => {
-      localStorageMock.store.set(PWA_DISMISSED_KEY, "true");
-      resetPwaBannerDismissal();
-      expect(localStorageMock.removeItem).toHaveBeenCalledWith(PWA_DISMISSED_KEY);
-      expect(localStorageMock.store.has(PWA_DISMISSED_KEY)).toBe(false);
-    });
-
-    it("makes isPwaBannerDismissed return false after reset", () => {
-      dismissPwaBanner();
-      resetPwaBannerDismissal();
-      expect(isPwaBannerDismissed()).toBe(false);
-    });
-  });
-
-  describe("localStorage error handling", () => {
-    it("isPwaBannerDismissed returns false when localStorage throws", () => {
-      localStorageMock.getItem.mockImplementationOnce(() => { throw new Error("quota"); });
-      expect(isPwaBannerDismissed()).toBe(false);
-    });
-
-    it("dismissPwaBanner does not throw when localStorage throws", () => {
+    it("does not throw when localStorage throws", () => {
       localStorageMock.setItem.mockImplementationOnce(() => { throw new Error("quota"); });
       expect(() => dismissPwaBanner()).not.toThrow();
     });
+  });
 
-    it("resetPwaBannerDismissal does not throw when localStorage throws", () => {
-      localStorageMock.removeItem.mockImplementationOnce(() => { throw new Error("quota"); });
-      expect(() => resetPwaBannerDismissal()).not.toThrow();
+  // --- Module-level deferred prompt singleton ---
+
+  describe("storeDeferredPrompt / isPwaInstallAvailable", () => {
+    beforeEach(async () => {
+      await clearDeferredPrompt();
+    });
+
+    it("isPwaInstallAvailable returns false initially", () => {
+      expect(isPwaInstallAvailable()).toBe(false);
+    });
+
+    it("isPwaInstallAvailable returns true after storeDeferredPrompt", () => {
+      storeDeferredPrompt(makePromptEvent());
+      expect(isPwaInstallAvailable()).toBe(true);
+    });
+  });
+
+  describe("onPwaAvailabilityChange", () => {
+    beforeEach(async () => {
+      await clearDeferredPrompt();
+    });
+
+    it("notifies listener when prompt is stored", () => {
+      const listener = vi.fn();
+      const unsub = onPwaAvailabilityChange(listener);
+      storeDeferredPrompt(makePromptEvent());
+      expect(listener).toHaveBeenCalledTimes(1);
+      unsub();
+    });
+
+    it("does not notify after unsubscribe", () => {
+      const listener = vi.fn();
+      const unsub = onPwaAvailabilityChange(listener);
+      unsub();
+      storeDeferredPrompt(makePromptEvent());
+      expect(listener).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("triggerPwaInstall", () => {
+    beforeEach(async () => {
+      await clearDeferredPrompt();
+    });
+
+    it("returns 'unavailable' when no prompt is stored", async () => {
+      const result = await triggerPwaInstall();
+      expect(result).toBe("unavailable");
+    });
+
+    it("returns the browser outcome when prompt is available", async () => {
+      storeDeferredPrompt(makePromptEvent("accepted"));
+      const result = await triggerPwaInstall();
+      expect(result).toBe("accepted");
+    });
+
+    it("clears the stored prompt after triggering", async () => {
+      storeDeferredPrompt(makePromptEvent());
+      await triggerPwaInstall();
+      expect(isPwaInstallAvailable()).toBe(false);
+    });
+
+    it("notifies listeners when the prompt is consumed", async () => {
+      storeDeferredPrompt(makePromptEvent());
+      const listener = vi.fn();
+      const unsub = onPwaAvailabilityChange(listener);
+      await triggerPwaInstall();
+      // listener called once when prompt stored, once when consumed
+      expect(listener).toHaveBeenCalled();
+      unsub();
     });
   });
 });

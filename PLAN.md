@@ -184,7 +184,7 @@ Build an LLM-powered chat frontend for media management (*arr stack). Users log 
 ### Phase 16: PWA Support (issue #76)
 
 #### Features
-- [x] **PWA installability (#76)** — Added `public/manifest.json` (standalone display, dark theme color) and `public/sw.js` (minimal network-first service worker). Updated `layout.tsx` with `manifest` metadata and `appleWebApp` properties. New `PwaInstallBanner` component listens for the `beforeinstallprompt` browser event and displays a dismissible banner at the top of the chat window offering installation; dismissal is stored in `localStorage` so the banner doesn't reappear. New "General" settings tab lets users re-enable the install prompt after dismissal. PWA utility helpers (`isPwaBannerDismissed`, `dismissPwaBanner`, `resetPwaBannerDismissal`) extracted to `src/lib/pwa.ts` with unit tests. — `public/manifest.json` (new), `public/sw.js` (new), `src/lib/pwa.ts` (new), `src/components/chat/pwa-install-banner.tsx` (new), `src/app/layout.tsx`, `src/app/chat/page.tsx`, `src/app/settings/page.tsx`, `src/__tests__/lib/pwa.test.ts` (new)
+- [x] **PWA installability (#76)** — Added `public/manifest.json` (standalone display, dark theme color) and `public/sw.js` (minimal network-first service worker). Updated `layout.tsx` with `manifest` metadata and `appleWebApp` properties. New `PwaInstallBanner` component shows a dismissible banner at the top of the chat window when the browser fires `beforeinstallprompt`; dismissal is stored in `localStorage`. New "General" settings tab has a direct **Install** button that triggers the native install flow at any time regardless of banner dismissal state. A module-level singleton in `pwa.ts` (`storeDeferredPrompt`, `triggerPwaInstall`, `isPwaInstallAvailable`, `onPwaAvailabilityChange`) shares the deferred prompt across SPA page navigations; `usePwaInstall` hook provides reactive access and registers the SW. Settings defaults to the LLM Setup tab during initial setup (`isInitialSetup=true`) and to General otherwise. — `public/manifest.json` (new), `public/sw.js` (new), `src/lib/pwa.ts` (new), `src/hooks/use-pwa-install.ts` (new), `src/components/chat/pwa-install-banner.tsx` (new), `src/app/layout.tsx`, `src/app/chat/page.tsx`, `src/app/settings/page.tsx`, `src/__tests__/lib/pwa.test.ts` (new)
 
 ### Phase 14: Coordinated Dependency Upgrades (issue #68)
 
@@ -279,7 +279,8 @@ src/
 ├── hooks/
 │   ├── use-auto-scroll.ts           # Auto-scroll on new messages, respects manual scroll
 │   ├── use-chat.ts                  # Messages state, SSE streaming, send/stop, model override
-│   └── use-conversations.ts         # Conversation CRUD (list, create, delete, rename, viewAll)
+│   ├── use-conversations.ts         # Conversation CRUD (list, create, delete, rename, viewAll)
+│   └── use-pwa-install.ts           # Registers SW, captures beforeinstallprompt, exposes install()
 ├── lib/
 │   ├── auth/
 │   │   └── session.ts               # Session create/validate/destroy + cookie management

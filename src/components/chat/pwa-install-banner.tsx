@@ -1,54 +1,24 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { X, Download } from "lucide-react";
+import { usePwaInstall } from "@/hooks/use-pwa-install";
 import { isPwaBannerDismissed, dismissPwaBanner } from "@/lib/pwa";
 
-interface BeforeInstallPromptEvent extends Event {
-  prompt(): Promise<void>;
-  readonly userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
-}
-
 export function PwaInstallBanner() {
-  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
-  const [visible, setVisible] = useState(false);
+  const { isAvailable, install } = usePwaInstall();
+  const [dismissed, setDismissed] = useState(() => isPwaBannerDismissed());
 
-  useEffect(() => {
-    // Register the service worker
-    if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("/sw.js").catch(() => {
-        // SW registration failure is non-fatal
-      });
-    }
-
-    // Don't show if already dismissed
-    if (isPwaBannerDismissed()) return;
-
-    function handleBeforeInstallPrompt(e: Event) {
-      e.preventDefault();
-      setDeferredPrompt(e as BeforeInstallPromptEvent);
-      setVisible(true);
-    }
-
-    window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
-    return () => window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
-  }, []);
+  if (!isAvailable || dismissed) return null;
 
   function handleInstall() {
-    if (!deferredPrompt) return;
-    deferredPrompt.prompt();
-    deferredPrompt.userChoice.then(() => {
-      setDeferredPrompt(null);
-      setVisible(false);
-    });
+    install().then(() => setDismissed(true));
   }
 
   function handleDismiss() {
     dismissPwaBanner();
-    setVisible(false);
+    setDismissed(true);
   }
-
-  if (!visible) return null;
 
   return (
     <div className="flex items-center gap-3 border-b bg-muted/60 px-4 py-2 text-sm">

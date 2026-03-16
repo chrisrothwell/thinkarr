@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import { DEFAULT_SYSTEM_PROMPT } from "@/lib/llm/default-prompt";
 import { copyToClipboard } from "@/lib/utils";
-import { isPwaBannerDismissed, resetPwaBannerDismissal } from "@/lib/pwa";
+import { usePwaInstall } from "@/hooks/use-pwa-install";
 
 // --- Types ---
 
@@ -117,11 +117,8 @@ export default function SettingsPage() {
   // Test results
   const [testResults, setTestResults] = useState<Record<string, { success: boolean; message: string }>>({});
 
-  // PWA state (client-only, derived from localStorage)
-  const [pwaBannerDismissed, setPwaBannerDismissed] = useState(false);
-  useEffect(() => {
-    setPwaBannerDismissed(isPwaBannerDismissed());
-  }, []);
+  // PWA install (also registers SW and captures beforeinstallprompt)
+  const { isAvailable: pwaInstallAvailable, install: triggerPwaInstall } = usePwaInstall();
 
   // Log state
   const [logFiles, setLogFiles] = useState<{ name: string; size: number; modified: string }[]>([]);
@@ -521,7 +518,7 @@ export default function SettingsPage() {
           </div>
         )}
 
-        <Tabs defaultValue="general" onValueChange={(v) => { if (v === "logs") loadLogFiles(); }}>
+        <Tabs defaultValue={isInitialSetup ? "llm" : "general"} onValueChange={(v) => { if (v === "logs") loadLogFiles(); }}>
           <TabsList>
             <TabsTrigger value="general">General</TabsTrigger>
             <TabsTrigger value="llm">LLM Setup</TabsTrigger>
@@ -542,27 +539,22 @@ export default function SettingsPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                {pwaBannerDismissed ? (
+                {pwaInstallAvailable ? (
                   <div className="flex items-center gap-3">
                     <p className="flex-1 text-sm text-muted-foreground">
-                      You previously dismissed the install prompt. Click below to show it again
-                      next time the browser offers installation.
+                      Your browser supports installation. Click Install to add Thinkarr to your
+                      home screen or taskbar.
                     </p>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        resetPwaBannerDismissal();
-                        setPwaBannerDismissed(false);
-                      }}
-                    >
-                      Re-enable install prompt
+                    <Button variant="outline" size="sm" onClick={() => triggerPwaInstall()}>
+                      <Download className="mr-2 h-4 w-4" />
+                      Install
                     </Button>
                   </div>
                 ) : (
                   <p className="text-sm text-muted-foreground">
-                    The install prompt is active. If your browser supports PWA installation, a
-                    banner will appear at the top of the chat window.
+                    Installation is not currently available. This may be because your browser does
+                    not support PWA installation, the app is already installed, or the page was not
+                    served over HTTPS.
                   </p>
                 )}
               </CardContent>
