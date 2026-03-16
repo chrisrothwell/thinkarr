@@ -9,6 +9,8 @@ export interface ModelOption {
   endpointName: string;
   model: string;
   label: string;
+  supportsVoice: boolean;
+  supportsRealtime: boolean;
 }
 
 interface LlmEndpoint {
@@ -18,6 +20,8 @@ interface LlmEndpoint {
   model: string;
   enabled: boolean;
   isDefault?: boolean;
+  supportsVoice?: boolean;
+  supportsRealtime?: boolean;
 }
 
 export async function GET() {
@@ -61,6 +65,8 @@ export async function GET() {
       endpointName: ep.name,
       model: ep.model,
       label: endpoints.length > 1 ? `${ep.name} — ${ep.model}` : ep.model,
+      supportsVoice: ep.supportsVoice ?? false,
+      supportsRealtime: ep.supportsRealtime ?? false,
     }));
 
   // System default: the endpoint marked isDefault, falling back to first enabled

@@ -188,6 +188,21 @@ Build an LLM-powered chat frontend for media management (*arr stack). Users log 
 - [x] **Drop redundant `eslint-plugin-jsx-a11y` direct dep** — `eslint-config-next` already bundles `eslint-plugin-jsx-a11y`; the direct entry was redundant. Removed to avoid future peer-dep conflicts. — `package.json`
 - [ ] **ESLint 9 → 10 deferred (#62)** — `eslint-plugin-react` (bundled inside `eslint-config-next@16.1.6`) uses the removed `context.getFilename()` API and is incompatible with ESLint 10. Upgrade deferred until `eslint-config-next` ships ESLint 10 support.
 
+### Phase 14: Voice & Realtime Modes (Issue #75)
+
+#### Features
+- [x] **Endpoint capability auto-detection** — `testLlm()` in `test-connection.ts` now probes `POST /audio/transcriptions` (voice) and `GET /models` (realtime model scan) after a successful connection test. `TestConnectionResponse` extended with `capabilities: { supportsVoice, realtimeModel }`. Settings UI writes detected flags back to the endpoint config on test success. — `src/lib/services/test-connection.ts`, `src/types/api.ts`, `src/app/settings/page.tsx`
+- [x] **Endpoint voice/realtime config fields** — `LlmEndpoint` extended with `supportsVoice`, `supportsRealtime`, `realtimeModel` (optional, empty = disabled), `realtimeSystemPrompt` (empty = use default). Settings UI shows auto-detected capability badges and a `realtimeModel` override input; when set, a realtime system prompt editor appears with Default/Custom mode (same pattern as text system prompt). — `src/app/api/settings/route.ts`, `src/lib/llm/client.ts`, `src/app/api/models/route.ts`, `src/app/settings/page.tsx`
+- [x] **Mode toggle in chat** — `chat/page.tsx` tracks `chatMode` ("text" | "voice" | "realtime") and `endpointCaps`. `ChatInput` shows a mode toggle pill bar when the selected endpoint supports voice or realtime; resets to "text" on model switch if the new endpoint lacks the current mode. — `src/app/chat/page.tsx`, `src/components/chat/chat-input.tsx`
+- [x] **Voice mode (Whisper STT)** — `POST /api/voice/transcribe` accepts audio file + modelId, calls `client.audio.transcriptions.create({ file, model: "whisper-1" })`, returns `{ transcript }`. `useVoiceInput` hook uses `MediaRecorder` API; `VoiceInput` component shows mic button with click-to-record-toggle, spinner while transcribing, inline error. On transcript: sends as chat message and reverts to text mode. — `src/app/api/voice/transcribe/route.ts`, `src/hooks/use-voice-input.ts`, `src/components/chat/voice-input.tsx`
+- [x] **Realtime mode (WebRTC)** — `POST /api/realtime/session` creates an ephemeral OpenAI Realtime session (calls `POST /realtime/sessions` on the endpoint, passes tools excluding `display_titles`, passes realtime system prompt). Returns `clientSecret`, `realtimeModel`, `rtcBaseUrl`. Browser hook `useRealtimeChat` performs WebRTC SDP exchange directly with OpenAI, plays remote audio, shows live transcript, handles tool calls via `POST /api/realtime/tool` (server-side tool executor reusing existing registry). — `src/app/api/realtime/session/route.ts`, `src/app/api/realtime/tool/route.ts`, `src/hooks/use-realtime-chat.ts`, `src/components/chat/realtime-chat.tsx`
+- [x] **Default realtime system prompt** — `DEFAULT_REALTIME_SYSTEM_PROMPT` added (voice-adapted: no markdown/cards, natural spoken language). `buildRealtimeSystemPrompt(customPrompt?)` follows same pattern as `buildSystemPrompt()`. — `src/lib/llm/default-prompt.ts`, `src/lib/llm/system-prompt.ts`
+- [x] **`getEndpointConfig(modelId)` helper** — New export from `src/lib/llm/client.ts` to look up the full `LlmEndpointConfig` by modelId without constructing a client (used by realtime session route). — `src/lib/llm/client.ts`
+
+#### Tests
+- [x] **`src/__tests__/api/voice-transcribe.test.ts`** — Tests for 401 (unauth), 400 (missing audio), 200 (success with mocked Whisper), 500 (API error)
+- [x] **`src/__tests__/api/realtime-session.test.ts`** — Tests for 401 (unauth), 400 (no realtime support), 400 (unknown endpoint), 200 (success with mock fetch), 502 (OpenAI returns error)
+
 ### Phase 13: React 19 Upgrade Fix
 
 #### Bug Fixes
@@ -230,12 +245,17 @@ src/
 │   │   │   ├── plex-connect/route.ts # POST Plex OAuth from settings
 │   │   │   ├── plex-devices/route.ts # GET discovered Plex servers via plex.tv API
 │   │   │   └── users/route.ts       # GET list / PATCH update user settings (incl. rate limits)
+│   │   ├── realtime/
+│   │   │   ├── session/route.ts     # POST create ephemeral OpenAI Realtime session (WebRTC)
+│   │   │   └── tool/route.ts        # POST execute tool server-side during realtime session
+│   │   ├── voice/
+│   │   │   └── transcribe/route.ts  # POST audio → Whisper STT → transcript
 │   │   └── setup/
 │   │       ├── route.ts             # GET status + POST save config
 │   │       └── test-connection/
-│   │           └── route.ts         # POST test service connectivity
+│   │           └── route.ts         # POST test service connectivity (+ capability probing)
 │   ├── chat/
-│   │   └── page.tsx                 # Chat page (sidebar + model picker + messages + input)
+│   │   └── page.tsx                 # Chat page (sidebar + model picker + mode toggle + messages + input)
 │   ├── login/
 │   │   └── page.tsx                 # Plex OAuth login (redirects admin to settings if needed)
 │   ├── settings/
@@ -248,15 +268,17 @@ src/
 │   └── favicon.ico
 ├── components/
 │   ├── chat/
-│   │   ├── chat-input.tsx           # Auto-resizing textarea + send/stop buttons
+│   │   ├── chat-input.tsx           # Text/Voice/Realtime mode toggle + textarea/mic/realtime UI
 │   │   ├── message-bubble.tsx       # User/assistant message styling + avatar + tool calls + TitleCarousel interception
 │   │   ├── message-content.tsx      # Markdown rendering (react-markdown + remark-gfm)
 │   │   ├── message-list.tsx         # Scrollable messages + historical tool call reconstruction
+│   │   ├── realtime-chat.tsx        # Full-duplex voice conversation UI (WebRTC, live transcript)
 │   │   ├── service-status.tsx       # Traffic light service status (green/amber/red)
 │   │   ├── sidebar.tsx              # Collapsible sidebar + grouped conversations + service status
 │   │   ├── title-card.tsx           # Rich title card (thumbnail, status, cast, Watch Now / Request / More Info buttons)
 │   │   ├── title-carousel.tsx       # Single card or horizontal snap-scroll carousel with arrow buttons
-│   │   └── tool-call.tsx            # "Running {Action} on {Service}" + expandable details
+│   │   ├── tool-call.tsx            # "Running {Action} on {Service}" + expandable details
+│   │   └── voice-input.tsx          # Mic record/transcribe UI (click-to-toggle, spinner)
 │   └── ui/
 │       ├── avatar.tsx               # Image/fallback avatar (sm/md/lg)
 │       ├── badge.tsx                # 4 variants
@@ -270,7 +292,9 @@ src/
 ├── hooks/
 │   ├── use-auto-scroll.ts           # Auto-scroll on new messages, respects manual scroll
 │   ├── use-chat.ts                  # Messages state, SSE streaming, send/stop, model override
-│   └── use-conversations.ts         # Conversation CRUD (list, create, delete, rename, viewAll)
+│   ├── use-conversations.ts         # Conversation CRUD (list, create, delete, rename, viewAll)
+│   ├── use-realtime-chat.ts         # WebRTC realtime hook (connect, SDP, data channel, tool calls)
+│   └── use-voice-input.ts           # MediaRecorder hook (record, stop, POST to transcribe)
 ├── lib/
 │   ├── auth/
 │   │   └── session.ts               # Session create/validate/destroy + cookie management
@@ -281,9 +305,10 @@ src/
 │   │   ├── migrate.ts               # runMigrations standalone utility
 │   │   └── schema.ts               # 5 tables
 │   ├── llm/
-│   │   ├── client.ts                # OpenAI client factory (default + per-endpoint resolution)
+│   │   ├── client.ts                # OpenAI client factory (default + per-endpoint + getEndpointConfig)
+│   │   ├── default-prompt.ts        # DEFAULT_SYSTEM_PROMPT + DEFAULT_REALTIME_SYSTEM_PROMPT
 │   │   ├── orchestrator.ts          # Chat streaming engine + model override + auto-title
-│   │   └── system-prompt.ts         # Dynamic system prompt builder
+│   │   └── system-prompt.ts         # buildSystemPrompt() + buildRealtimeSystemPrompt()
 │   ├── services/
 │   │   ├── overseerr.ts             # Overseerr client (search, request, list)
 │   │   ├── plex.ts                  # Plex client (search, on deck, recently added, availability)
@@ -371,6 +396,9 @@ src/
 | GET | /api/settings/logs | List log files with name/size/modified (admin) |
 | GET | /api/settings/logs/[filename] | Read last 500 lines or full log; `?download=true` streams file (admin) |
 | POST | /api/request | Submit Overseerr media request (movie or TV with optional seasons array) |
+| POST | /api/voice/transcribe | Transcribe audio file via Whisper STT (auth required) |
+| POST | /api/realtime/session | Create ephemeral OpenAI Realtime session token for WebRTC (auth required) |
+| POST | /api/realtime/tool | Execute a tool server-side during a realtime voice session (auth required) |
 
 ## MCP Tools
 

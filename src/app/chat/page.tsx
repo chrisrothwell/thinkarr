@@ -9,9 +9,13 @@ import { useConversations } from "@/hooks/use-conversations";
 import { useChat } from "@/hooks/use-chat";
 import type { User } from "@/types";
 
+export type ChatMode = "text" | "voice" | "realtime";
+
 interface ModelOption {
   id: string;
   label: string;
+  supportsVoice?: boolean;
+  supportsRealtime?: boolean;
 }
 
 export default function ChatPage() {
@@ -27,6 +31,10 @@ export default function ChatPage() {
   const [models, setModels] = useState<ModelOption[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>("");
   const [canChangeModel, setCanChangeModel] = useState(true);
+
+  // Chat mode (text / voice / realtime)
+  const [chatMode, setChatMode] = useState<ChatMode>("text");
+  const [endpointCaps, setEndpointCaps] = useState({ supportsVoice: false, supportsRealtime: false });
 
   const {
     conversations,
@@ -65,9 +73,19 @@ export default function ChatPage() {
       .then((r) => r.json())
       .then((data) => {
         if (data.success) {
-          setModels(data.data.models || []);
+          const loadedModels: ModelOption[] = data.data.models || [];
+          setModels(loadedModels);
           setCanChangeModel(data.data.canChangeModel);
-          setSelectedModel(data.data.defaultModel || "");
+          const defaultModel = data.data.defaultModel || "";
+          setSelectedModel(defaultModel);
+          // Set initial capabilities from the default model
+          const defaultOpt = loadedModels.find((m) => m.id === defaultModel);
+          if (defaultOpt) {
+            setEndpointCaps({
+              supportsVoice: defaultOpt.supportsVoice ?? false,
+              supportsRealtime: defaultOpt.supportsRealtime ?? false,
+            });
+          }
         }
       })
       .catch(() => {});
@@ -162,7 +180,22 @@ export default function ChatPage() {
               Model:
               <select
                 value={selectedModel}
-                onChange={(e) => setSelectedModel(e.target.value)}
+                onChange={(e) => {
+                  const newModel = e.target.value;
+                  setSelectedModel(newModel);
+                  const opt = models.find((m) => m.id === newModel);
+                  const caps = {
+                    supportsVoice: opt?.supportsVoice ?? false,
+                    supportsRealtime: opt?.supportsRealtime ?? false,
+                  };
+                  setEndpointCaps(caps);
+                  // Reset to text mode if the new endpoint doesn't support current mode
+                  setChatMode((prev) => {
+                    if (prev === "voice" && !caps.supportsVoice) return "text";
+                    if (prev === "realtime" && !caps.supportsRealtime) return "text";
+                    return prev;
+                  });
+                }}
                 className="rounded border bg-background px-2 py-1 text-xs"
                 disabled={streaming}
               >
@@ -209,6 +242,11 @@ export default function ChatPage() {
           onStop={stopStreaming}
           streaming={streaming}
           disabled={streaming}
+          chatMode={chatMode}
+          onModeChange={setChatMode}
+          supportsVoice={endpointCaps.supportsVoice}
+          supportsRealtime={endpointCaps.supportsRealtime}
+          selectedModel={selectedModel}
         />
       </main>
       {appVersion && (

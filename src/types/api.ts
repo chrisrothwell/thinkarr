@@ -24,6 +24,10 @@ export interface TestConnectionRequest {
 export interface TestConnectionResponse {
   success: boolean;
   message: string;
+  capabilities?: {
+    supportsVoice: boolean;
+    realtimeModel: string | null;
+  };
 }
 
 export interface SetupSaveRequest {
