@@ -34,4 +34,22 @@ export function registerPlexTools() {
     schema: z.object({}),
     handler: async () => plex.getRecentlyAdded(),
   });
+
+  defineTool({
+    name: "plex_search_collection",
+    description: "Find titles belonging to a specific named Plex collection (e.g. 'Marvel Cinematic Universe', 'Christopher Nolan'). Returns the media items inside the matching collection.",
+    schema: z.object({
+      collectionName: z.string().describe("Name of the Plex collection to search for"),
+    }),
+    handler: async (args) => plex.searchCollections(args.collectionName),
+  });
+
+  defineTool({
+    name: "plex_search_by_tag",
+    description: "Discover titles in the Plex library filtered by a tag such as genre, mood, or custom user-defined tag (e.g. 'Action', 'Comedy', 'Family'). Searches across all movie and TV show sections.",
+    schema: z.object({
+      tag: z.string().describe("Tag value to filter by (genre, mood, or custom tag)"),
+    }),
+    handler: async (args) => plex.searchByTag(args.tag),
+  });
 }

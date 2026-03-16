@@ -2,8 +2,9 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { getDb, schema } from "@/lib/db";
 import { eq, asc } from "drizzle-orm";
-import { getConfig, getRateLimit, setRateLimit } from "@/lib/config";
+import { getConfig, getRateLimit, setRateLimit, countUserMessagesSince } from "@/lib/config";
 import type { RateLimitPeriod } from "@/lib/config";
+import { checkUserApiRateLimit } from "@/lib/security/api-rate-limit";
 import type { ApiResponse } from "@/types/api";
 
 export async function GET() {
@@ -12,6 +13,13 @@ export async function GET() {
     return NextResponse.json<ApiResponse>(
       { success: false, error: "Admin access required" },
       { status: 403 },
+    );
+  }
+
+  if (!checkUserApiRateLimit(session.user.id)) {
+    return NextResponse.json<ApiResponse>(
+      { success: false, error: "Too many requests. Please slow down." },
+      { status: 429 },
     );
   }
 
@@ -28,7 +36,12 @@ export async function GET() {
     .from(schema.users)
     .all();
 
-  // Get per-user settings from config
+  // Get per-user settings and message stats from config/DB
+  const now = new Date();
+  const since24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const since7d = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const since30d = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
   const usersWithSettings = users.map((u) => {
     const rl = getRateLimit(u.id);
     return {
@@ -37,6 +50,9 @@ export async function GET() {
       canChangeModel: getConfig(`user.${u.id}.canChangeModel`) !== "false",
       rateLimitMessages: rl.messages,
       rateLimitPeriod: rl.period,
+      msgCount24h: countUserMessagesSince(u.id, since24h),
+      msgCount7d: countUserMessagesSince(u.id, since7d),
+      msgCount30d: countUserMessagesSince(u.id, since30d),
     };
   });
 
@@ -49,6 +65,13 @@ export async function PATCH(request: Request) {
     return NextResponse.json<ApiResponse>(
       { success: false, error: "Admin access required" },
       { status: 403 },
+    );
+  }
+
+  if (!checkUserApiRateLimit(session.user.id)) {
+    return NextResponse.json<ApiResponse>(
+      { success: false, error: "Too many requests. Please slow down." },
+      { status: 429 },
     );
   }
 

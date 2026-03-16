@@ -163,12 +163,23 @@ Build an LLM-powered chat frontend for media management (*arr stack). Users log 
 - [x] **Plex recently added wrong titles (#14) + missing parent context (#16)** — `mapMetadata()` now handles `type: "season"`: title becomes "Show Name — Season N" (using `parentTitle`), `showTitle` and `seasonNumber` populated. `getRecentlyAdded()` fetches 20 items then deduplicates TV entries by show title, returning at most 10 unique results. Tool description updated to document `type` field and deduplication behaviour. — `src/lib/services/plex.ts`, `src/lib/tools/plex-tools.ts`
 - [x] **Wrong avatar when admin views another user's conversation (#13)** — `ownerAvatarUrl` added to `Conversation` type and returned in the admin conversations query and `POST /api/conversations` response. `chat/page.tsx` detects when the active conversation belongs to a different user and passes that user's avatar/name to `MessageList`. — `src/types/index.ts`, `src/app/api/conversations/route.ts`, `src/app/chat/page.tsx`
 - [x] **Flaky E2E test (#23)** — Added `data-testid="empty-chat-state"` to the empty chat placeholder in `MessageList`. E2E test updated to wait for this element to appear (positive assertion) instead of waiting for messages to disappear (negative, timing-sensitive). — `src/components/chat/message-list.tsx`, `tests/e2e/chat.spec.ts`
-- [x] **Carousel arrows unreliable (#6)** — Changed from `hidden group-hover:flex` to `flex opacity-0 group-hover:opacity-100` (opacity transition is more reliable than display toggling under variable load). — `src/components/chat/title-carousel.tsx`
+- [x] **Carousel arrows unreliable (#6)** — Changed from `hidden group-hover:flex` to `flex opacity-0 group-hover:opacity-100` (opacity transition is more reliable than display toggling under variable load). On mobile, hover events never fire so arrows were invisible; fixed by using `opacity-100 md:opacity-0 md:group-hover:opacity-100` so arrows are always visible below the `md` breakpoint. Buttons slightly enlarged (w-7→w-8) for prominence on touch screens. — `src/components/chat/title-carousel.tsx`
 - [x] **Thumbnails unreliable on tab return (#17)** — Extended Plex thumb proxy `Cache-Control` from `max-age=3600` to `max-age=86400, stale-while-revalidate=86400` so cached images serve immediately when returning to a tab. — `src/app/api/plex/thumb/route.ts`
 
 #### Features
-- [x] **Reset to Default system prompt (#7)** — "Reset to Default" button appears next to the System Prompt label in LLM Settings when the field is non-empty; clicking it clears the field so the system falls back to `DEFAULT_SYSTEM_PROMPT`. — `src/app/settings/page.tsx`
+- [x] **System prompt mode selector (#7)** — Replaced the "Reset to Default" button (which left the default text unviewable/uneditable) with a radio button pair: "Use Default Prompt" / "Use Custom Prompt". When "Use Default Prompt" is selected the textarea is populated with `DEFAULT_SYSTEM_PROMPT` so the user can read and start from it; editing the text automatically switches the radio to "Use Custom Prompt". Switching back to "Use Default Prompt" reverts the textarea to the default text. `promptMode` is UI-only state — saving strips it and sends `systemPrompt: ""` for default mode so future app-default updates are still picked up. — `src/app/settings/page.tsx`
 - [x] **Version number in UI (#4)** — `NEXT_PUBLIC_APP_VERSION` exposed from `package.json` via `next.config.ts` env. Version displayed as `v{version}` in the bottom-left corner of the chat page (muted, non-interactive). — `next.config.ts`, `src/app/chat/page.tsx`
+
+### Phase 15: Features & Security Hardening (#8, #15, #71)
+
+#### Features
+- [x] **User message stats in admin (#8)** — `GET /api/settings/users` now includes `msgCount24h`, `msgCount7d`, `msgCount30d` per user (using existing `countUserMessagesSince` helper). Settings > Users tab shows counts inline under the rate limit row as "Messages: N / 24h · N / 7d · N / 30d". — `src/app/api/settings/users/route.ts`, `src/app/settings/page.tsx`
+- [x] **Plex collection search (#15)** — New `plex_search_collection` MCP tool. Queries all library sections for a matching collection by name then returns the items within it. Underlying `searchCollections(name)` function iterates sections via `/library/sections`, finds a match via `/library/sections/{key}/collections?title=`, then fetches children via `/library/collections/{id}/children`. — `src/lib/services/plex.ts`, `src/lib/tools/plex-tools.ts`
+- [x] **Plex tag search (#15)** — New `plex_search_by_tag` MCP tool. Queries all movie and TV show sections for items tagged with a genre/mood/custom tag using `/library/sections/{key}/all?genre=`. — `src/lib/services/plex.ts`, `src/lib/tools/plex-tools.ts`
+
+#### Security
+- [x] **Title length validation (#71)** — `POST /api/conversations` and `PATCH /api/conversations/[id]/title` now reject titles longer than 200 characters with HTTP 400. — `src/app/api/conversations/route.ts`, `src/app/api/conversations/[id]/title/route.ts`
+- [x] **Per-user API rate limiting (#71)** — New `checkUserApiRateLimit(userId)` utility (in-memory, 60 req/min per user, 1-minute sliding window). Applied to all `/api/conversations/*` and `/api/settings/*` routes; returns HTTP 429 when exceeded. Follows same pattern as existing auth IP rate limiter. — `src/lib/security/api-rate-limit.ts` (new), `src/app/api/conversations/route.ts`, `src/app/api/conversations/[id]/route.ts`, `src/app/api/conversations/[id]/title/route.ts`, `src/app/api/settings/route.ts`, `src/app/api/settings/users/route.ts`
 
 ### Phase 14: Coordinated Dependency Upgrades (issue #68)
 
@@ -284,11 +295,14 @@ src/
 │   │   ├── display-titles-tool.ts   # display_titles tool (builds DisplayTitle[], resolves thumbUrl + machineId)
 │   │   ├── init.ts                  # Auto-register tools based on configured services
 │   │   ├── overseerr-tools.ts       # Overseerr tool definitions (search + list_requests; request tools removed)
-│   │   ├── plex-tools.ts            # Plex tool definitions (4 tools)
+│   │   ├── plex-tools.ts            # Plex tool definitions (6 tools: search, availability, on deck, recently added, collection, tag)
 │   │   ├── radarr-tools.ts          # Radarr tool definitions (3 tools)
 │   │   ├── registry.ts              # Tool registry (defineTool, getOpenAITools, executeTool) + tool logging
 │   │   └── sonarr-tools.ts          # Sonarr tool definitions (4 tools)
 │   ├── logger.ts                    # Winston singleton (Console + DailyRotateFile to /config/logs/)
+│   ├── security/
+│   │   ├── api-rate-limit.ts        # Per-user in-memory rate limiter (60 req/min) for API endpoints
+│   │   └── url-validation.ts        # Service URL allowlist/blocklist validation
 │   └── utils.ts                     # cn() class merge utility
 └── types/
     ├── api.ts                       # SetupStatus, TestConnection, SetupSaveRequest types
@@ -362,7 +376,7 @@ src/
 
 | Server | Tools |
 |--------|-------|
-| Plex | plex_search_library, plex_get_on_deck, plex_get_recently_added, plex_check_availability |
+| Plex | plex_search_library, plex_get_on_deck, plex_get_recently_added, plex_check_availability, plex_search_collection, plex_search_by_tag |
 | Sonarr | sonarr_search_series, sonarr_get_series_status, sonarr_get_calendar, sonarr_get_queue |
 | Radarr | radarr_search_movie, radarr_get_movie_status, radarr_get_queue |
 | Overseerr | overseerr_search, overseerr_list_requests |
