@@ -22,7 +22,7 @@ import {
   FileText,
   Download,
 } from "lucide-react";
-import { DEFAULT_SYSTEM_PROMPT } from "@/lib/llm/default-prompt";
+import { DEFAULT_SYSTEM_PROMPT, DEFAULT_REALTIME_SYSTEM_PROMPT } from "@/lib/llm/default-prompt";
 import { copyToClipboard } from "@/lib/utils";
 import { usePwaInstall } from "@/hooks/use-pwa-install";
 
@@ -37,8 +37,14 @@ interface LlmEndpoint {
   systemPrompt: string;
   enabled: boolean;
   isDefault: boolean;
+  supportsVoice: boolean;
+  supportsRealtime: boolean;
+  realtimeModel: string;
+  realtimeSystemPrompt: string;
   /** UI-only: tracks whether the user has chosen the default or a custom prompt. Not persisted. */
   promptMode?: "default" | "custom";
+  /** UI-only: tracks whether the user has chosen the default or a custom realtime prompt. Not persisted. */
+  realtimePromptMode?: "default" | "custom";
 }
 
 interface ArrConfig {
@@ -145,7 +151,12 @@ export default function SettingsPage() {
           setEndpoints(
             (d.llmEndpoints || []).map((ep: LlmEndpoint) => ({
               ...ep,
+              supportsVoice: ep.supportsVoice ?? false,
+              supportsRealtime: ep.supportsRealtime ?? false,
+              realtimeModel: ep.realtimeModel ?? "",
+              realtimeSystemPrompt: ep.realtimeSystemPrompt ?? "",
               promptMode: ep.systemPrompt ? "custom" : "default",
+              realtimePromptMode: ep.realtimeSystemPrompt ? "custom" : "default",
             })),
           );
           setPlexConfig({ url: d.plex?.url || "", token: d.plex?.token || "" });
@@ -207,10 +218,11 @@ export default function SettingsPage() {
   const handleSave = useCallback(async () => {
     setSaving(true);
     const body: Record<string, unknown> = {
-      llmEndpoints: endpoints.map(({ promptMode: _pm, ...ep }) => ({
+      llmEndpoints: endpoints.map(({ promptMode: _pm, realtimePromptMode: _rpm, ...ep }) => ({
         ...ep,
         // If user chose "default" mode, save empty string so the app default is used
         systemPrompt: _pm === "default" ? "" : ep.systemPrompt,
+        realtimeSystemPrompt: _rpm === "default" ? "" : ep.realtimeSystemPrompt,
       })),
       plex: { url: plexConfig.url, token: plexConfig.token },
     };
@@ -302,13 +314,31 @@ export default function SettingsPage() {
         }),
       });
       const data = await res.json();
+      const result = data.data;
       setTestResults((prev) => ({
         ...prev,
         [sectionKey]: {
-          success: data.data?.success ?? false,
-          message: data.data?.message || data.error,
+          success: result?.success ?? false,
+          message: result?.message || data.error,
         },
       }));
+      // If LLM test succeeded and capabilities were detected, update the endpoint
+      if (sectionKey === "llm" && endpointId && result?.success && result?.capabilities) {
+        const caps = result.capabilities as { supportsVoice: boolean; realtimeModel: string | null };
+        setEndpoints((prev) =>
+          prev.map((ep) => {
+            if (ep.id !== endpointId) return ep;
+            const realtimeModel = caps.realtimeModel ?? ep.realtimeModel ?? "";
+            return {
+              ...ep,
+              supportsVoice: caps.supportsVoice,
+              supportsRealtime: realtimeModel !== "",
+              realtimeModel,
+            };
+          }),
+        );
+        setSaved(false);
+      }
     } catch {
       setTestResults((prev) => ({
         ...prev,
@@ -330,8 +360,13 @@ export default function SettingsPage() {
         model: "gpt-4.1",
         systemPrompt: "",
         enabled: true,
-        isDefault: prev.length === 0, // First endpoint is default by default
+        isDefault: prev.length === 0,
+        supportsVoice: false,
+        supportsRealtime: false,
+        realtimeModel: "",
+        realtimeSystemPrompt: "",
         promptMode: "default" as const,
+        realtimePromptMode: "default" as const,
       },
     ]);
     setSaved(false);
@@ -677,6 +712,74 @@ export default function SettingsPage() {
                       Use <code className="font-mono">{"{{serviceList}}"}</code> as a placeholder for the configured services list.
                     </p>
                   </div>
+
+                  {/* Capability badges (auto-detected after Test Connection) */}
+                  <div className="space-y-1.5">
+                    <Label>Capabilities</Label>
+                    <div className="flex flex-wrap gap-2 text-xs">
+                      <span className={`rounded-full px-2 py-0.5 font-medium ${ep.supportsVoice ? "bg-green-500/15 text-green-600 dark:text-green-400" : "bg-muted text-muted-foreground"}`}>
+                        {ep.supportsVoice ? "✓ Voice (Whisper)" : "✗ No voice"}
+                      </span>
+                      <span className={`rounded-full px-2 py-0.5 font-medium ${ep.supportsRealtime ? "bg-green-500/15 text-green-600 dark:text-green-400" : "bg-muted text-muted-foreground"}`}>
+                        {ep.supportsRealtime ? `✓ Realtime (${ep.realtimeModel || "configured"})` : "✗ No realtime"}
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">Click Test to auto-detect capabilities.</p>
+                  </div>
+
+                  {/* Realtime model override */}
+                  <div className="space-y-1.5">
+                    <Label>Realtime Model <span className="text-muted-foreground font-normal">(optional — leave blank to disable)</span></Label>
+                    <Input
+                      value={ep.realtimeModel}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        updateEndpoint(ep.id, "realtimeModel", val);
+                        updateEndpoint(ep.id, "supportsRealtime", val !== "");
+                      }}
+                      placeholder="gpt-4o-realtime-preview-2024-12-17"
+                    />
+                  </div>
+
+                  {/* Realtime system prompt — only shown when a realtime model is set */}
+                  {ep.realtimeModel && (
+                    <div className="space-y-1.5">
+                      <Label>Realtime System Prompt</Label>
+                      <div className="flex gap-4 text-sm">
+                        <label className="flex items-center gap-1.5 cursor-pointer">
+                          <input
+                            type="radio"
+                            name={`realtimePromptMode-${ep.id}`}
+                            checked={(ep.realtimePromptMode ?? "default") === "default"}
+                            onChange={() => updateEndpoint(ep.id, "realtimePromptMode", "default")}
+                          />
+                          Use Default Realtime Prompt
+                        </label>
+                        <label className="flex items-center gap-1.5 cursor-pointer">
+                          <input
+                            type="radio"
+                            name={`realtimePromptMode-${ep.id}`}
+                            checked={ep.realtimePromptMode === "custom"}
+                            onChange={() => updateEndpoint(ep.id, "realtimePromptMode", "custom")}
+                          />
+                          Use Custom Prompt
+                        </label>
+                      </div>
+                      <Textarea
+                        value={(ep.realtimePromptMode ?? "default") === "default" ? DEFAULT_REALTIME_SYSTEM_PROMPT : ep.realtimeSystemPrompt}
+                        onChange={(e) => {
+                          if ((ep.realtimePromptMode ?? "default") === "default") {
+                            updateEndpoint(ep.id, "realtimePromptMode", "custom");
+                          }
+                          updateEndpoint(ep.id, "realtimeSystemPrompt", e.target.value);
+                        }}
+                        rows={6}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Use <code className="font-mono">{"{{serviceList}}"}</code> as a placeholder for the configured services list.
+                      </p>
+                    </div>
+                  )}
                 </CardContent>
                 <CardFooter className="flex items-center gap-3">
                   <Button

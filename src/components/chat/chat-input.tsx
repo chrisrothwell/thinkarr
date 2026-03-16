@@ -3,15 +3,33 @@
 import { useState, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { SendHorizontal, Square } from "lucide-react";
+import type { ChatMode } from "@/app/chat/page";
+import { VoiceInput } from "@/components/chat/voice-input";
+import { RealtimeChat } from "@/components/chat/realtime-chat";
 
 interface ChatInputProps {
   onSend: (message: string) => void;
   onStop?: () => void;
   disabled?: boolean;
   streaming?: boolean;
+  chatMode: ChatMode;
+  onModeChange: (mode: ChatMode) => void;
+  supportsVoice: boolean;
+  supportsRealtime: boolean;
+  selectedModel: string;
 }
 
-export function ChatInput({ onSend, onStop, disabled, streaming }: ChatInputProps) {
+export function ChatInput({
+  onSend,
+  onStop,
+  disabled,
+  streaming,
+  chatMode,
+  onModeChange,
+  supportsVoice,
+  supportsRealtime,
+  selectedModel,
+}: ChatInputProps) {
   const [value, setValue] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -43,34 +61,92 @@ export function ChatInput({ onSend, onStop, disabled, streaming }: ChatInputProp
     el.style.height = Math.min(el.scrollHeight, 200) + "px";
   }, []);
 
+  const showModeToggle = supportsVoice || supportsRealtime;
+
   return (
     <div className="border-t bg-background p-4">
-      <div className="mx-auto flex max-w-3xl items-end gap-2">
-        <textarea
-          ref={textareaRef}
-          className="flex-1 resize-none rounded-xl border border-input bg-card px-4 py-3 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50"
-          placeholder="Type a message..."
-          rows={1}
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={handleKeyDown}
-          onInput={handleInput}
-          disabled={disabled}
-        />
+      <div className="mx-auto max-w-3xl space-y-2">
+        {/* Mode toggle */}
+        {showModeToggle && (
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => onModeChange("text")}
+              className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                chatMode === "text"
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Text
+            </button>
+            {supportsVoice && (
+              <button
+                onClick={() => onModeChange("voice")}
+                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                  chatMode === "voice"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                Voice
+              </button>
+            )}
+            {supportsRealtime && (
+              <button
+                onClick={() => onModeChange("realtime")}
+                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                  chatMode === "realtime"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                Realtime
+              </button>
+            )}
+          </div>
+        )}
 
-        {streaming ? (
-          <Button size="icon" variant="secondary" onClick={onStop} className="shrink-0">
-            <Square size={16} />
-          </Button>
+        {/* Input area */}
+        {chatMode === "voice" ? (
+          <VoiceInput
+            modelId={selectedModel}
+            onTranscript={(text) => {
+              onSend(text);
+              onModeChange("text");
+            }}
+            disabled={disabled}
+          />
+        ) : chatMode === "realtime" ? (
+          <RealtimeChat modelId={selectedModel} />
         ) : (
-          <Button
-            size="icon"
-            onClick={handleSubmit}
-            disabled={disabled || !value.trim()}
-            className="shrink-0"
-          >
-            <SendHorizontal size={16} />
-          </Button>
+          <div className="flex items-end gap-2">
+            <textarea
+              ref={textareaRef}
+              className="flex-1 resize-none rounded-xl border border-input bg-card px-4 py-3 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50"
+              placeholder="Type a message..."
+              rows={1}
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              onKeyDown={handleKeyDown}
+              onInput={handleInput}
+              disabled={disabled}
+            />
+
+            {streaming ? (
+              <Button size="icon" variant="secondary" onClick={onStop} className="shrink-0">
+                <Square size={16} />
+              </Button>
+            ) : (
+              <Button
+                size="icon"
+                onClick={handleSubmit}
+                disabled={disabled || !value.trim()}
+                className="shrink-0"
+              >
+                <SendHorizontal size={16} />
+              </Button>
+            )}
+          </div>
         )}
       </div>
     </div>

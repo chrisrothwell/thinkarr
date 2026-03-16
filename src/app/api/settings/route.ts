@@ -15,6 +15,10 @@ export interface LlmEndpoint {
   systemPrompt: string;
   enabled: boolean;
   isDefault: boolean;
+  supportsVoice: boolean;
+  supportsRealtime: boolean;
+  realtimeModel: string;
+  realtimeSystemPrompt: string;
 }
 
 function getLlmEndpoints(): LlmEndpoint[] {
@@ -42,6 +46,10 @@ function getLlmEndpoints(): LlmEndpoint[] {
         systemPrompt: "",
         enabled: true,
         isDefault: true,
+        supportsVoice: false,
+        supportsRealtime: false,
+        realtimeModel: "",
+        realtimeSystemPrompt: "",
       },
     ];
   }
