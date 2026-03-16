@@ -36,6 +36,8 @@ interface LlmEndpoint {
   systemPrompt: string;
   enabled: boolean;
   isDefault: boolean;
+  /** UI-only: tracks whether the user has chosen the default or a custom prompt. Not persisted. */
+  promptMode?: "default" | "custom";
 }
 
 interface ArrConfig {
@@ -136,7 +138,12 @@ export default function SettingsPage() {
           const d = settingsData.data;
           // No LLM endpoints = first-time setup; enable exit guard + redirect-on-complete
           if ((d.llmEndpoints || []).length === 0) setIsInitialSetup(true);
-          setEndpoints(d.llmEndpoints || []);
+          setEndpoints(
+            (d.llmEndpoints || []).map((ep: LlmEndpoint) => ({
+              ...ep,
+              promptMode: ep.systemPrompt ? "custom" : "default",
+            })),
+          );
           setPlexConfig({ url: d.plex?.url || "", token: d.plex?.token || "" });
           const arrs: Record<string, ArrConfig> = {};
           for (const svc of ARR_SERVICES) {
@@ -196,7 +203,11 @@ export default function SettingsPage() {
   const handleSave = useCallback(async () => {
     setSaving(true);
     const body: Record<string, unknown> = {
-      llmEndpoints: endpoints,
+      llmEndpoints: endpoints.map(({ promptMode: _pm, ...ep }) => ({
+        ...ep,
+        // If user chose "default" mode, save empty string so the app default is used
+        systemPrompt: _pm === "default" ? "" : ep.systemPrompt,
+      })),
       plex: { url: plexConfig.url, token: plexConfig.token },
     };
     for (const svc of ARR_SERVICES) {
@@ -316,6 +327,7 @@ export default function SettingsPage() {
         systemPrompt: "",
         enabled: true,
         isDefault: prev.length === 0, // First endpoint is default by default
+        promptMode: "default" as const,
       },
     ]);
     setSaved(false);
@@ -579,30 +591,41 @@ export default function SettingsPage() {
                     />
                   </div>
                   <div className="space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <Label>System Prompt</Label>
-                      {ep.systemPrompt && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-6 text-xs text-muted-foreground px-2"
-                          onClick={() => {
-                            updateEndpoint(ep.id, "systemPrompt", "");
-                            setSaved(false);
-                          }}
-                        >
-                          Reset to Default
-                        </Button>
-                      )}
+                    <Label>System Prompt</Label>
+                    {/* Radio: Use Default / Use Custom */}
+                    <div className="flex gap-4 text-sm">
+                      <label className="flex items-center gap-1.5 cursor-pointer">
+                        <input
+                          type="radio"
+                          name={`promptMode-${ep.id}`}
+                          checked={(ep.promptMode ?? "default") === "default"}
+                          onChange={() => updateEndpoint(ep.id, "promptMode", "default")}
+                        />
+                        Use Default Prompt
+                      </label>
+                      <label className="flex items-center gap-1.5 cursor-pointer">
+                        <input
+                          type="radio"
+                          name={`promptMode-${ep.id}`}
+                          checked={ep.promptMode === "custom"}
+                          onChange={() => updateEndpoint(ep.id, "promptMode", "custom")}
+                        />
+                        Use Custom Prompt
+                      </label>
                     </div>
                     <Textarea
-                      value={ep.systemPrompt}
-                      onChange={(e) => updateEndpoint(ep.id, "systemPrompt", e.target.value)}
-                      placeholder={DEFAULT_SYSTEM_PROMPT}
+                      value={(ep.promptMode ?? "default") === "default" ? DEFAULT_SYSTEM_PROMPT : ep.systemPrompt}
+                      onChange={(e) => {
+                        // Auto-switch to custom when the user edits the text
+                        if ((ep.promptMode ?? "default") === "default") {
+                          updateEndpoint(ep.id, "promptMode", "custom");
+                        }
+                        updateEndpoint(ep.id, "systemPrompt", e.target.value);
+                      }}
                       rows={6}
                     />
                     <p className="text-xs text-muted-foreground">
-                      Leave blank to use the default. Use <code className="font-mono">{"{{serviceList}}"}</code> as a placeholder for the configured services list.
+                      Use <code className="font-mono">{"{{serviceList}}"}</code> as a placeholder for the configured services list.
                     </p>
                   </div>
                 </CardContent>
