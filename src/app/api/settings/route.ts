@@ -3,6 +3,7 @@ import { getSession } from "@/lib/auth/session";
 import { getConfig, setConfig } from "@/lib/config";
 import { logger } from "@/lib/logger";
 import { validateServiceUrl } from "@/lib/security/url-validation";
+import { checkUserApiRateLimit } from "@/lib/security/api-rate-limit";
 import type { ApiResponse } from "@/types/api";
 
 export interface LlmEndpoint {
@@ -64,6 +65,13 @@ export async function GET() {
     );
   }
 
+  if (!checkUserApiRateLimit(session.user.id)) {
+    return NextResponse.json<ApiResponse>(
+      { success: false, error: "Too many requests. Please slow down." },
+      { status: 429 },
+    );
+  }
+
   const data = {
     llmEndpoints: getMaskedEndpoints(),
     plex: {
@@ -94,6 +102,13 @@ export async function PATCH(request: Request) {
     return NextResponse.json<ApiResponse>(
       { success: false, error: "Admin access required" },
       { status: 403 },
+    );
+  }
+
+  if (!checkUserApiRateLimit(session.user.id)) {
+    return NextResponse.json<ApiResponse>(
+      { success: false, error: "Too many requests. Please slow down." },
+      { status: 429 },
     );
   }
 

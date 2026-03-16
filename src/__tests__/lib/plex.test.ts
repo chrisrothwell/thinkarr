@@ -3,6 +3,8 @@
  * - Season items use showTitle (parentTitle) so the LLM doesn't see bare "Season N"
  * - Episode items include showTitle, seasonNumber, episodeNumber
  * - getRecentlyAdded deduplicates TV entries by show
+ * - searchCollections returns items from a matching collection (issue #15)
+ * - searchByTag returns items tagged with a given genre (issue #15)
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -120,5 +122,90 @@ describe("mapMetadata — episode parent context", () => {
     expect(ep!.showTitle).toBe("Breaking Bad");
     expect(ep!.seasonNumber).toBe(1);
     expect(ep!.episodeNumber).toBe(1);
+  });
+});
+
+describe("searchCollections — issue #15", () => {
+  it("returns items from the matching collection", async () => {
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce({
+        // GET /library/sections
+        ok: true,
+        json: async () => ({ MediaContainer: { Directory: [{ key: "1" }] } }),
+      })
+      .mockResolvedValueOnce({
+        // GET /library/sections/1/collections?title=Marvel
+        ok: true,
+        json: async () => ({
+          MediaContainer: { Metadata: [{ ratingKey: "42", title: "Marvel", key: "/library/collections/42" }] },
+        }),
+      })
+      .mockResolvedValueOnce({
+        // GET /library/collections/42/children
+        ok: true,
+        json: async () => ({
+          MediaContainer: { Metadata: [MOVIE_ITEM] },
+        }),
+      }));
+
+    const { searchCollections } = await import("@/lib/services/plex");
+    const results = await searchCollections("Marvel");
+    expect(results).toHaveLength(1);
+    expect(results[0].title).toBe("The Matrix");
+  });
+
+  it("returns empty array when no collection matches", async () => {
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ MediaContainer: { Directory: [{ key: "1" }] } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ MediaContainer: { Metadata: [] } }),
+      }));
+
+    const { searchCollections } = await import("@/lib/services/plex");
+    const results = await searchCollections("Nonexistent");
+    expect(results).toHaveLength(0);
+  });
+});
+
+describe("searchByTag — issue #15", () => {
+  it("returns items matching the genre tag across sections", async () => {
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce({
+        // GET /library/sections
+        ok: true,
+        json: async () => ({
+          MediaContainer: { Directory: [{ key: "1", type: "movie" }] },
+        }),
+      })
+      .mockResolvedValueOnce({
+        // GET /library/sections/1/all?type=1&genre=Action
+        ok: true,
+        json: async () => ({
+          MediaContainer: { Metadata: [MOVIE_ITEM] },
+        }),
+      }));
+
+    const { searchByTag } = await import("@/lib/services/plex");
+    const results = await searchByTag("Action");
+    expect(results).toHaveLength(1);
+    expect(results[0].title).toBe("The Matrix");
+  });
+
+  it("skips non-movie and non-show sections", async () => {
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          MediaContainer: { Directory: [{ key: "1", type: "photo" }, { key: "2", type: "music" }] },
+        }),
+      }));
+
+    const { searchByTag } = await import("@/lib/services/plex");
+    const results = await searchByTag("Action");
+    expect(results).toHaveLength(0);
   });
 });
