@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { DEFAULT_SYSTEM_PROMPT } from "@/lib/llm/default-prompt";
 import { copyToClipboard } from "@/lib/utils";
+import { isPwaBannerDismissed, resetPwaBannerDismissal } from "@/lib/pwa";
 
 // --- Types ---
 
@@ -115,6 +116,12 @@ export default function SettingsPage() {
 
   // Test results
   const [testResults, setTestResults] = useState<Record<string, { success: boolean; message: string }>>({});
+
+  // PWA state (client-only, derived from localStorage)
+  const [pwaBannerDismissed, setPwaBannerDismissed] = useState(false);
+  useEffect(() => {
+    setPwaBannerDismissed(isPwaBannerDismissed());
+  }, []);
 
   // Log state
   const [logFiles, setLogFiles] = useState<{ name: string; size: number; modified: string }[]>([]);
@@ -514,14 +521,53 @@ export default function SettingsPage() {
           </div>
         )}
 
-        <Tabs defaultValue="llm" onValueChange={(v) => { if (v === "logs") loadLogFiles(); }}>
+        <Tabs defaultValue="general" onValueChange={(v) => { if (v === "logs") loadLogFiles(); }}>
           <TabsList>
+            <TabsTrigger value="general">General</TabsTrigger>
             <TabsTrigger value="llm">LLM Setup</TabsTrigger>
             <TabsTrigger value="services">Plex & Arrs</TabsTrigger>
             <TabsTrigger value="mcp">MCP</TabsTrigger>
             <TabsTrigger value="users">Users</TabsTrigger>
             <TabsTrigger value="logs">Logs</TabsTrigger>
           </TabsList>
+
+          {/* ===== TAB: General ===== */}
+          <TabsContent value="general" className="mt-4 space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Install as App (PWA)</CardTitle>
+                <CardDescription>
+                  Thinkarr can be installed as a Progressive Web App for quick access from your
+                  home screen or taskbar.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {pwaBannerDismissed ? (
+                  <div className="flex items-center gap-3">
+                    <p className="flex-1 text-sm text-muted-foreground">
+                      You previously dismissed the install prompt. Click below to show it again
+                      next time the browser offers installation.
+                    </p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        resetPwaBannerDismissal();
+                        setPwaBannerDismissed(false);
+                      }}
+                    >
+                      Re-enable install prompt
+                    </Button>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    The install prompt is active. If your browser supports PWA installation, a
+                    banner will appear at the top of the chat window.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
 
           {/* ===== TAB 1: LLM Setup ===== */}
           <TabsContent value="llm" className="mt-4 space-y-4">

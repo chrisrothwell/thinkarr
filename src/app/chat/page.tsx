@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Sidebar, SidebarToggle } from "@/components/chat/sidebar";
 import { MessageList } from "@/components/chat/message-list";
 import { ChatInput } from "@/components/chat/chat-input";
+import { PwaInstallBanner } from "@/components/chat/pwa-install-banner";
 import { Spinner } from "@/components/ui/spinner";
 import { useConversations } from "@/hooks/use-conversations";
 import { useChat } from "@/hooks/use-chat";
@@ -155,6 +156,8 @@ export default function ChatPage() {
       {sidebarCollapsed && <SidebarToggle onClick={() => setSidebarCollapsed(false)} />}
 
       <main className="flex flex-1 flex-col min-w-0">
+        <PwaInstallBanner />
+
         {/* Model selector bar */}
         {canChangeModel && models.length > 1 && (
           <div className="flex items-center justify-end border-b px-4 py-1.5">
