@@ -118,7 +118,7 @@ export default function SettingsPage() {
   const [testResults, setTestResults] = useState<Record<string, { success: boolean; message: string }>>({});
 
   // PWA install (also registers SW and captures beforeinstallprompt)
-  const { isAvailable: pwaInstallAvailable, install: triggerPwaInstall } = usePwaInstall();
+  const { isAvailable: pwaInstallAvailable, isMobile: pwaMobile, isIosDevice: pwaIsIos, install: triggerPwaInstall } = usePwaInstall();
 
   // Log state
   const [logFiles, setLogFiles] = useState<{ name: string; size: number; modified: string }[]>([]);
@@ -539,11 +539,23 @@ export default function SettingsPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                {pwaInstallAvailable ? (
+                {!pwaMobile ? (
+                  <p className="text-sm text-muted-foreground">
+                    PWA installation is only available on mobile devices. Open Thinkarr in Chrome
+                    or Safari on your phone or tablet to install it.
+                  </p>
+                ) : pwaIsIos ? (
+                  <p className="text-sm text-muted-foreground">
+                    To install on iOS, open Thinkarr in{" "}
+                    <span className="font-medium text-foreground">Safari</span>, tap the{" "}
+                    <span className="font-medium text-foreground">Share</span> button, then choose{" "}
+                    <span className="font-medium text-foreground">Add to Home Screen</span>.
+                    Requires iOS 16.4 or later for full functionality.
+                  </p>
+                ) : pwaInstallAvailable ? (
                   <div className="flex items-center gap-3">
                     <p className="flex-1 text-sm text-muted-foreground">
-                      Your browser supports installation. Click Install to add Thinkarr to your
-                      home screen or taskbar.
+                      Tap Install to add Thinkarr to your home screen for quick access.
                     </p>
                     <Button variant="outline" size="sm" onClick={() => triggerPwaInstall()}>
                       <Download className="mr-2 h-4 w-4" />
@@ -552,9 +564,8 @@ export default function SettingsPage() {
                   </div>
                 ) : (
                   <p className="text-sm text-muted-foreground">
-                    Installation is not currently available. This may be because your browser does
-                    not support PWA installation, the app is already installed, or the page was not
-                    served over HTTPS.
+                    Installation is not currently available. This may be because the app is already
+                    installed, or the page was not served over HTTPS.
                   </p>
                 )}
               </CardContent>

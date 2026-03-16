@@ -6,17 +6,27 @@ import {
   isPwaInstallAvailable,
   onPwaAvailabilityChange,
   triggerPwaInstall,
+  isMobileDevice,
+  isIos,
 } from "@/lib/pwa";
 
 /**
  * Registers the service worker and captures the beforeinstallprompt event.
- * Returns reactive install availability and a function to trigger the install.
+ *
+ * Returns:
+ *   isAvailable   — true when a deferred prompt is ready to trigger
+ *   isMobile      — true on touch-primary devices; callers should hide PWA UI on desktop
+ *   isIosDevice   — true on iOS, where beforeinstallprompt never fires and
+ *                   users must install manually via Safari Share sheet
+ *   install       — triggers the native install flow
  */
 export function usePwaInstall() {
   // Initialise from the module singleton so components that mount after the
   // prompt was captured (e.g. navigating to Settings) get the correct value
   // without a synchronous setState call inside an effect.
   const [isAvailable, setIsAvailable] = useState(() => isPwaInstallAvailable());
+  const [isMobile] = useState(() => isMobileDevice());
+  const [isIosDevice] = useState(() => isIos());
   const swRegistered = useRef(false);
 
   useEffect(() => {
@@ -45,5 +55,5 @@ export function usePwaInstall() {
     };
   }, []);
 
-  return { isAvailable, install: triggerPwaInstall };
+  return { isAvailable, isMobile, isIosDevice, install: triggerPwaInstall };
 }

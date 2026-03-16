@@ -20,6 +20,32 @@ export function dismissPwaBanner(): void {
 }
 
 // ---------------------------------------------------------------------------
+// Platform detection
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns true on touch-primary devices (phones/tablets).
+ * Uses the CSS `pointer: coarse` media query, which is reliable across modern
+ * browsers and avoids brittle user-agent string parsing.
+ * Always returns false during SSR.
+ */
+export function isMobileDevice(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.matchMedia("(pointer: coarse)").matches;
+}
+
+/**
+ * Returns true on iOS (iPhone, iPad, iPod).
+ * iOS Safari never fires `beforeinstallprompt`; users must install manually
+ * via Share → "Add to Home Screen".
+ * Always returns false during SSR.
+ */
+export function isIos(): boolean {
+  if (typeof window === "undefined") return false;
+  return /iPad|iPhone|iPod/.test(navigator.userAgent);
+}
+
+// ---------------------------------------------------------------------------
 // Module-level deferred prompt store
 // Persists the BeforeInstallPromptEvent across client-side page navigations so
 // that both the chat banner and the Settings > General tab can trigger install.

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   isPwaBannerDismissed,
   dismissPwaBanner,
@@ -6,6 +6,8 @@ import {
   isPwaInstallAvailable,
   onPwaAvailabilityChange,
   triggerPwaInstall,
+  isMobileDevice,
+  isIos,
   PWA_DISMISSED_KEY,
 } from "@/lib/pwa";
 
@@ -159,6 +161,94 @@ describe("pwa utilities", () => {
       // listener called once when prompt stored, once when consumed
       expect(listener).toHaveBeenCalled();
       unsub();
+    });
+  });
+
+  // --- Platform detection ---
+
+  describe("isMobileDevice", () => {
+    let originalMatchMedia: typeof window.matchMedia;
+
+    beforeEach(() => {
+      originalMatchMedia = window.matchMedia;
+    });
+
+    afterEach(() => {
+      Object.defineProperty(window, "matchMedia", {
+        value: originalMatchMedia,
+        writable: true,
+        configurable: true,
+      });
+    });
+
+    it("returns true when pointer media query matches (touch device)", () => {
+      Object.defineProperty(window, "matchMedia", {
+        value: vi.fn().mockReturnValue({ matches: true }),
+        writable: true,
+        configurable: true,
+      });
+      expect(isMobileDevice()).toBe(true);
+    });
+
+    it("returns false when pointer media query does not match (desktop)", () => {
+      Object.defineProperty(window, "matchMedia", {
+        value: vi.fn().mockReturnValue({ matches: false }),
+        writable: true,
+        configurable: true,
+      });
+      expect(isMobileDevice()).toBe(false);
+    });
+  });
+
+  describe("isIos", () => {
+    let originalUserAgent: string;
+
+    beforeEach(() => {
+      originalUserAgent = navigator.userAgent;
+    });
+
+    afterEach(() => {
+      Object.defineProperty(navigator, "userAgent", {
+        value: originalUserAgent,
+        writable: true,
+        configurable: true,
+      });
+    });
+
+    it("returns true for iPhone user agent", () => {
+      Object.defineProperty(navigator, "userAgent", {
+        value: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
+        writable: true,
+        configurable: true,
+      });
+      expect(isIos()).toBe(true);
+    });
+
+    it("returns true for iPad user agent", () => {
+      Object.defineProperty(navigator, "userAgent", {
+        value: "Mozilla/5.0 (iPad; CPU OS 16_4 like Mac OS X) AppleWebKit/605.1.15",
+        writable: true,
+        configurable: true,
+      });
+      expect(isIos()).toBe(true);
+    });
+
+    it("returns false for Android user agent", () => {
+      Object.defineProperty(navigator, "userAgent", {
+        value: "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 Chrome/117.0.0.0",
+        writable: true,
+        configurable: true,
+      });
+      expect(isIos()).toBe(false);
+    });
+
+    it("returns false for desktop Chrome user agent", () => {
+      Object.defineProperty(navigator, "userAgent", {
+        value: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/117.0.0.0",
+        writable: true,
+        configurable: true,
+      });
+      expect(isIos()).toBe(false);
     });
   });
 });
