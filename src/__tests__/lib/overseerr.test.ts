@@ -43,7 +43,25 @@ describe("listRequests — issue #89: titles should not return Unknown", () => {
     vi.resetModules();
   });
 
-  it("resolves movie title from /movie/{tmdbId}", async () => {
+  it("uses title already in media object (Jellyseerr/enriched response) without extra fetch", async () => {
+    const enrichedRequest = {
+      ...MOVIE_REQUEST,
+      media: { ...MOVIE_REQUEST.media, title: "Fight Club" },
+    };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ results: [enrichedRequest] }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { listRequests } = await import("@/lib/services/overseerr");
+    const results = await listRequests();
+    expect(results[0].title).toBe("Fight Club");
+    // Only one fetch (the /request call) — no extra TMDB lookup needed
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves movie title from /movie/{tmdbId} when media object lacks title", async () => {
     vi.stubGlobal("fetch", vi.fn()
       .mockImplementation((url: string) => {
         if (url.includes("/request")) {
