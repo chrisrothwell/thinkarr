@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { getEndpointConfig } from "@/lib/llm/client";
 import { buildRealtimeSystemPrompt } from "@/lib/llm/system-prompt";
+import { isOpenAIEndpoint } from "@/lib/services/test-connection";
 import { initializeTools } from "@/lib/tools/init";
 import { getOpenAITools } from "@/lib/tools/registry";
 import { checkUserApiRateLimit } from "@/lib/security/api-rate-limit";
@@ -40,6 +41,13 @@ export async function POST(request: Request) {
   if (!ep || !ep.supportsRealtime || !ep.realtimeModel) {
     return NextResponse.json<ApiResponse>(
       { success: false, error: "This endpoint does not support the Realtime API" },
+      { status: 400 },
+    );
+  }
+
+  if (!isOpenAIEndpoint(ep.baseUrl)) {
+    return NextResponse.json<ApiResponse>(
+      { success: false, error: "Realtime is only supported on OpenAI endpoints (api.openai.com)" },
       { status: 400 },
     );
   }
