@@ -456,3 +456,16 @@ External MCP access uses bearer token (from `mcp.bearerToken` config). Optional 
 ### Phase 19: Version Bump to 1.1.1-beta.2
 
 - Bumped `package.json` and `package-lock.json` version from `1.1.0-beta.1` to `1.1.1-beta.2`.
+
+### Phase 20: Fix Docker Build Flakiness (issue #26)
+
+**Problem:** Multi-arch Docker builds using QEMU emulation for `linux/arm64` intermittently failed with `qemu: uncaught target signal 4 (Illegal instruction) - core dumped` during `npm ci`. QEMU cannot reliably emulate all CPU instructions Node.js uses when compiling native modules (`better-sqlite3`).
+
+**Fix:** Replaced single QEMU-based multi-arch build job with native runners per platform:
+- `linux/amd64` builds on `ubuntu-latest` (x86_64)
+- `linux/arm64` builds on `ubuntu-24.04-arm` (native arm64)
+
+Each platform builds and pushes by digest, then a `docker-merge` job assembles the final multi-arch manifest via `docker buildx imagetools create`.
+
+**Files changed:**
+- `.github/workflows/docker-publish.yml` — split `docker` job into matrix + added `docker-merge` job
