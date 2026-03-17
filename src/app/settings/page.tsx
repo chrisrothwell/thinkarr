@@ -96,37 +96,40 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
-  // LLM state
+  // Current session user (determines admin vs non-admin view)
+  const [currentUser, setCurrentUser] = useState<{ id: number; isAdmin: boolean; plexUsername: string; plexAvatarUrl: string | null; plexEmail: string | null } | null>(null);
+
+  // LLM state (admin only)
   const [endpoints, setEndpoints] = useState<LlmEndpoint[]>([]);
 
-  // Plex & Arrs state
+  // Plex & Arrs state (admin only)
   const [plexConfig, setPlexConfig] = useState<PlexConfig>({ url: "", token: "" });
   const [arrConfigs, setArrConfigs] = useState<Record<string, ArrConfig>>({});
 
-  // Initial setup mode + redirect countdown
+  // Initial setup mode + redirect countdown (admin only)
   const [isInitialSetup, setIsInitialSetup] = useState(false);
   const [redirectCountdown, setRedirectCountdown] = useState<number | null>(null);
   const countdownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Plex discovery state
+  // Plex discovery state (admin only)
   const [plexDiscovering, setPlexDiscovering] = useState(false);
   const [plexDevices, setPlexDevices] = useState<PlexDevice[]>([]);
   const [plexDiscoverError, setPlexDiscoverError] = useState<string | null>(null);
 
-  // MCP state
+  // MCP state — admin global token; also per-user token for non-admins
   const [mcpToken, setMcpToken] = useState<string>("");
   const [mcpTokenLoading, setMcpTokenLoading] = useState(false);
 
-  // User state
+  // User state (admin only)
   const [users, setUsers] = useState<UserEntry[]>([]);
 
-  // Test results
+  // Test results (admin only)
   const [testResults, setTestResults] = useState<Record<string, { success: boolean; message: string }>>({});
 
   // PWA install (also registers SW and captures beforeinstallprompt)
   const { isAvailable: pwaInstallAvailable, isMobile: pwaMobile, isIosDevice: pwaIsIos, install: triggerPwaInstall } = usePwaInstall();
 
-  // Log state
+  // Log state (admin only)
   const [logFiles, setLogFiles] = useState<{ name: string; size: number; modified: string }[]>([]);
   const [logFilesLoading, setLogFilesLoading] = useState(false);
   const [logFilesLoaded, setLogFilesLoaded] = useState(false);
@@ -138,50 +141,66 @@ export default function SettingsPage() {
 
   // --- Load data ---
   useEffect(() => {
-    Promise.all([
-      fetch("/api/settings").then((r) => r.json()),
-      fetch("/api/settings/users").then((r) => r.json()),
-      fetch("/api/settings/mcp-token").then((r) => r.json()),
-    ])
-      .then(([settingsData, usersData, mcpData]) => {
-        if (settingsData.success) {
-          const d = settingsData.data;
-          // No LLM endpoints = first-time setup; enable exit guard + redirect-on-complete
-          if ((d.llmEndpoints || []).length === 0) setIsInitialSetup(true);
-          setEndpoints(
-            (d.llmEndpoints || []).map((ep: LlmEndpoint) => ({
-              ...ep,
-              supportsVoice: ep.supportsVoice ?? false,
-              supportsRealtime: ep.supportsRealtime ?? false,
-              realtimeModel: ep.realtimeModel ?? "",
-              realtimeSystemPrompt: ep.realtimeSystemPrompt ?? "",
-              promptMode: ep.systemPrompt ? "custom" : "default",
-              realtimePromptMode: ep.realtimeSystemPrompt ? "custom" : "default",
-            })),
-          );
-          setPlexConfig({ url: d.plex?.url || "", token: d.plex?.token || "" });
-          const arrs: Record<string, ArrConfig> = {};
-          for (const svc of ARR_SERVICES) {
-            arrs[svc.key] = {
-              url: d[svc.key]?.url || "",
-              apiKey: d[svc.key]?.apiKey || "",
-            };
+    // Always fetch session first to determine admin status
+    fetch("/api/auth/session")
+      .then((r) => r.json())
+      .then(async (sessionData) => {
+        if (!sessionData.success) return;
+        const user = sessionData.data.user;
+        setCurrentUser(user);
+
+        if (user.isAdmin) {
+          // Admin: load full settings
+          const [settingsData, usersData, mcpData] = await Promise.all([
+            fetch("/api/settings").then((r) => r.json()),
+            fetch("/api/settings/users").then((r) => r.json()),
+            fetch("/api/settings/mcp-token").then((r) => r.json()),
+          ]);
+
+          if (settingsData.success) {
+            const d = settingsData.data;
+            if ((d.llmEndpoints || []).length === 0) setIsInitialSetup(true);
+            setEndpoints(
+              (d.llmEndpoints || []).map((ep: LlmEndpoint) => ({
+                ...ep,
+                supportsVoice: ep.supportsVoice ?? false,
+                supportsRealtime: ep.supportsRealtime ?? false,
+                realtimeModel: ep.realtimeModel ?? "",
+                realtimeSystemPrompt: ep.realtimeSystemPrompt ?? "",
+                promptMode: ep.systemPrompt ? "custom" : "default",
+                realtimePromptMode: ep.realtimeSystemPrompt ? "custom" : "default",
+              })),
+            );
+            setPlexConfig({ url: d.plex?.url || "", token: d.plex?.token || "" });
+            const arrs: Record<string, ArrConfig> = {};
+            for (const svc of ARR_SERVICES) {
+              arrs[svc.key] = {
+                url: d[svc.key]?.url || "",
+                apiKey: d[svc.key]?.apiKey || "",
+              };
+            }
+            setArrConfigs(arrs);
           }
-          setArrConfigs(arrs);
+          if (usersData.success) {
+            setUsers(
+              (usersData.data || []).map((u: UserEntry) => ({
+                ...u,
+                rateLimitMessages: u.rateLimitMessages ?? 100,
+                rateLimitPeriod: u.rateLimitPeriod ?? "day",
+                msgCount24h: u.msgCount24h ?? 0,
+                msgCount7d: u.msgCount7d ?? 0,
+                msgCount30d: u.msgCount30d ?? 0,
+              })),
+            );
+          }
+          if (mcpData.success) setMcpToken(mcpData.data?.token || "");
+        } else {
+          // Non-admin: load only their own MCP token
+          try {
+            const mcpData = await fetch(`/api/settings/mcp-token/user/${user.id}`).then((r) => r.json());
+            if (mcpData.success) setMcpToken(mcpData.data?.token || "");
+          } catch { /* non-fatal */ }
         }
-        if (usersData.success) {
-          setUsers(
-            (usersData.data || []).map((u: UserEntry) => ({
-              ...u,
-              rateLimitMessages: u.rateLimitMessages ?? 100,
-              rateLimitPeriod: u.rateLimitPeriod ?? "day",
-              msgCount24h: u.msgCount24h ?? 0,
-              msgCount7d: u.msgCount7d ?? 0,
-              msgCount30d: u.msgCount30d ?? 0,
-            })),
-          );
-        }
-        if (mcpData.success) setMcpToken(mcpData.data?.token || "");
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -405,6 +424,20 @@ export default function SettingsPage() {
     }
   }
 
+  async function regenerateOwnMcpToken() {
+    if (!currentUser) return;
+    setMcpTokenLoading(true);
+    try {
+      const res = await fetch(`/api/settings/mcp-token/user/${currentUser.id}`, { method: "POST" });
+      const data = await res.json();
+      if (data.success) setMcpToken(data.data.token);
+    } catch {
+      // Silent fail
+    } finally {
+      setMcpTokenLoading(false);
+    }
+  }
+
   // --- Logs ---
   async function loadLogFiles() {
     if (logFilesLoaded) return;
@@ -556,11 +589,11 @@ export default function SettingsPage() {
         <Tabs defaultValue={isInitialSetup ? "llm" : "general"} onValueChange={(v) => { if (v === "logs") loadLogFiles(); }}>
           <TabsList>
             <TabsTrigger value="general">General</TabsTrigger>
-            <TabsTrigger value="llm">LLM Setup</TabsTrigger>
-            <TabsTrigger value="services">Plex & Arrs</TabsTrigger>
+            {currentUser?.isAdmin && <TabsTrigger value="llm">LLM Setup</TabsTrigger>}
+            {currentUser?.isAdmin && <TabsTrigger value="services">Plex & Arrs</TabsTrigger>}
             <TabsTrigger value="mcp">MCP</TabsTrigger>
             <TabsTrigger value="users">Users</TabsTrigger>
-            <TabsTrigger value="logs">Logs</TabsTrigger>
+            {currentUser?.isAdmin && <TabsTrigger value="logs">Logs</TabsTrigger>}
           </TabsList>
 
           {/* ===== TAB: General ===== */}
@@ -607,7 +640,7 @@ export default function SettingsPage() {
             </Card>
           </TabsContent>
 
-          {/* ===== TAB 1: LLM Setup ===== */}
+          {/* ===== TAB 1: LLM Setup (admin only) ===== */}
           <TabsContent value="llm" className="mt-4 space-y-4">
             {endpoints.map((ep) => (
               <Card key={ep.id}>
@@ -980,7 +1013,7 @@ export default function SettingsPage() {
                 </div>
 
                 <div className="space-y-1.5">
-                  <Label>Bearer Token</Label>
+                  <Label>{currentUser?.isAdmin ? "Admin Bearer Token" : "Your Bearer Token"}</Label>
                   <div className="flex items-center gap-2">
                     <Input
                       value={mcpToken}
@@ -997,7 +1030,7 @@ export default function SettingsPage() {
                     <Button
                       variant="secondary"
                       size="icon"
-                      onClick={regenerateMcpToken}
+                      onClick={currentUser?.isAdmin ? regenerateMcpToken : regenerateOwnMcpToken}
                       disabled={mcpTokenLoading}
                     >
                       {mcpTokenLoading ? <Spinner size={14} /> : <RefreshCw size={14} />}
@@ -1008,30 +1041,64 @@ export default function SettingsPage() {
                   </p>
                 </div>
 
-                <div className="space-y-2">
-                  <Label>Registered Tools</Label>
-                  <div className="grid grid-cols-2 gap-2 text-sm">
-                    {[
-                      { name: "Plex", tools: ["search_library", "get_watch_history", "get_on_deck", "check_availability"] },
-                      { name: "Sonarr", tools: ["search_series", "get_calendar", "get_queue", "list_series", "monitor_series"] },
-                      { name: "Radarr", tools: ["search_movie", "list_movies", "get_queue", "monitor_movie"] },
-                      { name: "Overseerr", tools: ["search", "request_movie", "request_tv", "list_requests"] },
-                    ].map((svc) => (
-                      <div key={svc.name} className="rounded-lg border p-3">
-                        <p className="font-medium text-foreground mb-1">{svc.name}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {svc.tools.length} tool{svc.tools.length !== 1 ? "s" : ""}
-                        </p>
-                      </div>
-                    ))}
+                {currentUser?.isAdmin && (
+                  <div className="space-y-2">
+                    <Label>Registered Tools</Label>
+                    <div className="grid grid-cols-2 gap-2 text-sm">
+                      {[
+                        { name: "Plex", tools: ["search_library", "get_watch_history", "get_on_deck", "check_availability"] },
+                        { name: "Sonarr", tools: ["search_series", "get_calendar", "get_queue", "list_series", "monitor_series"] },
+                        { name: "Radarr", tools: ["search_movie", "list_movies", "get_queue", "monitor_movie"] },
+                        { name: "Overseerr", tools: ["search", "request_movie", "request_tv", "list_requests"] },
+                      ].map((svc) => (
+                        <div key={svc.name} className="rounded-lg border p-3">
+                          <p className="font-medium text-foreground mb-1">{svc.name}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {svc.tools.length} tool{svc.tools.length !== 1 ? "s" : ""}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
 
           {/* ===== TAB 4: User Settings ===== */}
           <TabsContent value="users" className="mt-4 space-y-4">
+            {/* Non-admin: read-only view of own account */}
+            {!currentUser?.isAdmin && currentUser && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg">Your Account</CardTitle>
+                  <CardDescription>Your account details.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex items-start gap-3 rounded-lg border p-3">
+                    <Avatar
+                      src={currentUser.plexAvatarUrl}
+                      fallback={currentUser.plexUsername}
+                      size="sm"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium truncate">{currentUser.plexUsername}</p>
+                      {currentUser.plexEmail && (
+                        <p className="text-xs text-muted-foreground truncate">{currentUser.plexEmail}</p>
+                      )}
+                      <div className="mt-2 flex flex-wrap gap-3">
+                        <span className="text-sm text-muted-foreground">
+                          Role: <span className="text-foreground">User</span>
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Admin: full user management */}
+            {currentUser?.isAdmin && (
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg">User Management</CardTitle>
@@ -1210,9 +1277,10 @@ export default function SettingsPage() {
                 )}
               </CardContent>
             </Card>
+            )} {/* end admin user management */}
           </TabsContent>
 
-          {/* ===== TAB 5: Logs ===== */}
+          {/* ===== TAB 5: Logs (admin only) ===== */}
           <TabsContent value="logs" className="mt-4">
             <Card>
               <CardHeader>
@@ -1307,18 +1375,20 @@ export default function SettingsPage() {
           </TabsContent>
         </Tabs>
 
-        {/* Save button (global) */}
-        <div className="mt-6 flex items-center gap-3">
-          <Button onClick={handleSave} disabled={saving}>
-            {saving && <Spinner className="mr-2" size={14} />}
-            Save Changes
-          </Button>
-          {saved && (
-            <CardDescription className="text-green-500">
-              Settings saved successfully.
-            </CardDescription>
-          )}
-        </div>
+        {/* Save button (admin only) */}
+        {currentUser?.isAdmin && (
+          <div className="mt-6 flex items-center gap-3">
+            <Button onClick={handleSave} disabled={saving}>
+              {saving && <Spinner className="mr-2" size={14} />}
+              Save Changes
+            </Button>
+            {saved && (
+              <CardDescription className="text-green-500">
+                Settings saved successfully.
+              </CardDescription>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

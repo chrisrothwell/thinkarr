@@ -253,7 +253,7 @@ export default function ChatPage() {
         />
       </main>
       {appVersion && (
-        <div className="fixed bottom-2 left-2 z-10 pointer-events-none">
+        <div className="fixed bottom-2 left-2 z-10 pointer-events-none hidden md:block">
           <span className="text-[10px] text-muted-foreground/40 font-mono select-none">
             {/^\d/.test(appVersion) ? `v${appVersion}` : appVersion}
           </span>

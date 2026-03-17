@@ -142,11 +142,9 @@ export function Sidebar({
             <span className="flex-1 truncate text-sm text-sidebar-foreground">
               {user.plexUsername}
             </span>
-            {user.isAdmin && (
-              <Button variant="ghost" size="icon" onClick={() => router.push("/settings")} className="h-8 w-8 text-sidebar-foreground">
-                <Settings size={14} />
-              </Button>
-            )}
+            <Button variant="ghost" size="icon" onClick={() => router.push("/settings")} className="h-8 w-8 text-sidebar-foreground">
+              <Settings size={14} />
+            </Button>
             <Button variant="ghost" size="icon" onClick={handleLogout} className="h-8 w-8 text-sidebar-foreground">
               <LogOut size={14} />
             </Button>

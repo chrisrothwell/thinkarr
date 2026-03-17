@@ -46,10 +46,34 @@ export function registerPlexTools() {
 
   defineTool({
     name: "plex_search_by_tag",
-    description: "Discover titles in the Plex library filtered by a tag such as genre, mood, or custom user-defined tag (e.g. 'Action', 'Comedy', 'Family'). Searches across all movie and TV show sections.",
+    description:
+      "Discover titles in the Plex library filtered by a tag value within a specific tag category. " +
+      "Use tagType to specify the category: 'genre' (e.g. 'Action', 'Horror', 'Comedy'), " +
+      "'director' (e.g. 'Christopher Nolan'), 'actor' (e.g. 'Tom Hanks'), " +
+      "'country' (e.g. 'Canada', 'United Kingdom'), 'studio' (e.g. 'A24'), " +
+      "'contentRating' (e.g. 'R', 'PG-13'), or 'label' for custom labels. " +
+      "Examples: movies from Canada → tagType='country', tag='Canada'; horror movies → tagType='genre', tag='Horror'.",
     schema: z.object({
-      tag: z.string().describe("Tag value to filter by (genre, mood, or custom tag)"),
+      tag: z.string().describe("Tag value to filter by (e.g. 'Horror', 'Canada', 'Christopher Nolan')"),
+      tagType: z
+        .enum(["genre", "director", "actor", "country", "studio", "contentRating", "label", "mood"])
+        .optional()
+        .describe("Category of the tag. Defaults to 'genre'. Use 'country' for country queries, 'director' for director queries, etc."),
     }),
-    handler: async (args) => plex.searchByTag(args.tag),
+    handler: async (args) => plex.searchByTag(args.tag, args.tagType ?? "genre"),
+  });
+
+  defineTool({
+    name: "plex_get_title_tags",
+    description:
+      "Retrieve all tags associated with a specific Plex title (genres, directors, actors, countries, studio, content rating, labels). " +
+      "Use this when the user asks what tags, genres, or categories a specific title belongs to. " +
+      "Pass the Plex metadata key from a previous search result (e.g. '/library/metadata/123').",
+    schema: z.object({
+      metadataKey: z
+        .string()
+        .describe("Plex metadata key for the title (e.g. '/library/metadata/123' from a search result's 'key' field)"),
+    }),
+    handler: async (args) => plex.getTagsForTitle(args.metadataKey),
   });
 }

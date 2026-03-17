@@ -141,7 +141,42 @@ export interface OverseerrRequest {
 
 export async function listRequests(): Promise<OverseerrRequest[]> {
   const data = await overseerrFetch("/request?take=20&skip=0&sort=added");
-  return (data?.results || []).map((r: Record<string, unknown>) => {
+  const rawRequests: Record<string, unknown>[] = data?.results || [];
+
+  // Build initial title map from fields already in the media object.
+  // Some Overseerr/Jellyseerr versions include title/name in the media object;
+  // for those that don't, fall back to fetching from /movie/{tmdbId} or /tv/{tmdbId}.
+  const titleMap = new Map<number, string>();
+  for (const r of rawRequests) {
+    const media = r.media as Record<string, unknown> | undefined;
+    const candidate = (media?.title || media?.name) as string | undefined;
+    if (candidate) titleMap.set(r.id as number, candidate);
+  }
+
+  // Fetch titles in parallel only for requests where the media object lacked them
+  const needsFetch = rawRequests.filter((r) => !titleMap.has(r.id as number));
+  if (needsFetch.length > 0) {
+    await Promise.all(
+      needsFetch.map(async (r) => {
+        const media = r.media as Record<string, unknown> | undefined;
+        const tmdbId = media?.tmdbId as number | undefined;
+        if (!tmdbId) return;
+        try {
+          if (r.type === "movie") {
+            const detail = await overseerrFetch(`/movie/${tmdbId}`);
+            const title = (detail?.title || detail?.originalTitle) as string | undefined;
+            if (title) titleMap.set(r.id as number, title);
+          } else if (r.type === "tv") {
+            const detail = await overseerrFetch(`/tv/${tmdbId}`);
+            const name = (detail?.name || detail?.originalName) as string | undefined;
+            if (name) titleMap.set(r.id as number, name);
+          }
+        } catch { /* non-fatal — falls back to "Unknown" */ }
+      }),
+    );
+  }
+
+  return rawRequests.map((r: Record<string, unknown>) => {
     const media = r.media as Record<string, unknown> | undefined;
     const isTV = r.type === "tv";
     const seasonsList = isTV
@@ -151,7 +186,7 @@ export async function listRequests(): Promise<OverseerrRequest[]> {
     return {
       id: r.id as number,
       type: r.type as string,
-      title: (media?.title || media?.name || "Unknown") as string,
+      title: (titleMap.get(r.id as number) ?? "Unknown") as string,
       year: ((media?.releaseDate || media?.firstAirDate) as string | undefined)?.substring(0, 4),
       status: requestStatusLabel(r.status as number),
       requestedBy: ((r.requestedBy as Record<string, unknown>)?.displayName || "Unknown") as string,
