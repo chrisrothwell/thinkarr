@@ -42,6 +42,14 @@ export interface OverseerrSeasonStatus {
   status: string; // "Available" | "Partially Available" | "Pending" | "Not Requested"
 }
 
+export interface OverseerrRequestSummary {
+  id: number;
+  status: string;
+  requestedBy: string;
+  requestedAt: string;
+  seasonsRequested?: number[];
+}
+
 export interface OverseerrSearchResult {
   id: number;
   mediaType: string;
@@ -55,6 +63,8 @@ export interface OverseerrSearchResult {
   // TV-specific
   seasonCount?: number;
   seasons?: OverseerrSeasonStatus[];
+  // Request details — populated when mediaInfo includes pending/active requests
+  requests?: OverseerrRequestSummary[];
 }
 
 function mediaStatusLabel(info?: Record<string, unknown>): string {
@@ -105,6 +115,26 @@ export async function search(query: string): Promise<OverseerrSearchResult[]> {
     const posterPath = r.posterPath as string | undefined;
     const extIds = r.externalIds as Record<string, unknown> | undefined;
     const imdbId = (r.imdbId as string | undefined) ?? (extIds?.imdbId as string | undefined);
+
+    // Extract any pending/active requests embedded in mediaInfo
+    const rawRequests = (mediaInfo?.requests as Record<string, unknown>[]) ?? [];
+    const requests: OverseerrRequestSummary[] = rawRequests.map((req) => {
+      const requester = req.requestedBy as Record<string, unknown> | undefined;
+      const isShowRequest = r.mediaType === "tv";
+      const seasons = isShowRequest
+        ? ((req.seasons as Record<string, unknown>[]) ?? [])
+            .map((s) => s.seasonNumber as number)
+            .sort((a, b) => a - b)
+        : undefined;
+      return {
+        id: req.id as number,
+        status: requestStatusLabel(req.status as number),
+        requestedBy: (requester?.displayName as string | undefined) ?? "Unknown",
+        requestedAt: req.createdAt as string,
+        seasonsRequested: seasons && seasons.length > 0 ? seasons : undefined,
+      };
+    });
+
     return {
       id: r.id as number,
       mediaType: r.mediaType as string,
@@ -124,6 +154,7 @@ export async function search(query: string): Promise<OverseerrSearchResult[]> {
               status: seasonStatusLabel(s.status as number),
             }))
         : undefined,
+      requests: requests.length > 0 ? requests : undefined,
     };
   });
 }
@@ -137,6 +168,8 @@ export interface OverseerrRequest {
   requestedBy: string;
   requestedAt: string;
   seasonsRequested?: number[];
+  posterUrl?: string;   // Full TMDB poster URL when available
+  tmdbId?: number;      // TMDB ID for use with overseerr_search to get full details
 }
 
 export async function listRequests(): Promise<OverseerrRequest[]> {
@@ -182,6 +215,8 @@ export async function listRequests(): Promise<OverseerrRequest[]> {
     const seasonsList = isTV
       ? ((r.seasons as Record<string, unknown>[]) || []).map((s) => s.seasonNumber as number).sort((a, b) => a - b)
       : undefined;
+    const posterPath = media?.posterPath as string | undefined;
+    const tmdbId = media?.tmdbId as number | undefined;
 
     return {
       id: r.id as number,
@@ -192,6 +227,8 @@ export async function listRequests(): Promise<OverseerrRequest[]> {
       requestedBy: ((r.requestedBy as Record<string, unknown>)?.displayName || "Unknown") as string,
       requestedAt: r.createdAt as string,
       seasonsRequested: seasonsList && seasonsList.length > 0 ? seasonsList : undefined,
+      posterUrl: posterPath ? `https://image.tmdb.org/t/p/w300${posterPath}` : undefined,
+      tmdbId: tmdbId ?? undefined,
     };
   });
 }

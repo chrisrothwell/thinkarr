@@ -14,7 +14,7 @@ export function registerOverseerrTools() {
 
   defineTool({
     name: "overseerr_list_requests",
-    description: "List recent media requests from Overseerr.",
+    description: "List recent media requests from Overseerr. Returns request metadata (status, requester, date) along with poster URL and TMDB ID for each title. Use overseerr_search with the title for full availability details.",
     schema: z.object({}),
     handler: async () => overseerr.listRequests(),
   });

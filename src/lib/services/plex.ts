@@ -259,12 +259,43 @@ export interface PlexTitleTags {
 /**
  * Retrieve all tags (genre, director, actor, country, etc.) associated with a
  * specific Plex title. Pass the Plex metadata key (e.g. "/library/metadata/123").
+ *
+ * Tags are stored at the show level, not on individual seasons or episodes.
+ * When a season or episode key is passed, this function automatically fetches
+ * the parent show's metadata instead.
  */
 export async function getTagsForTitle(metadataKey: string): Promise<PlexTitleTags> {
   // Plex metadata keys start with /library/metadata/ — strip leading slash for fetch
   const path = metadataKey.startsWith("/") ? metadataKey : `/${metadataKey}`;
   const data = await plexFetch(path);
-  const item: Record<string, unknown> = data?.MediaContainer?.Metadata?.[0] ?? {};
+  let item: Record<string, unknown> = data?.MediaContainer?.Metadata?.[0] ?? {};
+
+  // Tags live on the show, not on individual seasons or episodes.
+  // Follow parentKey (season → show) or grandparentKey (episode → show).
+  const itemType = item.type as string | undefined;
+  if (itemType === "season") {
+    const parentKey = item.parentKey as string | undefined;
+    if (parentKey) {
+      const parentPath = parentKey.startsWith("/") ? parentKey : `/${parentKey}`;
+      try {
+        const parentData = await plexFetch(parentPath);
+        item = parentData?.MediaContainer?.Metadata?.[0] ?? item;
+      } catch {
+        // Non-fatal — fall back to season metadata (will have empty tags)
+      }
+    }
+  } else if (itemType === "episode") {
+    const grandparentKey = item.grandparentKey as string | undefined;
+    if (grandparentKey) {
+      const grandparentPath = grandparentKey.startsWith("/") ? grandparentKey : `/${grandparentKey}`;
+      try {
+        const grandparentData = await plexFetch(grandparentPath);
+        item = grandparentData?.MediaContainer?.Metadata?.[0] ?? item;
+      } catch {
+        // Non-fatal — fall back to episode metadata
+      }
+    }
+  }
 
   function extractTags(field: unknown): string[] {
     if (!Array.isArray(field)) return [];

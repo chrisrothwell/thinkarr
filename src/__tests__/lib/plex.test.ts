@@ -275,6 +275,110 @@ describe("searchByTag — issue #15", () => {
   });
 });
 
+describe("getTagsForTitle — issue #99: season/episode keys should fetch parent show tags", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  const SHOW_METADATA = {
+    title: "Breaking Bad",
+    type: "show",
+    Genre: [{ tag: "Drama" }, { tag: "Crime" }],
+    Director: [],
+    Role: [{ tag: "Bryan Cranston" }],
+    Country: [{ tag: "United States" }],
+    studio: "AMC",
+    contentRating: "TV-MA",
+    Label: [],
+  };
+
+  it("fetches tags from parent show when key points to a season", async () => {
+    const seasonMetadata = {
+      title: "Season 1",
+      type: "season",
+      parentKey: "/library/metadata/99",
+      Genre: [],
+      Director: [],
+      Role: [],
+      Country: [],
+      Label: [],
+    };
+
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce({
+        // First fetch: season metadata
+        ok: true,
+        json: async () => ({ MediaContainer: { Metadata: [seasonMetadata] } }),
+      })
+      .mockResolvedValueOnce({
+        // Second fetch: parent show metadata
+        ok: true,
+        json: async () => ({ MediaContainer: { Metadata: [SHOW_METADATA] } }),
+      }));
+
+    const { getTagsForTitle } = await import("@/lib/services/plex");
+    const tags = await getTagsForTitle("/library/metadata/10");
+    expect(tags.genres).toEqual(["Drama", "Crime"]);
+    expect(tags.actors).toContain("Bryan Cranston");
+    expect(tags.studio).toBe("AMC");
+  });
+
+  it("fetches tags from grandparent show when key points to an episode", async () => {
+    const episodeMetadata = {
+      title: "Pilot",
+      type: "episode",
+      grandparentKey: "/library/metadata/99",
+      Genre: [],
+      Director: [],
+      Role: [],
+      Country: [],
+      Label: [],
+    };
+
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce({
+        // First fetch: episode metadata
+        ok: true,
+        json: async () => ({ MediaContainer: { Metadata: [episodeMetadata] } }),
+      })
+      .mockResolvedValueOnce({
+        // Second fetch: grandparent show metadata
+        ok: true,
+        json: async () => ({ MediaContainer: { Metadata: [SHOW_METADATA] } }),
+      }));
+
+    const { getTagsForTitle } = await import("@/lib/services/plex");
+    const tags = await getTagsForTitle("/library/metadata/11");
+    expect(tags.genres).toEqual(["Drama", "Crime"]);
+    expect(tags.studio).toBe("AMC");
+  });
+
+  it("falls back to season metadata when parent fetch fails", async () => {
+    const seasonMetadata = {
+      title: "Season 1",
+      type: "season",
+      parentKey: "/library/metadata/99",
+      Genre: [{ tag: "Fallback Genre" }],
+      Director: [],
+      Role: [],
+      Country: [],
+      Label: [],
+    };
+
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ MediaContainer: { Metadata: [seasonMetadata] } }),
+      })
+      .mockRejectedValueOnce(new Error("Network error")));
+
+    const { getTagsForTitle } = await import("@/lib/services/plex");
+    // Should not throw; falls back to season metadata
+    const tags = await getTagsForTitle("/library/metadata/10");
+    expect(tags.genres).toEqual(["Fallback Genre"]);
+  });
+});
+
 describe("getTagsForTitle — issue #15", () => {
   it("returns all tag categories for a title", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({

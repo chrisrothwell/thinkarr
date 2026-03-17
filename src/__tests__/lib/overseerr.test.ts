@@ -38,6 +38,156 @@ const TV_REQUEST = {
   seasons: [{ seasonNumber: 1 }, { seasonNumber: 2 }],
 };
 
+describe("search — issue #101: includes request details from mediaInfo", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("extracts request details from mediaInfo.requests when present", async () => {
+    const searchResult = {
+      id: 550,
+      mediaType: "movie",
+      title: "Fight Club",
+      releaseDate: "1999-10-15",
+      posterPath: "/poster.jpg",
+      overview: "A movie about soap.",
+      mediaInfo: {
+        status: 2, // Pending
+        requests: [
+          {
+            id: 42,
+            status: 2, // Approved
+            requestedBy: { displayName: "alice" },
+            createdAt: "2026-01-01T00:00:00.000Z",
+            seasons: [],
+          },
+        ],
+      },
+    };
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ results: [searchResult] }),
+    }));
+
+    const { search } = await import("@/lib/services/overseerr");
+    const results = await search("Fight Club");
+    expect(results).toHaveLength(1);
+    expect(results[0].requests).toHaveLength(1);
+    expect(results[0].requests![0].requestedBy).toBe("alice");
+    expect(results[0].requests![0].status).toBe("Approved");
+  });
+
+  it("returns undefined requests when mediaInfo has no requests array", async () => {
+    const searchResult = {
+      id: 550,
+      mediaType: "movie",
+      title: "Fight Club",
+      releaseDate: "1999-10-15",
+      posterPath: "/poster.jpg",
+      overview: "A movie about soap.",
+      mediaInfo: { status: 5 },
+    };
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ results: [searchResult] }),
+    }));
+
+    const { search } = await import("@/lib/services/overseerr");
+    const results = await search("Fight Club");
+    expect(results[0].requests).toBeUndefined();
+  });
+
+  it("includes seasonsRequested in TV show requests", async () => {
+    const tvSearchResult = {
+      id: 1396,
+      mediaType: "tv",
+      name: "Breaking Bad",
+      firstAirDate: "2008-01-20",
+      posterPath: "/poster.jpg",
+      overview: "A chemistry teacher turns to crime.",
+      mediaInfo: {
+        status: 2,
+        requests: [
+          {
+            id: 43,
+            status: 2,
+            requestedBy: { displayName: "bob" },
+            createdAt: "2026-01-02T00:00:00.000Z",
+            seasons: [{ seasonNumber: 1 }, { seasonNumber: 2 }],
+          },
+        ],
+      },
+    };
+
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ results: [tvSearchResult] }),
+      })
+      .mockResolvedValueOnce({
+        // TV detail fetch for numberOfSeasons
+        ok: true,
+        json: async () => ({ numberOfSeasons: 5 }),
+      }));
+
+    const { search } = await import("@/lib/services/overseerr");
+    const results = await search("Breaking Bad");
+    expect(results[0].requests![0].seasonsRequested).toEqual([1, 2]);
+  });
+});
+
+describe("listRequests — issue #101: includes posterUrl and tmdbId", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("includes posterUrl and tmdbId from media object", async () => {
+    const requestWithMedia = {
+      id: 706,
+      type: "movie",
+      status: 2,
+      media: { id: 1, mediaType: "movie", tmdbId: 550, title: "Fight Club", posterPath: "/poster.jpg" },
+      requestedBy: { displayName: "alice" },
+      createdAt: "2026-01-01T00:00:00.000Z",
+      seasons: [],
+    };
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ results: [requestWithMedia] }),
+    }));
+
+    const { listRequests } = await import("@/lib/services/overseerr");
+    const results = await listRequests();
+    expect(results[0].posterUrl).toBe("https://image.tmdb.org/t/p/w300/poster.jpg");
+    expect(results[0].tmdbId).toBe(550);
+  });
+
+  it("posterUrl is undefined when media has no posterPath", async () => {
+    const requestWithoutPoster = {
+      id: 707,
+      type: "movie",
+      status: 2,
+      media: { id: 1, mediaType: "movie", tmdbId: 551, title: "Some Movie" },
+      requestedBy: { displayName: "charlie" },
+      createdAt: "2026-01-03T00:00:00.000Z",
+      seasons: [],
+    };
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ results: [requestWithoutPoster] }),
+    }));
+
+    const { listRequests } = await import("@/lib/services/overseerr");
+    const results = await listRequests();
+    expect(results[0].posterUrl).toBeUndefined();
+    expect(results[0].tmdbId).toBe(551);
+  });
+});
+
 describe("listRequests — issue #89: titles should not return Unknown", () => {
   beforeEach(() => {
     vi.resetModules();

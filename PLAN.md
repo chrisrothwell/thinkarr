@@ -469,3 +469,42 @@ Each platform builds and pushes by digest, then a `docker-merge` job assembles t
 
 **Files changed:**
 - `.github/workflows/docker-publish.yml` — split `docker` job into matrix + added `docker-merge` job
+
+### Phase 21: Bug Fixes for Issues #76, #87, #88, #98, #99, #100, #101, #102, #103
+
+#### Fixed
+
+- [x] **#87 — Floating version badge visible in landscape mode** — Removed the floating `fixed bottom-2 left-2` version badge from `src/app/chat/page.tsx`. The sidebar already shows the version string; the floating badge caused it to appear twice in landscape mode when the sidebar was open. — `src/app/chat/page.tsx`
+
+- [x] **#88 — System prompt: wrong collection name for "leaving soon"** — Updated `DEFAULT_SYSTEM_PROMPT` to instruct the LLM to use the precise collection names `'Movies leaving soon'` (for movie queries) and `'Series leaving soon'` (for TV queries), or both when the question is ambiguous. — `src/lib/llm/default-prompt.ts`
+
+- [x] **#98 — Sidebar forces text wrapping instead of overlaying chat** — On mobile the sidebar is now `position: fixed` (overlays the chat area) with a semi-transparent backdrop. On desktop (`md:`) it remains `relative` so the layout flows as before. A click on the backdrop dismisses the sidebar. — `src/components/chat/sidebar.tsx`
+
+- [x] **#99 — `plex_get_title_tags` returns empty tags for series** — Tags (genre, director, etc.) are stored at the show level, not on individual seasons or episodes. `getTagsForTitle` now follows `parentKey` when the fetched item is a season, and `grandparentKey` when it is an episode, automatically fetching the parent show's metadata to retrieve the correct tags. Failure to resolve the parent falls back to the original metadata gracefully. — `src/lib/services/plex.ts`
+
+- [x] **#100 — User avatar no longer displays in chat** — Added `onError` handler to the `<img>` element in the `Avatar` component. When the Plex avatar URL is unavailable or returns an error the component now falls back to the initial-letter placeholder instead of showing a broken-image icon. Made `Avatar` a client component to support the `useState` error flag. — `src/components/ui/avatar.tsx`
+
+- [x] **#101 — Overseerr search and list-requests return inconsistent data** — `overseerr_search` results now include a `requests` array extracted from the `mediaInfo.requests` field returned by the Overseerr API, so the LLM receives both availability status and request details (requester, date, seasons) in a single call. `listRequests` now also returns `posterUrl` (TMDB thumbnail URL) and `tmdbId` so the LLM can reference posters and cross-reference with the search tool. — `src/lib/services/overseerr.ts`, `src/lib/tools/overseerr-tools.ts`
+
+- [x] **#102 — LLM settings tab UI runs off screen on mobile** — Refactored the endpoint `CardHeader` row to use `flex-wrap` so the name input, Enabled checkbox, Default radio, and delete button wrap gracefully on narrow viewports instead of overflowing horizontally. The name input grows to full width on mobile (`w-full sm:w-48`). — `src/app/settings/page.tsx`
+
+- [x] **#103 — No warning when leaving Settings with unsaved changes** — Added a `savedConfigRef` (via `useRef`) that snapshots the loaded config after initial fetch and after each successful save. When the user clicks the back button, the current config is serialised and compared to the snapshot; if they differ a `window.confirm` dialog asks the user to confirm discarding changes. The existing incomplete-setup warning is preserved. — `src/app/settings/page.tsx`
+
+- [x] **#76 — PWA installation not available** — Two root causes addressed: (1) the web app manifest lacked a correctly sized icon required by browsers before they fire `beforeinstallprompt` — added `public/icon.svg` (512×512 SVG lettermark) and registered it in `manifest.json` with `purpose: "any maskable"`; (2) the Settings page and the chat banner restricted PWA installation to mobile devices only, even though desktop Chrome/Edge also support PWA installation. Removed the `isMobile` gate in Settings and updated the banner to show whenever the browser has fired `beforeinstallprompt` regardless of device type. iOS manual-install instructions are still shown on mobile iOS only. — `public/manifest.json`, `public/icon.svg`, `src/components/chat/pwa-install-banner.tsx`, `src/app/settings/page.tsx`
+
+#### New / changed files
+
+| File | Change |
+|------|--------|
+| `src/app/chat/page.tsx` | Removed floating version badge |
+| `src/lib/llm/default-prompt.ts` | Updated "leaving soon" collection name guidance |
+| `src/components/chat/sidebar.tsx` | Mobile overlay sidebar with backdrop |
+| `src/lib/services/plex.ts` | `getTagsForTitle` follows parentKey/grandparentKey for seasons/episodes |
+| `src/components/ui/avatar.tsx` | Client component, `onError` fallback for broken images |
+| `src/lib/services/overseerr.ts` | `search` includes request details; `listRequests` includes posterUrl/tmdbId |
+| `src/lib/tools/overseerr-tools.ts` | Updated `overseerr_list_requests` description |
+| `src/app/settings/page.tsx` | Mobile-friendly LLM card header; unsaved-changes warning |
+| `public/manifest.json` | Added SVG icon entry |
+| `public/icon.svg` | New Thinkarr app icon (512×512 SVG) |
+| `src/__tests__/lib/plex.test.ts` | Tests for season/episode parent tag lookup (#99) |
+| `src/__tests__/lib/overseerr.test.ts` | Tests for unified search+request data and listRequests posterUrl (#101) |

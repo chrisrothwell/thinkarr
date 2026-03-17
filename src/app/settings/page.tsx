@@ -111,6 +111,9 @@ export default function SettingsPage() {
   const [redirectCountdown, setRedirectCountdown] = useState<number | null>(null);
   const countdownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Track the last-saved config so we can warn on unsaved changes
+  const savedConfigRef = useRef<string>("");
+
   // Plex discovery state (admin only)
   const [plexDiscovering, setPlexDiscovering] = useState(false);
   const [plexDevices, setPlexDevices] = useState<PlexDevice[]>([]);
@@ -171,7 +174,8 @@ export default function SettingsPage() {
                 realtimePromptMode: ep.realtimeSystemPrompt ? "custom" : "default",
               })),
             );
-            setPlexConfig({ url: d.plex?.url || "", token: d.plex?.token || "" });
+            const loadedPlex = { url: d.plex?.url || "", token: d.plex?.token || "" };
+            setPlexConfig(loadedPlex);
             const arrs: Record<string, ArrConfig> = {};
             for (const svc of ARR_SERVICES) {
               arrs[svc.key] = {
@@ -180,6 +184,16 @@ export default function SettingsPage() {
               };
             }
             setArrConfigs(arrs);
+            // Snapshot the freshly loaded config so we can detect unsaved changes later
+            savedConfigRef.current = JSON.stringify({
+              endpoints: (d.llmEndpoints || []).map((ep: LlmEndpoint) => ({
+                ...ep,
+                promptMode: undefined,
+                realtimePromptMode: undefined,
+              })),
+              plex: loadedPlex,
+              arrs,
+            });
           }
           if (usersData.success) {
             setUsers(
@@ -258,6 +272,12 @@ export default function SettingsPage() {
       const data = await res.json();
       if (data.success) {
         setSaved(true);
+        // Update the saved snapshot so the back button no longer warns about unsaved changes
+        savedConfigRef.current = JSON.stringify({
+          endpoints: endpoints.map(({ promptMode: _pm, realtimePromptMode: _rpm, ...ep }) => ep),
+          plex: plexConfig,
+          arrs: arrConfigs,
+        });
         // In initial setup: check if critical services are now working; if so, start redirect countdown
         if (isInitialSetup && redirectCountdown === null) {
           try {
@@ -556,6 +576,15 @@ export default function SettingsPage() {
             onClick={() => {
               if (isInitialSetup && redirectCountdown === null) {
                 if (!window.confirm("Setup is not complete. Are you sure you want to leave?")) return;
+              } else if (savedConfigRef.current) {
+                const currentSnapshot = JSON.stringify({
+                  endpoints: endpoints.map(({ promptMode: _pm, realtimePromptMode: _rpm, ...ep }) => ep),
+                  plex: plexConfig,
+                  arrs: arrConfigs,
+                });
+                if (currentSnapshot !== savedConfigRef.current) {
+                  if (!window.confirm("You have unsaved changes. If you leave now they will be lost.")) return;
+                }
               }
               router.push("/chat");
             }}
@@ -607,12 +636,7 @@ export default function SettingsPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                {!pwaMobile ? (
-                  <p className="text-sm text-muted-foreground">
-                    PWA installation is only available on mobile devices. Open Thinkarr in Chrome
-                    or Safari on your phone or tablet to install it.
-                  </p>
-                ) : pwaIsIos ? (
+                {pwaIsIos ? (
                   <p className="text-sm text-muted-foreground">
                     To install on iOS, open Thinkarr in{" "}
                     <span className="font-medium text-foreground">Safari</span>, tap the{" "}
@@ -623,7 +647,7 @@ export default function SettingsPage() {
                 ) : pwaInstallAvailable ? (
                   <div className="flex items-center gap-3">
                     <p className="flex-1 text-sm text-muted-foreground">
-                      Tap Install to add Thinkarr to your home screen for quick access.
+                      Click Install to add Thinkarr to your home screen or taskbar for quick access.
                     </p>
                     <Button variant="outline" size="sm" onClick={() => triggerPwaInstall()}>
                       <Download className="mr-2 h-4 w-4" />
@@ -633,7 +657,8 @@ export default function SettingsPage() {
                 ) : (
                   <p className="text-sm text-muted-foreground">
                     Installation is not currently available. This may be because the app is already
-                    installed, or the page was not served over HTTPS.
+                    installed, the page was not served over HTTPS, or your browser has not yet
+                    offered the install prompt. Try reloading the page.
                   </p>
                 )}
               </CardContent>
@@ -645,38 +670,40 @@ export default function SettingsPage() {
             {endpoints.map((ep) => (
               <Card key={ep.id}>
                 <CardHeader className="pb-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <Input
                         value={ep.name}
                         onChange={(e) => updateEndpoint(ep.id, "name", e.target.value)}
-                        className="h-8 w-48 text-sm font-semibold"
+                        className="h-8 w-full text-sm font-semibold sm:w-48"
                       />
-                      <label className="flex items-center gap-1.5 text-sm text-muted-foreground">
-                        <input
-                          type="checkbox"
-                          checked={ep.enabled}
-                          onChange={(e) => updateEndpoint(ep.id, "enabled", e.target.checked)}
-                          className="rounded"
-                        />
-                        Enabled
-                      </label>
-                      <label className="flex items-center gap-1.5 text-sm text-muted-foreground">
-                        <input
-                          type="radio"
-                          name="defaultEndpoint"
-                          checked={ep.isDefault}
-                          onChange={() => setDefaultEndpoint(ep.id)}
-                          className="rounded"
-                        />
-                        Default
-                      </label>
+                      <div className="flex items-center gap-3">
+                        <label className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                          <input
+                            type="checkbox"
+                            checked={ep.enabled}
+                            onChange={(e) => updateEndpoint(ep.id, "enabled", e.target.checked)}
+                            className="rounded"
+                          />
+                          Enabled
+                        </label>
+                        <label className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                          <input
+                            type="radio"
+                            name="defaultEndpoint"
+                            checked={ep.isDefault}
+                            onChange={() => setDefaultEndpoint(ep.id)}
+                            className="rounded"
+                          />
+                          Default
+                        </label>
+                      </div>
                     </div>
                     <Button
                       variant="ghost"
                       size="icon"
                       onClick={() => removeEndpoint(ep.id)}
-                      className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                      className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
                     >
                       <Trash2 size={14} />
                     </Button>
