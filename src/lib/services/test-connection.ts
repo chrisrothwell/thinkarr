@@ -1,6 +1,21 @@
 import type { TestConnectionRequest, TestConnectionResponse } from "@/types/api";
 import { validateServiceUrl } from "@/lib/security/url-validation";
 
+/**
+ * Returns true only for genuine OpenAI endpoints (api.openai.com).
+ * ChatGPT-compatible providers (Gemini, Anthropic, local proxies, etc.) do not
+ * support the WebRTC-based Realtime API even if they expose an OpenAI-compatible
+ * REST surface, so realtime capability must never be advertised for them.
+ */
+export function isOpenAIEndpoint(url: string): boolean {
+  try {
+    const { hostname } = new URL(url);
+    return hostname === "api.openai.com";
+  } catch {
+    return false;
+  }
+}
+
 async function probeVoiceSupport(url: string, apiKey: string): Promise<boolean> {
   try {
     const base = url.replace(/\/$/, "");
@@ -20,6 +35,8 @@ async function probeVoiceSupport(url: string, apiKey: string): Promise<boolean> 
 }
 
 async function probeRealtimeSupport(url: string, apiKey: string): Promise<string | null> {
+  // Realtime (WebRTC) is an OpenAI-exclusive API — skip probing for any other provider.
+  if (!isOpenAIEndpoint(url)) return null;
   try {
     const base = url.replace(/\/$/, "");
     const res = await fetch(`${base}/models`, {

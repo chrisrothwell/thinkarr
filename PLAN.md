@@ -186,6 +186,15 @@ Build an LLM-powered chat frontend for media management (*arr stack). Users log 
 #### Features
 - [x] **PWA installability (#76)** — Added `public/manifest.json` (standalone display, dark theme color) and `public/sw.js` (minimal network-first service worker). Updated `layout.tsx` with `manifest` metadata and `appleWebApp` properties. New `PwaInstallBanner` component shows a dismissible banner at the top of the chat window on mobile only (`pointer: coarse` detection); on Android/Chrome it uses `beforeinstallprompt` to trigger native install, on iOS it shows manual Share → Add to Home Screen instructions (iOS 16.4+ required). New "General" settings tab has platform-aware install UI: desktop users see a redirect message, iOS users see manual steps, Android users get a direct Install button. A module-level singleton in `pwa.ts` (`storeDeferredPrompt`, `triggerPwaInstall`, `isPwaInstallAvailable`, `onPwaAvailabilityChange`) shares the deferred prompt across SPA page navigations; `isMobileDevice()` and `isIos()` helpers cover platform detection. `usePwaInstall` hook provides reactive access and registers the SW. Settings defaults to LLM Setup during initial setup, General otherwise. — `public/manifest.json` (new), `public/sw.js` (new), `src/lib/pwa.ts` (new), `src/hooks/use-pwa-install.ts` (new), `src/components/chat/pwa-install-banner.tsx` (new), `src/app/layout.tsx`, `src/app/chat/page.tsx`, `src/app/settings/page.tsx`, `src/__tests__/lib/pwa.test.ts` (new)
 
+### Phase 17: Realtime OpenAI-Only Guard (issue #80)
+
+#### Bug Fix
+- [x] **Realtime restricted to api.openai.com only (#80)** — ChatGPT-compatible providers (Gemini, Anthropic, local proxies) expose an OpenAI-compatible REST surface but do not implement the WebRTC-based Realtime API. Previously, `probeRealtimeSupport` would scan any endpoint's `/models` list for model IDs containing "realtime", which could falsely flag non-OpenAI endpoints as realtime-capable. Two guards added: (1) `isOpenAIEndpoint(url)` helper (exported from `test-connection.ts`) returns `true` only when the URL hostname is `api.openai.com`; `probeRealtimeSupport` returns `null` immediately for any other host. (2) `POST /api/realtime/session` checks `isOpenAIEndpoint(ep.baseUrl)` after the existing `supportsRealtime` check and returns HTTP 400 for non-OpenAI endpoints as a defence-in-depth measure. — `src/lib/services/test-connection.ts`, `src/app/api/realtime/session/route.ts`
+
+#### Tests
+- [x] **`src/__tests__/lib/services/is-openai-endpoint.test.ts`** — Unit tests for `isOpenAIEndpoint`: true for `api.openai.com`, false for Gemini/Anthropic/localhost/invalid URLs
+- [x] **`src/__tests__/api/realtime-session.test.ts`** — Two new cases: Gemini-compatible endpoint (non-openai.com host) and Anthropic endpoint both return HTTP 400 even when `supportsRealtime: true`
+
 ### Phase 14: Coordinated Dependency Upgrades (issue #68)
 
 #### Dependency Upgrades

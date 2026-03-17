@@ -136,6 +136,56 @@ describe("POST /api/realtime/session", () => {
     expect(body.data.realtimeModel).toBe("gpt-4o-realtime-preview-2024-12-17");
   });
 
+  it("returns 400 when endpoint is ChatGPT-compatible but not OpenAI (e.g. Gemini)", async () => {
+    mockGetEndpointConfig.mockReturnValue({
+      id: "ep-gemini",
+      name: "Gemini",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+      apiKey: "gemini-key",
+      model: "gemini-2.0-flash",
+      systemPrompt: "",
+      enabled: true,
+      supportsVoice: false,
+      supportsRealtime: true,
+      realtimeModel: "gemini-realtime",
+      realtimeSystemPrompt: "",
+    });
+    const req = new Request("http://localhost/api/realtime/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ modelId: "ep-gemini:gemini-2.0-flash" }),
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toMatch(/openai/i);
+  });
+
+  it("returns 400 when endpoint is Anthropic-compatible but not OpenAI", async () => {
+    mockGetEndpointConfig.mockReturnValue({
+      id: "ep-anthropic",
+      name: "Anthropic",
+      baseUrl: "https://api.anthropic.com/v1",
+      apiKey: "anthropic-key",
+      model: "claude-sonnet-4-6",
+      systemPrompt: "",
+      enabled: true,
+      supportsVoice: false,
+      supportsRealtime: true,
+      realtimeModel: "claude-realtime",
+      realtimeSystemPrompt: "",
+    });
+    const req = new Request("http://localhost/api/realtime/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ modelId: "ep-anthropic:claude-sonnet-4-6" }),
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toMatch(/openai/i);
+  });
+
   it("returns 502 when OpenAI Realtime API fails", async () => {
     mockFetch.mockResolvedValue({
       ok: false,
