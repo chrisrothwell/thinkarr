@@ -141,7 +141,30 @@ export interface OverseerrRequest {
 
 export async function listRequests(): Promise<OverseerrRequest[]> {
   const data = await overseerrFetch("/request?take=20&skip=0&sort=added");
-  return (data?.results || []).map((r: Record<string, unknown>) => {
+  const rawRequests: Record<string, unknown>[] = data?.results || [];
+
+  // Fetch titles in parallel — the request endpoint's media object contains IDs but not titles
+  const titleMap = new Map<number, string>();
+  await Promise.all(
+    rawRequests.map(async (r) => {
+      const media = r.media as Record<string, unknown> | undefined;
+      const tmdbId = media?.tmdbId as number | undefined;
+      if (!tmdbId) return;
+      try {
+        if (r.type === "movie") {
+          const detail = await overseerrFetch(`/movie/${tmdbId}`);
+          const title = (detail?.title || detail?.originalTitle) as string | undefined;
+          if (title) titleMap.set(r.id as number, title);
+        } else if (r.type === "tv") {
+          const detail = await overseerrFetch(`/tv/${tmdbId}`);
+          const name = (detail?.name || detail?.originalName) as string | undefined;
+          if (name) titleMap.set(r.id as number, name);
+        }
+      } catch { /* non-fatal — falls back to "Unknown" */ }
+    }),
+  );
+
+  return rawRequests.map((r: Record<string, unknown>) => {
     const media = r.media as Record<string, unknown> | undefined;
     const isTV = r.type === "tv";
     const seasonsList = isTV
@@ -151,7 +174,7 @@ export async function listRequests(): Promise<OverseerrRequest[]> {
     return {
       id: r.id as number,
       type: r.type as string,
-      title: (media?.title || media?.name || "Unknown") as string,
+      title: titleMap.get(r.id as number) ?? (media?.title || media?.name || "Unknown") as string,
       year: ((media?.releaseDate || media?.firstAirDate) as string | undefined)?.substring(0, 4),
       status: requestStatusLabel(r.status as number),
       requestedBy: ((r.requestedBy as Record<string, unknown>)?.displayName || "Unknown") as string,

@@ -198,22 +198,41 @@ export async function searchCollections(collectionName: string): Promise<PlexSea
 }
 
 /**
- * Search the Plex library by tag (genre, mood, or custom tag).
- * Queries all movie and TV sections for items tagged with the given value.
+ * Valid Plex filter tag types for library searches.
+ * Maps to the corresponding Plex API query parameter name.
  */
-export async function searchByTag(tag: string): Promise<PlexSearchResult[]> {
+const TAG_TYPE_PARAM: Record<string, string> = {
+  genre: "genre",
+  director: "director",
+  actor: "actor",
+  country: "country",
+  studio: "studio",
+  contentRating: "contentRating",
+  label: "label",
+  mood: "mood",
+};
+
+/**
+ * Search the Plex library by a tag value within a specific tag category.
+ * Supports genre, director, actor, country, studio, contentRating, label, and mood.
+ * Queries all movie and TV sections for items matching the tag.
+ */
+export async function searchByTag(tag: string, tagType: string = "genre"): Promise<PlexSearchResult[]> {
   const sectionsData = await plexFetch("/library/sections");
   const sections: Array<{ key: string; type: string }> = sectionsData?.MediaContainer?.Directory || [];
+
+  // Resolve the Plex API query parameter for the given tag type
+  const paramName = TAG_TYPE_PARAM[tagType] ?? "genre";
 
   const results: PlexSearchResult[] = [];
 
   for (const section of sections) {
-    // Only movie (type=movie) and show (type=show) sections support genre filtering
+    // Only movie (type=movie) and show (type=show) sections support tag filtering
     if (section.type !== "movie" && section.type !== "show") continue;
 
     const plexType = section.type === "movie" ? "1" : "2";
     const data = await plexFetch(
-      `/library/sections/${section.key}/all?type=${plexType}&genre=${encodeURIComponent(tag)}`,
+      `/library/sections/${section.key}/all?type=${plexType}&${paramName}=${encodeURIComponent(tag)}`,
     );
     const items: Record<string, unknown>[] = data?.MediaContainer?.Metadata || [];
     for (const item of items) {
@@ -223,4 +242,44 @@ export async function searchByTag(tag: string): Promise<PlexSearchResult[]> {
   }
 
   return results;
+}
+
+export interface PlexTitleTags {
+  key: string;
+  title: string;
+  genres: string[];
+  directors: string[];
+  actors: string[];
+  countries: string[];
+  studio?: string;
+  contentRating?: string;
+  labels: string[];
+}
+
+/**
+ * Retrieve all tags (genre, director, actor, country, etc.) associated with a
+ * specific Plex title. Pass the Plex metadata key (e.g. "/library/metadata/123").
+ */
+export async function getTagsForTitle(metadataKey: string): Promise<PlexTitleTags> {
+  // Plex metadata keys start with /library/metadata/ — strip leading slash for fetch
+  const path = metadataKey.startsWith("/") ? metadataKey : `/${metadataKey}`;
+  const data = await plexFetch(path);
+  const item: Record<string, unknown> = data?.MediaContainer?.Metadata?.[0] ?? {};
+
+  function extractTags(field: unknown): string[] {
+    if (!Array.isArray(field)) return [];
+    return (field as Array<{ tag: string }>).map((t) => t.tag).filter(Boolean);
+  }
+
+  return {
+    key: metadataKey,
+    title: item.title as string ?? "",
+    genres: extractTags(item.Genre),
+    directors: extractTags(item.Director),
+    actors: extractTags(item.Role),
+    countries: extractTags(item.Country),
+    studio: item.studio as string | undefined,
+    contentRating: item.contentRating as string | undefined,
+    labels: extractTags(item.Label),
+  };
 }
