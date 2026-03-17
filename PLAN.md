@@ -181,12 +181,57 @@ Build an LLM-powered chat frontend for media management (*arr stack). Users log 
 - [x] **Title length validation (#71)** — `POST /api/conversations` and `PATCH /api/conversations/[id]/title` now reject titles longer than 200 characters with HTTP 400. — `src/app/api/conversations/route.ts`, `src/app/api/conversations/[id]/title/route.ts`
 - [x] **Per-user API rate limiting (#71)** — New `checkUserApiRateLimit(userId)` utility (in-memory, 60 req/min per user, 1-minute sliding window). Applied to all `/api/conversations/*` and `/api/settings/*` routes; returns HTTP 429 when exceeded. Follows same pattern as existing auth IP rate limiter. — `src/lib/security/api-rate-limit.ts` (new), `src/app/api/conversations/route.ts`, `src/app/api/conversations/[id]/route.ts`, `src/app/api/conversations/[id]/title/route.ts`, `src/app/api/settings/route.ts`, `src/app/api/settings/users/route.ts`
 
+### Phase 16: PWA Support (issue #76)
+
+#### Features
+- [x] **PWA installability (#76)** — Added `public/manifest.json` (standalone display, dark theme color) and `public/sw.js` (minimal network-first service worker). Updated `layout.tsx` with `manifest` metadata and `appleWebApp` properties. New `PwaInstallBanner` component shows a dismissible banner at the top of the chat window on mobile only (`pointer: coarse` detection); on Android/Chrome it uses `beforeinstallprompt` to trigger native install, on iOS it shows manual Share → Add to Home Screen instructions (iOS 16.4+ required). New "General" settings tab has platform-aware install UI: desktop users see a redirect message, iOS users see manual steps, Android users get a direct Install button. A module-level singleton in `pwa.ts` (`storeDeferredPrompt`, `triggerPwaInstall`, `isPwaInstallAvailable`, `onPwaAvailabilityChange`) shares the deferred prompt across SPA page navigations; `isMobileDevice()` and `isIos()` helpers cover platform detection. `usePwaInstall` hook provides reactive access and registers the SW. Settings defaults to LLM Setup during initial setup, General otherwise. — `public/manifest.json` (new), `public/sw.js` (new), `src/lib/pwa.ts` (new), `src/hooks/use-pwa-install.ts` (new), `src/components/chat/pwa-install-banner.tsx` (new), `src/app/layout.tsx`, `src/app/chat/page.tsx`, `src/app/settings/page.tsx`, `src/__tests__/lib/pwa.test.ts` (new)
+
+### Phase 18: Bug Fixes & Enhancements (#15, #87, #88, #89, #90)
+
+#### Features
+- [x] **Plex multi-category tag search (#15)** — `searchByTag(tag, tagType)` extended to support `genre`, `director`, `actor`, `country`, `studio`, `contentRating`, `label`, and `mood` tag types. `TAG_TYPE_PARAM` map resolves the correct Plex API query parameter. Tool description updated with examples. — `src/lib/services/plex.ts`, `src/lib/tools/plex-tools.ts`
+- [x] **Plex get title tags (#15)** — New `getTagsForTitle(metadataKey)` function fetches all tag categories (genres, directors, actors, countries, studio, contentRating, labels) for a specific title. New `plex_get_title_tags` MCP tool registered. — `src/lib/services/plex.ts`, `src/lib/tools/plex-tools.ts`
+- [x] **Settings access for non-admin users (#90)** — Settings gear icon now visible for all users. Settings page conditionally renders admin-only tabs (LLM Setup, Plex & Arrs, Logs) and Save button. Non-admins see General, MCP (own token), and User (own account read-only) tabs. `/api/settings/mcp-token/user/[userId]` allows self-access. — `src/components/chat/sidebar.tsx`, `src/app/settings/page.tsx`, `src/app/api/settings/mcp-token/user/[userId]/route.ts`
+
+#### Bug Fixes
+- [x] **Version floating on mobile (#87)** — Fixed bottom-left version badge in chat page hidden on mobile (`hidden md:block`); version still visible in sidebar when opened. — `src/app/chat/page.tsx`
+- [x] **Default system prompt: "leaving soon" (#88)** — Added guideline: use `plex_search_collection` with `'leaving soon'` when users ask what's expiring/leaving the library. — `src/lib/llm/default-prompt.ts`
+- [x] **Overseerr titles returning Unknown (#89)** — `listRequests()` batch-fetches titles in parallel via `/movie/{tmdbId}` and `/tv/{tmdbId}` since the `/request` endpoint's media object lacks titles. Falls back gracefully on error. — `src/lib/services/overseerr.ts`
+
+#### Tests
+- [x] **`src/__tests__/lib/plex.test.ts`** — Added tests for `searchByTag` with `tagType` (country, director, default genre) and `getTagsForTitle` (full extraction, empty fields)
+- [x] **`src/__tests__/lib/overseerr.test.ts`** — New: `listRequests` title resolution (movie, TV), seasons list, graceful fallback on fetch failure
+
+### Phase 17: Realtime OpenAI-Only Guard (issue #80)
+
+#### Bug Fix
+- [x] **Realtime restricted to api.openai.com only (#80)** — ChatGPT-compatible providers (Gemini, Anthropic, local proxies) expose an OpenAI-compatible REST surface but do not implement the WebRTC-based Realtime API. Previously, `probeRealtimeSupport` would scan any endpoint's `/models` list for model IDs containing "realtime", which could falsely flag non-OpenAI endpoints as realtime-capable. Two guards added: (1) `isOpenAIEndpoint(url)` helper (exported from `test-connection.ts`) returns `true` only when the URL hostname is `api.openai.com`; `probeRealtimeSupport` returns `null` immediately for any other host. (2) `POST /api/realtime/session` checks `isOpenAIEndpoint(ep.baseUrl)` after the existing `supportsRealtime` check and returns HTTP 400 for non-OpenAI endpoints as a defence-in-depth measure. — `src/lib/services/test-connection.ts`, `src/app/api/realtime/session/route.ts`
+
+#### Tests
+- [x] **`src/__tests__/lib/services/is-openai-endpoint.test.ts`** — Unit tests for `isOpenAIEndpoint`: true for `api.openai.com`, false for Gemini/Anthropic/localhost/invalid URLs
+- [x] **`src/__tests__/api/realtime-session.test.ts`** — Two new cases: Gemini-compatible endpoint (non-openai.com host) and Anthropic endpoint both return HTTP 400 even when `supportsRealtime: true`
+
 ### Phase 14: Coordinated Dependency Upgrades (issue #68)
 
 #### Dependency Upgrades
 - [x] **Vitest 3 → 4 + coverage-v8 upgrade (#64/#67)** — Bumped `vitest` from `^3.2.4` to `^4.1.0` and `@vitest/coverage-v8` from `^3.2.4` to `^4.1.0` (coupled package pair, must stay on same major). Added `vite@^6.0.0` as a direct dev dep to satisfy Vitest 4's peer dependency. All 152 unit tests pass. — `package.json`, `package-lock.json`
 - [x] **Drop redundant `eslint-plugin-jsx-a11y` direct dep** — `eslint-config-next` already bundles `eslint-plugin-jsx-a11y`; the direct entry was redundant. Removed to avoid future peer-dep conflicts. — `package.json`
 - [ ] **ESLint 9 → 10 deferred (#62)** — `eslint-plugin-react` (bundled inside `eslint-config-next@16.1.6`) uses the removed `context.getFilename()` API and is incompatible with ESLint 10. Upgrade deferred until `eslint-config-next` ships ESLint 10 support.
+
+### Phase 14: Voice & Realtime Modes (Issue #75)
+
+#### Features
+- [x] **Endpoint capability auto-detection** — `testLlm()` in `test-connection.ts` now probes `POST /audio/transcriptions` (voice) and `GET /models` (realtime model scan) after a successful connection test. `TestConnectionResponse` extended with `capabilities: { supportsVoice, realtimeModel }`. Settings UI writes detected flags back to the endpoint config on test success. — `src/lib/services/test-connection.ts`, `src/types/api.ts`, `src/app/settings/page.tsx`
+- [x] **Endpoint voice/realtime config fields** — `LlmEndpoint` extended with `supportsVoice`, `supportsRealtime`, `realtimeModel` (optional, empty = disabled), `realtimeSystemPrompt` (empty = use default). Settings UI shows auto-detected capability badges and a `realtimeModel` override input; when set, a realtime system prompt editor appears with Default/Custom mode (same pattern as text system prompt). — `src/app/api/settings/route.ts`, `src/lib/llm/client.ts`, `src/app/api/models/route.ts`, `src/app/settings/page.tsx`
+- [x] **Mode toggle in chat** — `chat/page.tsx` tracks `chatMode` ("text" | "voice" | "realtime") and `endpointCaps`. `ChatInput` shows a mode toggle pill bar when the selected endpoint supports voice or realtime; resets to "text" on model switch if the new endpoint lacks the current mode. — `src/app/chat/page.tsx`, `src/components/chat/chat-input.tsx`
+- [x] **Voice mode (Whisper STT)** — `POST /api/voice/transcribe` accepts audio file + modelId, calls `client.audio.transcriptions.create({ file, model: "whisper-1" })`, returns `{ transcript }`. `useVoiceInput` hook uses `MediaRecorder` API; `VoiceInput` component shows mic button with click-to-record-toggle, spinner while transcribing, inline error. On transcript: sends as chat message and reverts to text mode. — `src/app/api/voice/transcribe/route.ts`, `src/hooks/use-voice-input.ts`, `src/components/chat/voice-input.tsx`
+- [x] **Realtime mode (WebRTC)** — `POST /api/realtime/session` creates an ephemeral OpenAI Realtime session (calls `POST /realtime/sessions` on the endpoint, passes tools excluding `display_titles`, passes realtime system prompt). Returns `clientSecret`, `realtimeModel`, `rtcBaseUrl`. Browser hook `useRealtimeChat` performs WebRTC SDP exchange directly with OpenAI, plays remote audio, shows live transcript, handles tool calls via `POST /api/realtime/tool` (server-side tool executor reusing existing registry). — `src/app/api/realtime/session/route.ts`, `src/app/api/realtime/tool/route.ts`, `src/hooks/use-realtime-chat.ts`, `src/components/chat/realtime-chat.tsx`
+- [x] **Default realtime system prompt** — `DEFAULT_REALTIME_SYSTEM_PROMPT` added (voice-adapted: no markdown/cards, natural spoken language). `buildRealtimeSystemPrompt(customPrompt?)` follows same pattern as `buildSystemPrompt()`. — `src/lib/llm/default-prompt.ts`, `src/lib/llm/system-prompt.ts`
+- [x] **`getEndpointConfig(modelId)` helper** — New export from `src/lib/llm/client.ts` to look up the full `LlmEndpointConfig` by modelId without constructing a client (used by realtime session route). — `src/lib/llm/client.ts`
+
+#### Tests
+- [x] **`src/__tests__/api/voice-transcribe.test.ts`** — Tests for 401 (unauth), 400 (missing audio), 200 (success with mocked Whisper), 500 (API error)
+- [x] **`src/__tests__/api/realtime-session.test.ts`** — Tests for 401 (unauth), 400 (no realtime support), 400 (unknown endpoint), 200 (success with mock fetch), 502 (OpenAI returns error)
 
 ### Phase 13: React 19 Upgrade Fix
 
@@ -203,6 +248,9 @@ Build an LLM-powered chat frontend for media management (*arr stack). Users log 
 ├── .dockerignore                    # Excludes node_modules, .next, etc.
 ├── entrypoint.sh                    # PUID/PGID user creation + server start
 ├── docker-compose.yml               # Development/example compose (with TZ)
+├── public/
+│   ├── manifest.json                # PWA web app manifest (standalone, dark theme)
+│   └── sw.js                        # Minimal service worker (network-first, required for PWA)
 ├── drizzle/
 │   └── 0000_short_gressill.sql      # Initial migration (5 tables)
 src/
@@ -230,12 +278,17 @@ src/
 │   │   │   ├── plex-connect/route.ts # POST Plex OAuth from settings
 │   │   │   ├── plex-devices/route.ts # GET discovered Plex servers via plex.tv API
 │   │   │   └── users/route.ts       # GET list / PATCH update user settings (incl. rate limits)
+│   │   ├── realtime/
+│   │   │   ├── session/route.ts     # POST create ephemeral OpenAI Realtime session (WebRTC)
+│   │   │   └── tool/route.ts        # POST execute tool server-side during realtime session
+│   │   ├── voice/
+│   │   │   └── transcribe/route.ts  # POST audio → Whisper STT → transcript
 │   │   └── setup/
 │   │       ├── route.ts             # GET status + POST save config
 │   │       └── test-connection/
-│   │           └── route.ts         # POST test service connectivity
+│   │           └── route.ts         # POST test service connectivity (+ capability probing)
 │   ├── chat/
-│   │   └── page.tsx                 # Chat page (sidebar + model picker + messages + input)
+│   │   └── page.tsx                 # Chat page (sidebar + model picker + mode toggle + messages + input)
 │   ├── login/
 │   │   └── page.tsx                 # Plex OAuth login (redirects admin to settings if needed)
 │   ├── settings/
@@ -248,15 +301,17 @@ src/
 │   └── favicon.ico
 ├── components/
 │   ├── chat/
-│   │   ├── chat-input.tsx           # Auto-resizing textarea + send/stop buttons
+│   │   ├── chat-input.tsx           # Text/Voice/Realtime mode toggle + textarea/mic/realtime UI
 │   │   ├── message-bubble.tsx       # User/assistant message styling + avatar + tool calls + TitleCarousel interception
 │   │   ├── message-content.tsx      # Markdown rendering (react-markdown + remark-gfm)
 │   │   ├── message-list.tsx         # Scrollable messages + historical tool call reconstruction
+│   │   ├── realtime-chat.tsx        # Full-duplex voice conversation UI (WebRTC, live transcript)
 │   │   ├── service-status.tsx       # Traffic light service status (green/amber/red)
 │   │   ├── sidebar.tsx              # Collapsible sidebar + grouped conversations + service status
 │   │   ├── title-card.tsx           # Rich title card (thumbnail, status, cast, Watch Now / Request / More Info buttons)
 │   │   ├── title-carousel.tsx       # Single card or horizontal snap-scroll carousel with arrow buttons
-│   │   └── tool-call.tsx            # "Running {Action} on {Service}" + expandable details
+│   │   ├── tool-call.tsx            # "Running {Action} on {Service}" + expandable details
+│   │   └── voice-input.tsx          # Mic record/transcribe UI (click-to-toggle, spinner)
 │   └── ui/
 │       ├── avatar.tsx               # Image/fallback avatar (sm/md/lg)
 │       ├── badge.tsx                # 4 variants
@@ -270,7 +325,9 @@ src/
 ├── hooks/
 │   ├── use-auto-scroll.ts           # Auto-scroll on new messages, respects manual scroll
 │   ├── use-chat.ts                  # Messages state, SSE streaming, send/stop, model override
-│   └── use-conversations.ts         # Conversation CRUD (list, create, delete, rename, viewAll)
+│   ├── use-conversations.ts         # Conversation CRUD (list, create, delete, rename, viewAll)
+│   ├── use-realtime-chat.ts         # WebRTC realtime hook (connect, SDP, data channel, tool calls)
+│   └── use-voice-input.ts           # MediaRecorder hook (record, stop, POST to transcribe)
 ├── lib/
 │   ├── auth/
 │   │   └── session.ts               # Session create/validate/destroy + cookie management
@@ -281,9 +338,10 @@ src/
 │   │   ├── migrate.ts               # runMigrations standalone utility
 │   │   └── schema.ts               # 5 tables
 │   ├── llm/
-│   │   ├── client.ts                # OpenAI client factory (default + per-endpoint resolution)
+│   │   ├── client.ts                # OpenAI client factory (default + per-endpoint + getEndpointConfig)
+│   │   ├── default-prompt.ts        # DEFAULT_SYSTEM_PROMPT + DEFAULT_REALTIME_SYSTEM_PROMPT
 │   │   ├── orchestrator.ts          # Chat streaming engine + model override + auto-title
-│   │   └── system-prompt.ts         # Dynamic system prompt builder
+│   │   └── system-prompt.ts         # buildSystemPrompt() + buildRealtimeSystemPrompt()
 │   ├── services/
 │   │   ├── overseerr.ts             # Overseerr client (search, request, list)
 │   │   ├── plex.ts                  # Plex client (search, on deck, recently added, availability)
@@ -300,6 +358,7 @@ src/
 │   │   ├── registry.ts              # Tool registry (defineTool, getOpenAITools, executeTool) + tool logging
 │   │   └── sonarr-tools.ts          # Sonarr tool definitions (4 tools)
 │   ├── logger.ts                    # Winston singleton (Console + DailyRotateFile to /config/logs/)
+│   ├── pwa.ts                       # PWA banner dismissal helpers (isPwaBannerDismissed, dismiss, reset)
 │   ├── security/
 │   │   ├── api-rate-limit.ts        # Per-user in-memory rate limiter (60 req/min) for API endpoints
 │   │   └── url-validation.ts        # Service URL allowlist/blocklist validation
@@ -371,12 +430,15 @@ src/
 | GET | /api/settings/logs | List log files with name/size/modified (admin) |
 | GET | /api/settings/logs/[filename] | Read last 500 lines or full log; `?download=true` streams file (admin) |
 | POST | /api/request | Submit Overseerr media request (movie or TV with optional seasons array) |
+| POST | /api/voice/transcribe | Transcribe audio file via Whisper STT (auth required) |
+| POST | /api/realtime/session | Create ephemeral OpenAI Realtime session token for WebRTC (auth required) |
+| POST | /api/realtime/tool | Execute a tool server-side during a realtime voice session (auth required) |
 
 ## MCP Tools
 
 | Server | Tools |
 |--------|-------|
-| Plex | plex_search_library, plex_get_on_deck, plex_get_recently_added, plex_check_availability, plex_search_collection, plex_search_by_tag |
+| Plex | plex_search_library, plex_get_on_deck, plex_get_recently_added, plex_check_availability, plex_search_collection, plex_search_by_tag, plex_get_title_tags |
 | Sonarr | sonarr_search_series, sonarr_get_series_status, sonarr_get_calendar, sonarr_get_queue |
 | Radarr | radarr_search_movie, radarr_get_movie_status, radarr_get_queue |
 | Overseerr | overseerr_search, overseerr_list_requests |
@@ -391,6 +453,6 @@ src/
 
 External MCP access uses bearer token (from `mcp.bearerToken` config). Optional `X-User-Id` header scopes operations to a specific user's permission level.
 
-### Phase 16: Version Bump to 1.1.1-beta.1
+### Phase 19: Version Bump to 1.1.1-beta.2
 
-- [x] Bump `package.json` version from `1.1.0-beta.1` to `1.1.1-beta.1`
+- Bumped `package.json` and `package-lock.json` version from `1.1.0-beta.1` to `1.1.1-beta.2`.

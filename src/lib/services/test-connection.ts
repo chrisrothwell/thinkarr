@@ -1,6 +1,58 @@
 import type { TestConnectionRequest, TestConnectionResponse } from "@/types/api";
 import { validateServiceUrl } from "@/lib/security/url-validation";
 
+/**
+ * Returns true only for genuine OpenAI endpoints (api.openai.com).
+ * ChatGPT-compatible providers (Gemini, Anthropic, local proxies, etc.) do not
+ * support the WebRTC-based Realtime API even if they expose an OpenAI-compatible
+ * REST surface, so realtime capability must never be advertised for them.
+ */
+export function isOpenAIEndpoint(url: string): boolean {
+  try {
+    const { hostname } = new URL(url);
+    return hostname === "api.openai.com";
+  } catch {
+    return false;
+  }
+}
+
+async function probeVoiceSupport(url: string, apiKey: string): Promise<boolean> {
+  try {
+    const base = url.replace(/\/$/, "");
+    const form = new FormData();
+    form.append("model", "whisper-1");
+    const res = await fetch(`${base}/audio/transcriptions`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}` },
+      body: form,
+      signal: AbortSignal.timeout(8000),
+    });
+    // 400 = endpoint exists but we sent bad params; 200 = success; both mean voice is supported
+    return res.status === 200 || res.status === 400;
+  } catch {
+    return false;
+  }
+}
+
+async function probeRealtimeSupport(url: string, apiKey: string): Promise<string | null> {
+  // Realtime (WebRTC) is an OpenAI-exclusive API — skip probing for any other provider.
+  if (!isOpenAIEndpoint(url)) return null;
+  try {
+    const base = url.replace(/\/$/, "");
+    const res = await fetch(`${base}/models`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const models: Array<{ id: string }> = data?.data ?? [];
+    const realtimeModel = models.find((m) => m.id.includes("realtime"));
+    return realtimeModel?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
 async function testLlm(url: string, apiKey: string, model?: string): Promise<TestConnectionResponse> {
   try {
     const { default: OpenAI } = await import("openai");
@@ -20,13 +72,25 @@ async function testLlm(url: string, apiKey: string, model?: string): Promise<Tes
           messages: [{ role: "user", content: "Hi" }],
         });
       }
-      return { success: true, message: `Connected to ${model}` };
     } else {
       // Just list models to verify connectivity
       const models = await client.models.list();
       const count = (await Array.fromAsync(models)).length;
+      // Return early without capability probing when no model specified
       return { success: true, message: `Connected. ${count} model(s) available.` };
     }
+
+    // Probe capabilities in parallel (best-effort — failures don't affect connection result)
+    const [supportsVoice, realtimeModel] = await Promise.all([
+      probeVoiceSupport(url, apiKey),
+      probeRealtimeSupport(url, apiKey),
+    ]);
+
+    return {
+      success: true,
+      message: `Connected to ${model}`,
+      capabilities: { supportsVoice, realtimeModel },
+    };
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : "Unknown error";
     return { success: false, message: `LLM connection failed: ${msg}` };

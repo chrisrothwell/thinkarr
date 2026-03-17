@@ -11,16 +11,16 @@ async function resolveTargetUser(userId: number) {
   return db.select().from(schema.users).where(eq(schema.users.id, userId)).get();
 }
 
-/** GET — return the per-user MCP token (auto-generate if missing). Admin only. */
+/** GET — return the per-user MCP token (auto-generate if missing). Admin or the user themselves. */
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ userId: string }> },
 ) {
   const session = await getSession();
-  if (!session || !session.user.isAdmin) {
+  if (!session) {
     return NextResponse.json<ApiResponse>(
-      { success: false, error: "Admin access required" },
-      { status: 403 },
+      { success: false, error: "Authentication required" },
+      { status: 401 },
     );
   }
 
@@ -28,6 +28,14 @@ export async function GET(
   const userId = parseInt(userIdStr, 10);
   if (!Number.isSafeInteger(userId) || userId <= 0) {
     return NextResponse.json<ApiResponse>({ success: false, error: "Invalid userId" }, { status: 400 });
+  }
+
+  // Allow admins to access any user's token; non-admins can only access their own
+  if (!session.user.isAdmin && session.user.id !== userId) {
+    return NextResponse.json<ApiResponse>(
+      { success: false, error: "Access denied" },
+      { status: 403 },
+    );
   }
 
   const user = await resolveTargetUser(userId);
@@ -44,16 +52,16 @@ export async function GET(
   return NextResponse.json<ApiResponse>({ success: true, data: { token } });
 }
 
-/** POST — regenerate the per-user MCP token. Admin only. */
+/** POST — regenerate the per-user MCP token. Admin or the user themselves. */
 export async function POST(
   _request: Request,
   { params }: { params: Promise<{ userId: string }> },
 ) {
   const session = await getSession();
-  if (!session || !session.user.isAdmin) {
+  if (!session) {
     return NextResponse.json<ApiResponse>(
-      { success: false, error: "Admin access required" },
-      { status: 403 },
+      { success: false, error: "Authentication required" },
+      { status: 401 },
     );
   }
 
@@ -61,6 +69,14 @@ export async function POST(
   const userId = parseInt(userIdStr, 10);
   if (!Number.isSafeInteger(userId) || userId <= 0) {
     return NextResponse.json<ApiResponse>({ success: false, error: "Invalid userId" }, { status: 400 });
+  }
+
+  // Allow admins to regenerate any user's token; non-admins can only regenerate their own
+  if (!session.user.isAdmin && session.user.id !== userId) {
+    return NextResponse.json<ApiResponse>(
+      { success: false, error: "Access denied" },
+      { status: 403 },
+    );
   }
 
   const user = await resolveTargetUser(userId);

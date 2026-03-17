@@ -195,6 +195,71 @@ describe("searchByTag — issue #15", () => {
     expect(results[0].title).toBe("The Matrix");
   });
 
+  it("uses the correct query parameter for each tagType", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          MediaContainer: { Directory: [{ key: "1", type: "movie" }] },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ MediaContainer: { Metadata: [MOVIE_ITEM] } }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { searchByTag } = await import("@/lib/services/plex");
+    await searchByTag("Canada", "country");
+
+    // The second fetch call should use country= not genre=
+    const secondCallUrl = (fetchMock.mock.calls[1][0] as string);
+    expect(secondCallUrl).toContain("country=Canada");
+    expect(secondCallUrl).not.toContain("genre=");
+  });
+
+  it("uses director= parameter when tagType is director", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          MediaContainer: { Directory: [{ key: "1", type: "movie" }] },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ MediaContainer: { Metadata: [MOVIE_ITEM] } }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { searchByTag } = await import("@/lib/services/plex");
+    await searchByTag("Christopher Nolan", "director");
+
+    const secondCallUrl = (fetchMock.mock.calls[1][0] as string);
+    expect(secondCallUrl).toContain("director=Christopher%20Nolan");
+  });
+
+  it("defaults to genre= when no tagType is provided", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          MediaContainer: { Directory: [{ key: "1", type: "movie" }] },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ MediaContainer: { Metadata: [MOVIE_ITEM] } }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { searchByTag } = await import("@/lib/services/plex");
+    await searchByTag("Horror");
+
+    const secondCallUrl = (fetchMock.mock.calls[1][0] as string);
+    expect(secondCallUrl).toContain("genre=Horror");
+  });
+
   it("skips non-movie and non-show sections", async () => {
     vi.stubGlobal("fetch", vi.fn()
       .mockResolvedValueOnce({
@@ -207,5 +272,59 @@ describe("searchByTag — issue #15", () => {
     const { searchByTag } = await import("@/lib/services/plex");
     const results = await searchByTag("Action");
     expect(results).toHaveLength(0);
+  });
+});
+
+describe("getTagsForTitle — issue #15", () => {
+  it("returns all tag categories for a title", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        MediaContainer: {
+          Metadata: [{
+            title: "Inception",
+            Genre: [{ tag: "Action" }, { tag: "Sci-Fi" }],
+            Director: [{ tag: "Christopher Nolan" }],
+            Role: [{ tag: "Leonardo DiCaprio" }, { tag: "Tom Hardy" }],
+            Country: [{ tag: "United States" }, { tag: "United Kingdom" }],
+            studio: "Warner Bros.",
+            contentRating: "PG-13",
+            Label: [],
+          }],
+        },
+      }),
+    }));
+
+    const { getTagsForTitle } = await import("@/lib/services/plex");
+    const tags = await getTagsForTitle("/library/metadata/100");
+    expect(tags.title).toBe("Inception");
+    expect(tags.genres).toEqual(["Action", "Sci-Fi"]);
+    expect(tags.directors).toEqual(["Christopher Nolan"]);
+    expect(tags.actors).toEqual(["Leonardo DiCaprio", "Tom Hardy"]);
+    expect(tags.countries).toEqual(["United States", "United Kingdom"]);
+    expect(tags.studio).toBe("Warner Bros.");
+    expect(tags.contentRating).toBe("PG-13");
+    expect(tags.labels).toEqual([]);
+  });
+
+  it("returns empty arrays for missing tag fields", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        MediaContainer: {
+          Metadata: [{ title: "Simple Movie" }],
+        },
+      }),
+    }));
+
+    const { getTagsForTitle } = await import("@/lib/services/plex");
+    const tags = await getTagsForTitle("/library/metadata/200");
+    expect(tags.genres).toEqual([]);
+    expect(tags.directors).toEqual([]);
+    expect(tags.actors).toEqual([]);
+    expect(tags.countries).toEqual([]);
+    expect(tags.labels).toEqual([]);
+    expect(tags.studio).toBeUndefined();
+    expect(tags.contentRating).toBeUndefined();
   });
 });

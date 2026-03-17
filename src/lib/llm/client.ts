@@ -30,7 +30,7 @@ export function getLlmModel(): string {
   return model;
 }
 
-interface LlmEndpointConfig {
+export interface LlmEndpointConfig {
   id: string;
   name: string;
   baseUrl: string;
@@ -38,9 +38,30 @@ interface LlmEndpointConfig {
   model: string;
   systemPrompt: string;
   enabled: boolean;
+  supportsVoice?: boolean;
+  supportsRealtime?: boolean;
+  realtimeModel?: string;
+  realtimeSystemPrompt?: string;
 }
 
 const endpointClients = new Map<string, { client: OpenAI; key: string }>();
+
+/**
+ * Resolve a modelId like "ep_123:gpt-4.1" to the full LlmEndpointConfig, or null if not found.
+ */
+export function getEndpointConfig(modelId: string): LlmEndpointConfig | null {
+  const colonIdx = modelId.indexOf(":");
+  const endpointId = colonIdx !== -1 ? modelId.slice(0, colonIdx) : null;
+  if (!endpointId) return null;
+  const raw = getConfig("llm.endpoints");
+  if (!raw) return null;
+  try {
+    const endpoints: LlmEndpointConfig[] = JSON.parse(raw);
+    return endpoints.find((e) => e.id === endpointId && e.enabled) ?? null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Resolve a modelId like "ep_123:gpt-4.1" to a specific OpenAI client + model + systemPrompt.
