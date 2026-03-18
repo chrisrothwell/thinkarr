@@ -433,6 +433,7 @@ src/
 | POST | /api/voice/transcribe | Transcribe audio file via Whisper STT (auth required) |
 | POST | /api/realtime/session | Create ephemeral OpenAI Realtime session token for WebRTC (auth required) |
 | POST | /api/realtime/tool | Execute a tool server-side during a realtime voice session (auth required) |
+| GET | /api/plex/avatar/[userId] | Server-side proxy for Plex user avatar images (auth required; fetches stored Plex.tv URL with token) |
 
 ## MCP Tools
 
@@ -469,3 +470,82 @@ Each platform builds and pushes by digest, then a `docker-merge` job assembles t
 
 **Files changed:**
 - `.github/workflows/docker-publish.yml` — split `docker` job into matrix + added `docker-merge` job
+
+### Phase 22: Consistent Title Card Schema Across All Tools
+
+All Plex and Overseerr tools now return the same field names as the `display_titles` tool's input schema, so the LLM can pass results directly to `display_titles` without translation.
+
+#### Field renames
+
+| Tool | Old field | New field |
+|------|-----------|-----------|
+| Plex | `key` | `plexKey` |
+| Plex | `thumb` | `thumbPath` |
+| Plex | `type` ("show"/"season") | `mediaType` ("tv") |
+| Overseerr search | `id` | `overseerrId` |
+| Overseerr search | `overview` | `summary` |
+| Overseerr search | `voteAverage` | `rating` |
+| Overseerr search | `posterUrl` | `thumbPath` |
+| Overseerr search | (added) | `overseerrMediaType` (= `mediaType`) |
+| Overseerr requests | `type` | `mediaType` |
+| Overseerr requests | `posterUrl` | `thumbPath` |
+| Overseerr requests | (added) | `overseerrId` (= `tmdbId`) |
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/services/plex.ts` | Normalized `PlexSearchResult` fields; `mapMetadata` maps "show"/"season" → `mediaType: "tv"` |
+| `src/lib/services/overseerr.ts` | Normalized `OverseerrSearchResult` and `OverseerrRequest` fields |
+| `src/lib/tools/display-titles-tool.ts` | Updated description to note direct field mapping |
+| `src/lib/tools/plex-tools.ts` | Updated description for `mediaType` field |
+| `src/lib/tools/overseerr-tools.ts` | Updated descriptions for normalized field names |
+| `src/__tests__/lib/plex.test.ts` | Updated assertions for `mediaType` instead of `type` |
+| `src/__tests__/lib/overseerr.test.ts` | Updated assertions for `rating`, `thumbPath`, `overseerrId` |
+
+### Phase 21: Bug Fixes for Issues #76, #87, #88, #98, #99, #100, #101, #102, #103
+
+#### Fixed
+
+- [x] **#87 — Floating version badge visible in landscape mode** — Removed the floating `fixed bottom-2 left-2` version badge from `src/app/chat/page.tsx`. The sidebar already shows the version string; the floating badge caused it to appear twice in landscape mode when the sidebar was open. — `src/app/chat/page.tsx`
+
+- [x] **#88 — System prompt: wrong collection name for "leaving soon"** — Updated `DEFAULT_SYSTEM_PROMPT` to instruct the LLM to use the precise collection names `'Movies leaving soon'` (for movie queries) and `'Series leaving soon'` (for TV queries), or both when the question is ambiguous. — `src/lib/llm/default-prompt.ts`
+
+- [x] **#98 — Sidebar forces text wrapping instead of overlaying chat** — On mobile the sidebar is now `position: fixed` (overlays the chat area) with a semi-transparent backdrop. On desktop (`md:`) it remains `relative` so the layout flows as before. A click on the backdrop dismisses the sidebar. — `src/components/chat/sidebar.tsx`
+
+- [x] **#99 — `plex_get_title_tags` returns empty tags for series** — Tags (genre, director, etc.) are stored at the show level, not on individual seasons or episodes. `getTagsForTitle` now follows `parentKey` when the fetched item is a season, and `grandparentKey` when it is an episode, automatically fetching the parent show's metadata to retrieve the correct tags. Failure to resolve the parent falls back to the original metadata gracefully. — `src/lib/services/plex.ts`
+
+- [x] **#100 — User avatar no longer displays in chat** — Root cause: Plex.tv avatar URLs stored in the DB (`plexUser.thumb` from `/api/v2/user`) now require authentication or are otherwise unavailable when fetched directly by the browser. Fix: added a server-side proxy route `/api/plex/avatar/[userId]` that fetches the stored avatar URL using the user's Plex token and streams the image to the browser. All API endpoints that return `plexAvatarUrl` to the frontend (`getSession`, `/api/auth/callback`, `/api/settings/users`, `/api/conversations`) now return the proxy URL `/api/plex/avatar/{id}` instead of the raw Plex.tv URL. The existing `onError` fallback in `Avatar` is retained as a safety net. — `src/app/api/plex/avatar/[userId]/route.ts`, `src/lib/auth/session.ts`, `src/app/api/auth/callback/route.ts`, `src/app/api/settings/users/route.ts`, `src/app/api/conversations/route.ts`
+
+- [x] **#101 — Overseerr search returns insufficient data for title cards** — `overseerr_search` now returns `voteAverage` (rating out of 10, from TMDB data already in search results), full `overview` (synopsis, no longer truncated), and `cast` (top 5 cast members). Cast requires a detail fetch per result (`/movie/{id}` or `/tv/{id}`); these are performed in parallel alongside the existing TV detail fetch for `numberOfSeasons`. The `overseerr_list_requests` additions from the previous phase (posterUrl, tmdbId, request details) are retained. — `src/lib/services/overseerr.ts`, `src/lib/tools/overseerr-tools.ts`
+
+- [x] **#102 — LLM settings tab UI runs off screen on mobile** — Refactored the endpoint `CardHeader` row to use `flex-wrap` so the name input, Enabled checkbox, Default radio, and delete button wrap gracefully on narrow viewports instead of overflowing horizontally. The name input grows to full width on mobile (`w-full sm:w-48`). — `src/app/settings/page.tsx`
+
+- [x] **#103 — No warning when leaving Settings with unsaved changes** — Added a `savedConfigRef` (via `useRef`) that snapshots the loaded config after initial fetch and after each successful save. When the user clicks the back button, the current config is serialised and compared to the snapshot; if they differ a `window.confirm` dialog asks the user to confirm discarding changes. The existing incomplete-setup warning is preserved. — `src/app/settings/page.tsx`
+
+- [x] **#76 — PWA installation not available** — Root cause: the web app manifest lacked a correctly sized icon required by browsers before they fire `beforeinstallprompt`. Fix: added `public/icon.svg` (512×512 SVG lettermark) and registered it in `manifest.json` with `purpose: "any maskable"`. PWA installation UI remains **mobile-only**: the chat banner returns `null` when `!isMobile`, and the Settings page shows a mobile-only note on desktop instead of the install controls. — `public/manifest.json`, `public/icon.svg`, `src/components/chat/pwa-install-banner.tsx`, `src/app/settings/page.tsx`
+
+#### New / changed files
+
+| File | Change |
+|------|--------|
+| `src/app/chat/page.tsx` | Removed floating version badge |
+| `src/lib/llm/default-prompt.ts` | Updated "leaving soon" collection name guidance |
+| `src/components/chat/sidebar.tsx` | Mobile overlay sidebar with backdrop |
+| `src/lib/services/plex.ts` | `getTagsForTitle` follows parentKey/grandparentKey for seasons/episodes |
+| `src/components/ui/avatar.tsx` | Client component, `onError` fallback for broken images |
+| `src/app/api/plex/avatar/[userId]/route.ts` | New server-side avatar proxy route |
+| `src/lib/auth/session.ts` | `getSession` returns proxy URL for `plexAvatarUrl` |
+| `src/app/api/auth/callback/route.ts` | Returns proxy URL in login response |
+| `src/app/api/settings/users/route.ts` | Returns proxy URLs for all users |
+| `src/app/api/conversations/route.ts` | Returns proxy URL for `ownerAvatarUrl` |
+| `src/lib/services/overseerr.ts` | Normalized field names + rating/cast; `listRequests` includes thumbPath/overseerrId |
+| `src/lib/services/plex.ts` | Normalized field names: `plexKey`, `thumbPath`, `mediaType` ("show"→"tv") |
+| `src/lib/tools/overseerr-tools.ts` | Updated tool descriptions for normalized fields |
+| `src/lib/tools/plex-tools.ts` | Updated `plex_get_recently_added` description for `mediaType` field |
+| `src/lib/tools/display-titles-tool.ts` | Updated description: fields now match directly across Plex and Overseerr |
+| `src/app/settings/page.tsx` | Mobile-friendly LLM card header; unsaved-changes warning |
+| `public/manifest.json` | Added SVG icon entry |
+| `public/icon.svg` | New Thinkarr app icon (512×512 SVG) |
+| `src/__tests__/lib/plex.test.ts` | Updated tests for normalized field names + season/episode parent tag lookup |
+| `src/__tests__/lib/overseerr.test.ts` | Updated tests for normalized field names + rating/cast |

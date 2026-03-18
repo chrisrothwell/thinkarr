@@ -1,3 +1,6 @@
+"use client";
+
+import { useState } from "react";
 import { cn } from "@/lib/utils";
 
 interface AvatarProps {
@@ -14,6 +17,8 @@ const sizeStyles = {
 };
 
 export function Avatar({ src, fallback, className, size = "md" }: AvatarProps) {
+  const [imgError, setImgError] = useState(false);
+
   return (
     <div
       className={cn(
@@ -22,9 +27,14 @@ export function Avatar({ src, fallback, className, size = "md" }: AvatarProps) {
         className
       )}
     >
-      {src ? (
+      {src && !imgError ? (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={src} alt={fallback} className="h-full w-full object-cover" />
+        <img
+          src={src}
+          alt={fallback}
+          className="h-full w-full object-cover"
+          onError={() => setImgError(true)}
+        />
       ) : (
         <span className="font-medium text-muted-foreground">
           {fallback.charAt(0).toUpperCase()}

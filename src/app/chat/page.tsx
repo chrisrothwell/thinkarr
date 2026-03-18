@@ -156,8 +156,6 @@ export default function ChatPage() {
     );
   }
 
-  const appVersion = process.env.NEXT_PUBLIC_APP_VERSION;
-
   return (
     <div className="flex h-[100dvh]">
       <Sidebar
@@ -252,13 +250,6 @@ export default function ChatPage() {
           selectedModel={selectedModel}
         />
       </main>
-      {appVersion && (
-        <div className="fixed bottom-2 left-2 z-10 pointer-events-none hidden md:block">
-          <span className="text-[10px] text-muted-foreground/40 font-mono select-none">
-            {/^\d/.test(appVersion) ? `v${appVersion}` : appVersion}
-          </span>
-        </div>
-      )}
     </div>
   );
 }

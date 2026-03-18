@@ -54,10 +54,21 @@ export function Sidebar({
     : [{ owner: null, conversations }];
 
   return (
+    <>
+      {/* Overlay backdrop — visible on mobile when sidebar is open */}
+      {!collapsed && (
+        <div
+          className="fixed inset-0 z-10 bg-black/40 md:hidden"
+          onClick={onToggle}
+          aria-hidden="true"
+        />
+      )}
     <aside
       className={cn(
         "flex flex-col border-r bg-sidebar transition-all duration-200",
-        collapsed ? "w-0 overflow-hidden border-r-0" : "w-64",
+        collapsed
+          ? "w-0 overflow-hidden border-r-0"
+          : "fixed inset-y-0 left-0 z-20 w-64 md:relative md:inset-auto md:z-auto",
       )}
     >
       {/* Header */}
@@ -152,6 +163,7 @@ export function Sidebar({
         </div>
       )}
     </aside>
+    </>
   );
 }
 

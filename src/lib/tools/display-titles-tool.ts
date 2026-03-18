@@ -29,19 +29,20 @@ export function registerDisplayTitlesTool() {
     description: `Display rich title cards for movies, TV shows, or episodes in the chat UI.
 Call this tool after searching Plex or Overseerr — even when titles are not in Plex.
 
+All Plex and Overseerr tools now return field names that map directly to this tool's input — no translation needed:
+- plexKey ← Plex result "plexKey" field
+- thumbPath ← Plex result "thumbPath" OR Overseerr result "thumbPath"
+- overseerrId ← Overseerr result "overseerrId"
+- overseerrMediaType ← Overseerr result "overseerrMediaType"
+- summary ← Plex result "summary" OR Overseerr result "summary"
+- rating ← Plex result "rating" OR Overseerr result "rating"
+- cast ← Plex result "cast" OR Overseerr result "cast"
+
 mediaStatus mapping:
 - "available": title exists in the Plex library
 - "partial": TV show exists in Plex but not all seasons
 - "pending": requested in Overseerr but not yet downloaded
 - "not_requested": not in Plex and not in Overseerr
-
-Field sources:
-- plexKey: Plex result "key" field (e.g. "/library/metadata/123") — enables Watch Now button
-- thumbPath: Plex result "thumb" field for Plex titles; Overseerr result "posterUrl" field for non-Plex titles
-- overseerrId: Overseerr result "id" field — enables Request button
-- overseerrMediaType: "movie" or "tv" — required alongside overseerrId for requests
-- seasonNumber: REQUIRED for season cards — the Request button uses this to request only that season
-- For Overseerr-only titles (not in Plex): pass posterUrl as thumbPath, omit plexKey
 
 IMPORTANT — multi-season TV shows:
 If an Overseerr TV result has seasonCount > 1, you MUST call this tool with one entry per season (S1 through S{seasonCount}), not one entry for the whole show. Set seasonNumber on each entry. Do NOT create a single card for a multi-season show — it will cause the request to fail.`,
