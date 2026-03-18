@@ -13,6 +13,26 @@
 import { test, expect } from "@playwright/test";
 
 test.describe("Rate limit UI", () => {
+  test.afterEach(async ({ context, request }) => {
+    // Reset the rate limit back to the default (100) so subsequent tests are
+    // not affected by the 0-message limit set during the test.
+    const cookies = await context.cookies();
+    const sessionCookie = cookies.map((c) => `${c.name}=${c.value}`).join("; ");
+
+    const sessionRes = await request.get("/api/auth/session", {
+      headers: { Cookie: sessionCookie },
+    });
+    const { data: sessionData } = await sessionRes.json();
+    const userId = sessionData?.user?.id;
+
+    if (userId) {
+      await request.patch("/api/settings/users", {
+        headers: { Cookie: sessionCookie },
+        data: { userId, rateLimitMessages: 100, rateLimitPeriod: "day" },
+      });
+    }
+  });
+
   test("rate limit error appears inline when limit is exceeded", async ({ page, context, request }) => {
     await page.goto("/chat");
 
