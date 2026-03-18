@@ -51,17 +51,18 @@ export interface OverseerrRequestSummary {
 }
 
 export interface OverseerrSearchResult {
-  id: number;
-  mediaType: string;
+  overseerrId: number;          // Overseerr media ID — pass directly as overseerrId to display_titles
+  overseerrMediaType: string;   // "movie" | "tv" — pass directly as overseerrMediaType to display_titles
+  mediaType: string;            // Same as overseerrMediaType; kept for context
   title: string;
   year?: string;
-  overview?: string;
+  summary?: string;             // Synopsis — pass directly as summary to display_titles
   releaseDate?: string;
-  voteAverage?: number;     // TMDB audience rating (0–10)
-  cast?: string[];          // Top cast members (up to 5)
+  rating?: number;              // TMDB audience rating (0–10) — pass directly as rating to display_titles
+  cast?: string[];              // Top cast members (up to 5) — pass directly as cast to display_titles
   mediaStatus: string;
-  posterUrl?: string;       // Full TMDB poster URL (https://image.tmdb.org/t/p/w300/...)
-  imdbId?: string;          // IMDB ID (e.g. "tt1234567") when available
+  thumbPath?: string;           // Full TMDB poster URL — pass directly as thumbPath to display_titles
+  imdbId?: string;              // IMDB ID (e.g. "tt1234567") when available
   // TV-specific
   seasonCount?: number;
   seasons?: OverseerrSeasonStatus[];
@@ -150,17 +151,19 @@ export async function search(query: string): Promise<OverseerrSearchResult[]> {
       };
     });
 
+    const mediaType = r.mediaType as string;
     return {
-      id: r.id as number,
-      mediaType: r.mediaType as string,
+      overseerrId: r.id as number,
+      overseerrMediaType: mediaType,
+      mediaType,
       title: (r.title || r.name) as string,
       year: ((r.releaseDate || r.firstAirDate) as string | undefined)?.substring(0, 4),
-      overview: r.overview as string | undefined,
+      summary: r.overview as string | undefined,
       releaseDate: (r.releaseDate || r.firstAirDate) as string | undefined,
-      voteAverage: r.voteAverage as number | undefined,
+      rating: r.voteAverage as number | undefined,
       cast: detail?.cast,
       mediaStatus: mediaStatusLabel(mediaInfo),
-      posterUrl: posterPath ? `https://image.tmdb.org/t/p/w300${posterPath}` : undefined,
+      thumbPath: posterPath ? `https://image.tmdb.org/t/p/w300${posterPath}` : undefined,
       imdbId: imdbId || undefined,
       seasonCount: isTV ? (detail?.seasonCount ?? (r.numberOfSeasons as number | undefined)) : undefined,
       seasons: isTV && rawSeasons.length > 0
@@ -177,16 +180,17 @@ export async function search(query: string): Promise<OverseerrSearchResult[]> {
 }
 
 export interface OverseerrRequest {
-  id: number;
-  type: string;
+  id: number;           // Request ID (for tracking/admin purposes)
+  mediaType: string;    // "movie" | "tv"
   title: string;
   year?: string;
   status: string;
   requestedBy: string;
   requestedAt: string;
   seasonsRequested?: number[];
-  posterUrl?: string;   // Full TMDB poster URL when available
-  tmdbId?: number;      // TMDB ID for use with overseerr_search to get full details
+  thumbPath?: string;   // Full TMDB poster URL — pass directly as thumbPath to display_titles
+  tmdbId?: number;      // TMDB ID for cross-reference with overseerr_search
+  overseerrId?: number; // Same as tmdbId — pass directly as overseerrId to display_titles
 }
 
 export async function listRequests(): Promise<OverseerrRequest[]> {
@@ -237,15 +241,16 @@ export async function listRequests(): Promise<OverseerrRequest[]> {
 
     return {
       id: r.id as number,
-      type: r.type as string,
+      mediaType: r.type as string,
       title: (titleMap.get(r.id as number) ?? "Unknown") as string,
       year: ((media?.releaseDate || media?.firstAirDate) as string | undefined)?.substring(0, 4),
       status: requestStatusLabel(r.status as number),
       requestedBy: ((r.requestedBy as Record<string, unknown>)?.displayName || "Unknown") as string,
       requestedAt: r.createdAt as string,
       seasonsRequested: seasonsList && seasonsList.length > 0 ? seasonsList : undefined,
-      posterUrl: posterPath ? `https://image.tmdb.org/t/p/w300${posterPath}` : undefined,
+      thumbPath: posterPath ? `https://image.tmdb.org/t/p/w300${posterPath}` : undefined,
       tmdbId: tmdbId ?? undefined,
+      overseerrId: tmdbId ?? undefined,
     };
   });
 }

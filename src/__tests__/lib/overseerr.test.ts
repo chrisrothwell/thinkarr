@@ -168,7 +168,7 @@ describe("search — issue #101: includes rating and cast from detail endpoint",
 
     const { search } = await import("@/lib/services/overseerr");
     const results = await search("Fight Club");
-    expect(results[0].voteAverage).toBe(8.4);
+    expect(results[0].rating).toBe(8.4);
   });
 
   it("includes cast from detail endpoint for movies", async () => {
@@ -264,12 +264,12 @@ describe("search — issue #101: includes rating and cast from detail endpoint",
   });
 });
 
-describe("listRequests — issue #101: includes posterUrl and tmdbId", () => {
+describe("listRequests — issue #101: includes thumbPath, overseerrId, and tmdbId", () => {
   beforeEach(() => {
     vi.resetModules();
   });
 
-  it("includes posterUrl and tmdbId from media object", async () => {
+  it("includes thumbPath, overseerrId, and tmdbId from media object", async () => {
     const requestWithMedia = {
       id: 706,
       type: "movie",
@@ -287,11 +287,12 @@ describe("listRequests — issue #101: includes posterUrl and tmdbId", () => {
 
     const { listRequests } = await import("@/lib/services/overseerr");
     const results = await listRequests();
-    expect(results[0].posterUrl).toBe("https://image.tmdb.org/t/p/w300/poster.jpg");
+    expect(results[0].thumbPath).toBe("https://image.tmdb.org/t/p/w300/poster.jpg");
     expect(results[0].tmdbId).toBe(550);
+    expect(results[0].overseerrId).toBe(550);
   });
 
-  it("posterUrl is undefined when media has no posterPath", async () => {
+  it("thumbPath is undefined when media has no posterPath", async () => {
     const requestWithoutPoster = {
       id: 707,
       type: "movie",
@@ -309,7 +310,7 @@ describe("listRequests — issue #101: includes posterUrl and tmdbId", () => {
 
     const { listRequests } = await import("@/lib/services/overseerr");
     const results = await listRequests();
-    expect(results[0].posterUrl).toBeUndefined();
+    expect(results[0].thumbPath).toBeUndefined();
     expect(results[0].tmdbId).toBe(551);
   });
 });

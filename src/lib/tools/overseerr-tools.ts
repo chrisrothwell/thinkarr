@@ -5,7 +5,7 @@ import * as overseerr from "@/lib/services/overseerr";
 export function registerOverseerrTools() {
   defineTool({
     name: "overseerr_search",
-    description: "Search for movies or TV shows on Overseerr. Returns availability, request status, rating (voteAverage out of 10), synopsis (overview), and top cast members for each result.",
+    description: "Search for movies or TV shows on Overseerr. Returns availability, request status, rating, summary (synopsis), cast, thumbPath (poster), overseerrId, and overseerrMediaType — all fields map directly to display_titles.",
     schema: z.object({
       query: z.string().describe("Search query (movie or TV show title)"),
     }),
@@ -14,7 +14,7 @@ export function registerOverseerrTools() {
 
   defineTool({
     name: "overseerr_list_requests",
-    description: "List recent media requests from Overseerr. Returns request metadata (status, requester, date) along with poster URL and TMDB ID for each title. Use overseerr_search with the title for full availability details.",
+    description: "List recent media requests from Overseerr. Returns request metadata (status, requester, date) with thumbPath (poster), overseerrId, and mediaType — all fields map directly to display_titles. Use overseerr_search with the title for full details including rating and cast.",
     schema: z.object({}),
     handler: async () => overseerr.listRequests(),
   });

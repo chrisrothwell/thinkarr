@@ -471,6 +471,38 @@ Each platform builds and pushes by digest, then a `docker-merge` job assembles t
 **Files changed:**
 - `.github/workflows/docker-publish.yml` — split `docker` job into matrix + added `docker-merge` job
 
+### Phase 22: Consistent Title Card Schema Across All Tools
+
+All Plex and Overseerr tools now return the same field names as the `display_titles` tool's input schema, so the LLM can pass results directly to `display_titles` without translation.
+
+#### Field renames
+
+| Tool | Old field | New field |
+|------|-----------|-----------|
+| Plex | `key` | `plexKey` |
+| Plex | `thumb` | `thumbPath` |
+| Plex | `type` ("show"/"season") | `mediaType` ("tv") |
+| Overseerr search | `id` | `overseerrId` |
+| Overseerr search | `overview` | `summary` |
+| Overseerr search | `voteAverage` | `rating` |
+| Overseerr search | `posterUrl` | `thumbPath` |
+| Overseerr search | (added) | `overseerrMediaType` (= `mediaType`) |
+| Overseerr requests | `type` | `mediaType` |
+| Overseerr requests | `posterUrl` | `thumbPath` |
+| Overseerr requests | (added) | `overseerrId` (= `tmdbId`) |
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/services/plex.ts` | Normalized `PlexSearchResult` fields; `mapMetadata` maps "show"/"season" → `mediaType: "tv"` |
+| `src/lib/services/overseerr.ts` | Normalized `OverseerrSearchResult` and `OverseerrRequest` fields |
+| `src/lib/tools/display-titles-tool.ts` | Updated description to note direct field mapping |
+| `src/lib/tools/plex-tools.ts` | Updated description for `mediaType` field |
+| `src/lib/tools/overseerr-tools.ts` | Updated descriptions for normalized field names |
+| `src/__tests__/lib/plex.test.ts` | Updated assertions for `mediaType` instead of `type` |
+| `src/__tests__/lib/overseerr.test.ts` | Updated assertions for `rating`, `thumbPath`, `overseerrId` |
+
 ### Phase 21: Bug Fixes for Issues #76, #87, #88, #98, #99, #100, #101, #102, #103
 
 #### Fixed
@@ -507,10 +539,13 @@ Each platform builds and pushes by digest, then a `docker-merge` job assembles t
 | `src/app/api/auth/callback/route.ts` | Returns proxy URL in login response |
 | `src/app/api/settings/users/route.ts` | Returns proxy URLs for all users |
 | `src/app/api/conversations/route.ts` | Returns proxy URL for `ownerAvatarUrl` |
-| `src/lib/services/overseerr.ts` | `search` includes request details, rating, cast; `listRequests` includes posterUrl/tmdbId |
-| `src/lib/tools/overseerr-tools.ts` | Updated tool descriptions for rating/cast |
+| `src/lib/services/overseerr.ts` | Normalized field names + rating/cast; `listRequests` includes thumbPath/overseerrId |
+| `src/lib/services/plex.ts` | Normalized field names: `plexKey`, `thumbPath`, `mediaType` ("show"→"tv") |
+| `src/lib/tools/overseerr-tools.ts` | Updated tool descriptions for normalized fields |
+| `src/lib/tools/plex-tools.ts` | Updated `plex_get_recently_added` description for `mediaType` field |
+| `src/lib/tools/display-titles-tool.ts` | Updated description: fields now match directly across Plex and Overseerr |
 | `src/app/settings/page.tsx` | Mobile-friendly LLM card header; unsaved-changes warning |
 | `public/manifest.json` | Added SVG icon entry |
 | `public/icon.svg` | New Thinkarr app icon (512×512 SVG) |
-| `src/__tests__/lib/plex.test.ts` | Tests for season/episode parent tag lookup (#99) |
-| `src/__tests__/lib/overseerr.test.ts` | Tests for unified search+request data and listRequests posterUrl (#101) |
+| `src/__tests__/lib/plex.test.ts` | Updated tests for normalized field names + season/episode parent tag lookup |
+| `src/__tests__/lib/overseerr.test.ts` | Updated tests for normalized field names + rating/cast |

@@ -74,18 +74,19 @@ describe("getRecentlyAdded — deduplication and title mapping", () => {
     }));
   });
 
-  it("maps movie items with correct type and title", async () => {
+  it("maps movie items with correct mediaType and title", async () => {
     const { getRecentlyAdded } = await import("@/lib/services/plex");
     const results = await getRecentlyAdded();
-    const movie = results.find((r) => r.type === "movie");
+    const movie = results.find((r) => r.mediaType === "movie");
     expect(movie).toBeDefined();
     expect(movie!.title).toBe("The Matrix");
   });
 
-  it("maps season items: title includes show name, not bare 'Season N'", async () => {
+  it("maps season items: mediaType is 'tv', title includes show name, not bare 'Season N'", async () => {
     const { getRecentlyAdded } = await import("@/lib/services/plex");
     const results = await getRecentlyAdded();
-    const season = results.find((r) => r.type === "season");
+    // Seasons now have mediaType "tv" (normalized from "season")
+    const season = results.find((r) => r.mediaType === "tv" && r.showTitle);
     expect(season).toBeDefined();
     expect(season!.title).toContain("Breaking Bad");
     expect(season!.title).not.toBe("Season 1");
@@ -96,9 +97,9 @@ describe("getRecentlyAdded — deduplication and title mapping", () => {
   it("deduplicates multiple seasons from the same show", async () => {
     const { getRecentlyAdded } = await import("@/lib/services/plex");
     const results = await getRecentlyAdded();
-    const seasons = results.filter((r) => r.type === "season");
+    const tvItems = results.filter((r) => r.mediaType === "tv");
     // All three seasons share showTitle "Breaking Bad" → only one should appear
-    expect(seasons.length).toBe(1);
+    expect(tvItems.length).toBe(1);
   });
 });
 
@@ -117,7 +118,7 @@ describe("mapMetadata — episode parent context", () => {
   it("episode items include showTitle, seasonNumber, episodeNumber", async () => {
     const { getRecentlyAdded } = await import("@/lib/services/plex");
     const results = await getRecentlyAdded();
-    const ep = results.find((r) => r.type === "episode");
+    const ep = results.find((r) => r.mediaType === "episode");
     expect(ep).toBeDefined();
     expect(ep!.showTitle).toBe("Breaking Bad");
     expect(ep!.seasonNumber).toBe(1);
