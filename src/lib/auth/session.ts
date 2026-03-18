@@ -89,7 +89,9 @@ export async function getSession(): Promise<SessionWithUser | null> {
       plexId: user.plexId,
       plexUsername: user.plexUsername,
       plexEmail: user.plexEmail,
-      plexAvatarUrl: user.plexAvatarUrl,
+      // Proxy through our server so the Plex token is never exposed to the browser
+      // and auth-gated avatar URLs work regardless of Plex.tv policy changes.
+      plexAvatarUrl: user.plexAvatarUrl ? `/api/plex/avatar/${user.id}` : null,
       isAdmin: user.isAdmin,
     },
   };

@@ -138,6 +138,132 @@ describe("search — issue #101: includes request details from mediaInfo", () =>
   });
 });
 
+describe("search — issue #101: includes rating and cast from detail endpoint", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("includes voteAverage (rating) from search results", async () => {
+    const searchResult = {
+      id: 550,
+      mediaType: "movie",
+      title: "Fight Club",
+      releaseDate: "1999-10-15",
+      posterPath: "/poster.jpg",
+      overview: "A movie about soap.",
+      voteAverage: 8.4,
+      mediaInfo: { status: 5 },
+    };
+
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ results: [searchResult] }),
+      })
+      .mockResolvedValueOnce({
+        // detail fetch for movie
+        ok: true,
+        json: async () => ({ title: "Fight Club", credits: { cast: [] } }),
+      }));
+
+    const { search } = await import("@/lib/services/overseerr");
+    const results = await search("Fight Club");
+    expect(results[0].voteAverage).toBe(8.4);
+  });
+
+  it("includes cast from detail endpoint for movies", async () => {
+    const searchResult = {
+      id: 550,
+      mediaType: "movie",
+      title: "Fight Club",
+      releaseDate: "1999-10-15",
+      posterPath: "/poster.jpg",
+      overview: "A movie about soap.",
+      mediaInfo: { status: 5 },
+    };
+
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ results: [searchResult] }),
+      })
+      .mockResolvedValueOnce({
+        // detail fetch: /movie/550
+        ok: true,
+        json: async () => ({
+          title: "Fight Club",
+          credits: {
+            cast: [
+              { name: "Brad Pitt" },
+              { name: "Edward Norton" },
+              { name: "Helena Bonham Carter" },
+            ],
+          },
+        }),
+      }));
+
+    const { search } = await import("@/lib/services/overseerr");
+    const results = await search("Fight Club");
+    expect(results[0].cast).toEqual(["Brad Pitt", "Edward Norton", "Helena Bonham Carter"]);
+  });
+
+  it("includes cast from TV detail endpoint and still returns numberOfSeasons", async () => {
+    const tvSearchResult = {
+      id: 1396,
+      mediaType: "tv",
+      name: "Breaking Bad",
+      firstAirDate: "2008-01-20",
+      posterPath: "/poster.jpg",
+      overview: "A chemistry teacher turns to crime.",
+      mediaInfo: { status: 5 },
+    };
+
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ results: [tvSearchResult] }),
+      })
+      .mockResolvedValueOnce({
+        // detail fetch: /tv/1396
+        ok: true,
+        json: async () => ({
+          numberOfSeasons: 5,
+          credits: {
+            cast: [{ name: "Bryan Cranston" }, { name: "Aaron Paul" }],
+          },
+        }),
+      }));
+
+    const { search } = await import("@/lib/services/overseerr");
+    const results = await search("Breaking Bad");
+    expect(results[0].seasonCount).toBe(5);
+    expect(results[0].cast).toEqual(["Bryan Cranston", "Aaron Paul"]);
+  });
+
+  it("cast is undefined when detail fetch fails", async () => {
+    const searchResult = {
+      id: 550,
+      mediaType: "movie",
+      title: "Fight Club",
+      releaseDate: "1999-10-15",
+      posterPath: "/poster.jpg",
+      overview: "A movie about soap.",
+      mediaInfo: { status: 5 },
+    };
+
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ results: [searchResult] }),
+      })
+      .mockRejectedValueOnce(new Error("Network error")));
+
+    const { search } = await import("@/lib/services/overseerr");
+    const results = await search("Fight Club");
+    expect(results[0].cast).toBeUndefined();
+  });
+});
+
 describe("listRequests — issue #101: includes posterUrl and tmdbId", () => {
   beforeEach(() => {
     vi.resetModules();

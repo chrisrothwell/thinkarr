@@ -9,7 +9,7 @@ export function PwaInstallBanner() {
   const { isAvailable, isMobile, isIosDevice, install } = usePwaInstall();
   const [dismissed, setDismissed] = useState(() => isPwaBannerDismissed());
 
-  if (dismissed) return null;
+  if (dismissed || !isMobile) return null;
 
   function handleDismiss() {
     dismissPwaBanner();

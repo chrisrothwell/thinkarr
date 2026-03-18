@@ -5,7 +5,7 @@ import * as overseerr from "@/lib/services/overseerr";
 export function registerOverseerrTools() {
   defineTool({
     name: "overseerr_search",
-    description: "Search for movies or TV shows on Overseerr. Shows availability and request status.",
+    description: "Search for movies or TV shows on Overseerr. Returns availability, request status, rating (voteAverage out of 10), synopsis (overview), and top cast members for each result.",
     schema: z.object({
       query: z.string().describe("Search query (movie or TV show title)"),
     }),

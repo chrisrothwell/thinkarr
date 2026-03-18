@@ -433,6 +433,7 @@ src/
 | POST | /api/voice/transcribe | Transcribe audio file via Whisper STT (auth required) |
 | POST | /api/realtime/session | Create ephemeral OpenAI Realtime session token for WebRTC (auth required) |
 | POST | /api/realtime/tool | Execute a tool server-side during a realtime voice session (auth required) |
+| GET | /api/plex/avatar/[userId] | Server-side proxy for Plex user avatar images (auth required; fetches stored Plex.tv URL with token) |
 
 ## MCP Tools
 
@@ -482,15 +483,15 @@ Each platform builds and pushes by digest, then a `docker-merge` job assembles t
 
 - [x] **#99 — `plex_get_title_tags` returns empty tags for series** — Tags (genre, director, etc.) are stored at the show level, not on individual seasons or episodes. `getTagsForTitle` now follows `parentKey` when the fetched item is a season, and `grandparentKey` when it is an episode, automatically fetching the parent show's metadata to retrieve the correct tags. Failure to resolve the parent falls back to the original metadata gracefully. — `src/lib/services/plex.ts`
 
-- [x] **#100 — User avatar no longer displays in chat** — Added `onError` handler to the `<img>` element in the `Avatar` component. When the Plex avatar URL is unavailable or returns an error the component now falls back to the initial-letter placeholder instead of showing a broken-image icon. Made `Avatar` a client component to support the `useState` error flag. — `src/components/ui/avatar.tsx`
+- [x] **#100 — User avatar no longer displays in chat** — Root cause: Plex.tv avatar URLs stored in the DB (`plexUser.thumb` from `/api/v2/user`) now require authentication or are otherwise unavailable when fetched directly by the browser. Fix: added a server-side proxy route `/api/plex/avatar/[userId]` that fetches the stored avatar URL using the user's Plex token and streams the image to the browser. All API endpoints that return `plexAvatarUrl` to the frontend (`getSession`, `/api/auth/callback`, `/api/settings/users`, `/api/conversations`) now return the proxy URL `/api/plex/avatar/{id}` instead of the raw Plex.tv URL. The existing `onError` fallback in `Avatar` is retained as a safety net. — `src/app/api/plex/avatar/[userId]/route.ts`, `src/lib/auth/session.ts`, `src/app/api/auth/callback/route.ts`, `src/app/api/settings/users/route.ts`, `src/app/api/conversations/route.ts`
 
-- [x] **#101 — Overseerr search and list-requests return inconsistent data** — `overseerr_search` results now include a `requests` array extracted from the `mediaInfo.requests` field returned by the Overseerr API, so the LLM receives both availability status and request details (requester, date, seasons) in a single call. `listRequests` now also returns `posterUrl` (TMDB thumbnail URL) and `tmdbId` so the LLM can reference posters and cross-reference with the search tool. — `src/lib/services/overseerr.ts`, `src/lib/tools/overseerr-tools.ts`
+- [x] **#101 — Overseerr search returns insufficient data for title cards** — `overseerr_search` now returns `voteAverage` (rating out of 10, from TMDB data already in search results), full `overview` (synopsis, no longer truncated), and `cast` (top 5 cast members). Cast requires a detail fetch per result (`/movie/{id}` or `/tv/{id}`); these are performed in parallel alongside the existing TV detail fetch for `numberOfSeasons`. The `overseerr_list_requests` additions from the previous phase (posterUrl, tmdbId, request details) are retained. — `src/lib/services/overseerr.ts`, `src/lib/tools/overseerr-tools.ts`
 
 - [x] **#102 — LLM settings tab UI runs off screen on mobile** — Refactored the endpoint `CardHeader` row to use `flex-wrap` so the name input, Enabled checkbox, Default radio, and delete button wrap gracefully on narrow viewports instead of overflowing horizontally. The name input grows to full width on mobile (`w-full sm:w-48`). — `src/app/settings/page.tsx`
 
 - [x] **#103 — No warning when leaving Settings with unsaved changes** — Added a `savedConfigRef` (via `useRef`) that snapshots the loaded config after initial fetch and after each successful save. When the user clicks the back button, the current config is serialised and compared to the snapshot; if they differ a `window.confirm` dialog asks the user to confirm discarding changes. The existing incomplete-setup warning is preserved. — `src/app/settings/page.tsx`
 
-- [x] **#76 — PWA installation not available** — Two root causes addressed: (1) the web app manifest lacked a correctly sized icon required by browsers before they fire `beforeinstallprompt` — added `public/icon.svg` (512×512 SVG lettermark) and registered it in `manifest.json` with `purpose: "any maskable"`; (2) the Settings page and the chat banner restricted PWA installation to mobile devices only, even though desktop Chrome/Edge also support PWA installation. Removed the `isMobile` gate in Settings and updated the banner to show whenever the browser has fired `beforeinstallprompt` regardless of device type. iOS manual-install instructions are still shown on mobile iOS only. — `public/manifest.json`, `public/icon.svg`, `src/components/chat/pwa-install-banner.tsx`, `src/app/settings/page.tsx`
+- [x] **#76 — PWA installation not available** — Root cause: the web app manifest lacked a correctly sized icon required by browsers before they fire `beforeinstallprompt`. Fix: added `public/icon.svg` (512×512 SVG lettermark) and registered it in `manifest.json` with `purpose: "any maskable"`. PWA installation UI remains **mobile-only**: the chat banner returns `null` when `!isMobile`, and the Settings page shows a mobile-only note on desktop instead of the install controls. — `public/manifest.json`, `public/icon.svg`, `src/components/chat/pwa-install-banner.tsx`, `src/app/settings/page.tsx`
 
 #### New / changed files
 
@@ -501,8 +502,13 @@ Each platform builds and pushes by digest, then a `docker-merge` job assembles t
 | `src/components/chat/sidebar.tsx` | Mobile overlay sidebar with backdrop |
 | `src/lib/services/plex.ts` | `getTagsForTitle` follows parentKey/grandparentKey for seasons/episodes |
 | `src/components/ui/avatar.tsx` | Client component, `onError` fallback for broken images |
-| `src/lib/services/overseerr.ts` | `search` includes request details; `listRequests` includes posterUrl/tmdbId |
-| `src/lib/tools/overseerr-tools.ts` | Updated `overseerr_list_requests` description |
+| `src/app/api/plex/avatar/[userId]/route.ts` | New server-side avatar proxy route |
+| `src/lib/auth/session.ts` | `getSession` returns proxy URL for `plexAvatarUrl` |
+| `src/app/api/auth/callback/route.ts` | Returns proxy URL in login response |
+| `src/app/api/settings/users/route.ts` | Returns proxy URLs for all users |
+| `src/app/api/conversations/route.ts` | Returns proxy URL for `ownerAvatarUrl` |
+| `src/lib/services/overseerr.ts` | `search` includes request details, rating, cast; `listRequests` includes posterUrl/tmdbId |
+| `src/lib/tools/overseerr-tools.ts` | Updated tool descriptions for rating/cast |
 | `src/app/settings/page.tsx` | Mobile-friendly LLM card header; unsaved-changes warning |
 | `public/manifest.json` | Added SVG icon entry |
 | `public/icon.svg` | New Thinkarr app icon (512×512 SVG) |

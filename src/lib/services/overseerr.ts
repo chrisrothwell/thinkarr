@@ -57,6 +57,8 @@ export interface OverseerrSearchResult {
   year?: string;
   overview?: string;
   releaseDate?: string;
+  voteAverage?: number;     // TMDB audience rating (0–10)
+  cast?: string[];          // Top cast members (up to 5)
   mediaStatus: string;
   posterUrl?: string;       // Full TMDB poster URL (https://image.tmdb.org/t/p/w300/...)
   imdbId?: string;          // IMDB ID (e.g. "tt1234567") when available
@@ -93,24 +95,37 @@ export async function search(query: string): Promise<OverseerrSearchResult[]> {
   const data = await overseerrFetch(`/search?query=${encodeURIComponent(query)}&page=1&language=en`);
   const raw = (data?.results || []).slice(0, 10) as Record<string, unknown>[];
 
-  // Fetch TV details in parallel to get numberOfSeasons (not in search results)
-  const tvDetailMap = new Map<number, number>();
+  // Fetch details for all results in parallel:
+  //   - movies: get cast (credits not in search results)
+  //   - TV: get numberOfSeasons + cast
+  interface DetailInfo { seasonCount?: number; cast?: string[] }
+  const detailMap = new Map<number, DetailInfo>();
   await Promise.all(
-    raw
-      .filter((r) => r.mediaType === "tv")
-      .map(async (r) => {
-        try {
-          const detail = await overseerrFetch(`/tv/${r.id as number}`);
+    raw.map(async (r) => {
+      const isTV = r.mediaType === "tv";
+      try {
+        const detail = await overseerrFetch(isTV ? `/tv/${r.id as number}` : `/movie/${r.id as number}`);
+        const credits = detail?.credits as Record<string, unknown> | undefined;
+        const castRaw = (credits?.cast as Record<string, unknown>[] | undefined) ?? [];
+        const cast = castRaw
+          .slice(0, 5)
+          .map((c) => c.name as string)
+          .filter(Boolean);
+        const info: DetailInfo = { cast: cast.length > 0 ? cast : undefined };
+        if (isTV) {
           const count = detail?.numberOfSeasons as number | undefined;
-          if (count) tvDetailMap.set(r.id as number, count);
-        } catch { /* non-fatal — seasonCount stays undefined */ }
-      }),
+          if (count) info.seasonCount = count;
+        }
+        detailMap.set(r.id as number, info);
+      } catch { /* non-fatal */ }
+    }),
   );
 
   return raw.map((r) => {
     const mediaInfo = r.mediaInfo as Record<string, unknown> | undefined;
     const isTV = r.mediaType === "tv";
     const rawSeasons = (mediaInfo?.seasons as Record<string, unknown>[]) || [];
+    const detail = detailMap.get(r.id as number);
 
     const posterPath = r.posterPath as string | undefined;
     const extIds = r.externalIds as Record<string, unknown> | undefined;
@@ -140,12 +155,14 @@ export async function search(query: string): Promise<OverseerrSearchResult[]> {
       mediaType: r.mediaType as string,
       title: (r.title || r.name) as string,
       year: ((r.releaseDate || r.firstAirDate) as string | undefined)?.substring(0, 4),
-      overview: (r.overview as string | undefined)?.substring(0, 300),
+      overview: r.overview as string | undefined,
       releaseDate: (r.releaseDate || r.firstAirDate) as string | undefined,
+      voteAverage: r.voteAverage as number | undefined,
+      cast: detail?.cast,
       mediaStatus: mediaStatusLabel(mediaInfo),
       posterUrl: posterPath ? `https://image.tmdb.org/t/p/w300${posterPath}` : undefined,
       imdbId: imdbId || undefined,
-      seasonCount: isTV ? (tvDetailMap.get(r.id as number) ?? (r.numberOfSeasons as number | undefined)) : undefined,
+      seasonCount: isTV ? (detail?.seasonCount ?? (r.numberOfSeasons as number | undefined)) : undefined,
       seasons: isTV && rawSeasons.length > 0
         ? rawSeasons
             .filter((s) => (s.seasonNumber as number) > 0)

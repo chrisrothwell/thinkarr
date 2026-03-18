@@ -39,13 +39,19 @@ export async function GET(request: Request) {
         updatedAt: schema.conversations.updatedAt,
         ownerName: schema.users.plexUsername,
         ownerAvatarUrl: schema.users.plexAvatarUrl,
+        ownerId: schema.users.id,
       })
       .from(schema.conversations)
       .leftJoin(schema.users, eq(schema.conversations.userId, schema.users.id))
       .orderBy(desc(schema.conversations.updatedAt))
       .all();
 
-    return NextResponse.json<ApiResponse>({ success: true, data: rows });
+    const rowsWithProxyAvatar = rows.map(({ ownerId, ownerAvatarUrl, ...r }) => ({
+      ...r,
+      ownerAvatarUrl: ownerAvatarUrl && ownerId ? `/api/plex/avatar/${ownerId}` : null,
+    }));
+
+    return NextResponse.json<ApiResponse>({ success: true, data: rowsWithProxyAvatar });
   }
 
   // Regular view: own conversations only
@@ -117,7 +123,7 @@ export async function POST(request: Request) {
       createdAt: now,
       updatedAt: now,
       ownerName: session.user.plexUsername,
-      ownerAvatarUrl: session.user.plexAvatarUrl,
+      ownerAvatarUrl: session.user.plexAvatarUrl, // already a proxy URL from getSession()
     },
   });
 }
