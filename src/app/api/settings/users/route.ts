@@ -46,6 +46,7 @@ export async function GET() {
     const rl = getRateLimit(u.id);
     return {
       ...u,
+      plexAvatarUrl: u.plexAvatarUrl ? `/api/plex/avatar/${u.id}` : null,
       defaultModel: getConfig(`user.${u.id}.defaultModel`) || "",
       canChangeModel: getConfig(`user.${u.id}.canChangeModel`) !== "false",
       rateLimitMessages: rl.messages,

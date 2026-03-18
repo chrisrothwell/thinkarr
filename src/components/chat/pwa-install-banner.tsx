@@ -9,16 +9,15 @@ export function PwaInstallBanner() {
   const { isAvailable, isMobile, isIosDevice, install } = usePwaInstall();
   const [dismissed, setDismissed] = useState(() => isPwaBannerDismissed());
 
-  // Only show on mobile devices
-  if (!isMobile || dismissed) return null;
+  if (dismissed || !isMobile) return null;
 
   function handleDismiss() {
     dismissPwaBanner();
     setDismissed(true);
   }
 
-  // iOS: beforeinstallprompt never fires — show manual instructions instead
-  if (isIosDevice) {
+  // iOS: beforeinstallprompt never fires — show manual instructions on mobile only
+  if (isIosDevice && isMobile) {
     return (
       <div className="flex items-start gap-3 border-b bg-muted/60 px-4 py-2 text-sm">
         <Share className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
@@ -37,7 +36,7 @@ export function PwaInstallBanner() {
     );
   }
 
-  // Android / other: use the deferred prompt if available
+  // Show install banner when the browser has offered the install prompt
   if (!isAvailable) return null;
 
   function handleInstall() {
@@ -48,7 +47,7 @@ export function PwaInstallBanner() {
     <div className="flex items-center gap-3 border-b bg-muted/60 px-4 py-2 text-sm">
       <Download className="h-4 w-4 shrink-0 text-muted-foreground" />
       <span className="flex-1 text-muted-foreground">
-        Install Thinkarr as an app for quick access from your home screen.
+        Install Thinkarr as an app for quick access from your home screen or taskbar.
       </span>
       <button
         onClick={handleInstall}

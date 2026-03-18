@@ -31,27 +31,31 @@ async function plexFetch(path: string) {
 export interface PlexSearchResult {
   title: string;
   year?: number;
-  type: string;
+  mediaType: string;            // "movie" | "tv" | "episode" — normalized from Plex type ("show" → "tv")
   summary?: string;
   rating?: number;
-  key: string;
-  thumb?: string;           // Thumbnail path (e.g. /library/metadata/123/thumb/...)
-  cast?: string[];          // First 4 cast member names
+  plexKey: string;              // Plex metadata key — pass directly as plexKey to display_titles
+  thumbPath?: string;           // Plex thumb path — pass directly as thumbPath to display_titles
+  cast?: string[];              // First 4 cast member names
   // Show-specific fields
-  seasons?: number;         // Number of seasons (childCount)
-  totalEpisodes?: number;   // Total episodes in library (leafCount)
-  watchedEpisodes?: number; // Episodes watched (viewedLeafCount)
-  dateAdded?: string;       // ISO date string (addedAt Unix → ISO)
+  seasons?: number;             // Number of seasons (childCount)
+  totalEpisodes?: number;       // Total episodes in library (leafCount)
+  watchedEpisodes?: number;     // Episodes watched (viewedLeafCount)
+  dateAdded?: string;           // ISO date string (addedAt Unix → ISO)
   // Episode / season fields — parent show context
-  showTitle?: string;       // Parent show title (grandparentTitle for episode, parentTitle for season)
-  seasonNumber?: number;    // Season number (parentIndex for episode, index for season)
-  episodeNumber?: number;   // Episode number within season (index, episode only)
+  showTitle?: string;           // Parent show title (grandparentTitle for episode, parentTitle for season)
+  seasonNumber?: number;        // Season number (parentIndex for episode, index for season)
+  episodeNumber?: number;       // Episode number within season (index, episode only)
 }
 
 function mapMetadata(item: Record<string, unknown>, type?: string): PlexSearchResult {
   const addedAt = item.addedAt as number | undefined;
   const resolvedType = (type || item.type) as string;
   const roles = (item.Role as Array<{ tag: string }> | undefined) ?? [];
+
+  // Normalize Plex type to display_titles mediaType values.
+  // "show" and "season" both map to "tv"; others pass through as-is.
+  const mediaType = (resolvedType === "show" || resolvedType === "season") ? "tv" : resolvedType;
 
   // Derive parent show context depending on item type
   let showTitle: string | undefined;
@@ -74,11 +78,11 @@ function mapMetadata(item: Record<string, unknown>, type?: string): PlexSearchRe
       ? `${showTitle} — Season ${seasonNumber ?? (item.index as number | undefined)}`
       : (item.title as string),
     year: item.year as number | undefined,
-    type: resolvedType,
+    mediaType,
     summary: (item.summary as string | undefined)?.substring(0, 300),
     rating: item.rating as number | undefined,
-    key: item.key as string,
-    thumb: item.thumb as string | undefined,
+    plexKey: item.key as string,
+    thumbPath: item.thumb as string | undefined,
     cast: roles.slice(0, 4).map((r) => r.tag),
     seasons: item.childCount as number | undefined,
     totalEpisodes: item.leafCount as number | undefined,
@@ -146,10 +150,11 @@ export async function getRecentlyAdded(): Promise<PlexSearchResult[]> {
   const seen = new Set<string>();
   const deduped: PlexSearchResult[] = [];
   for (const item of items) {
-    // Movies and shows use their own title as the dedup key; seasons/episodes use showTitle
-    const key = (item.type === "season" || item.type === "episode") && item.showTitle
+    // TV items (episodes/seasons) carry a showTitle — deduplicate by show.
+    // Movies use their own title as the dedup key.
+    const key = item.showTitle
       ? `tv:${item.showTitle}`
-      : `${item.type}:${item.title}`;
+      : `${item.mediaType}:${item.title}`;
     if (!seen.has(key)) {
       seen.add(key);
       deduped.push(item);
@@ -259,12 +264,43 @@ export interface PlexTitleTags {
 /**
  * Retrieve all tags (genre, director, actor, country, etc.) associated with a
  * specific Plex title. Pass the Plex metadata key (e.g. "/library/metadata/123").
+ *
+ * Tags are stored at the show level, not on individual seasons or episodes.
+ * When a season or episode key is passed, this function automatically fetches
+ * the parent show's metadata instead.
  */
 export async function getTagsForTitle(metadataKey: string): Promise<PlexTitleTags> {
   // Plex metadata keys start with /library/metadata/ — strip leading slash for fetch
   const path = metadataKey.startsWith("/") ? metadataKey : `/${metadataKey}`;
   const data = await plexFetch(path);
-  const item: Record<string, unknown> = data?.MediaContainer?.Metadata?.[0] ?? {};
+  let item: Record<string, unknown> = data?.MediaContainer?.Metadata?.[0] ?? {};
+
+  // Tags live on the show, not on individual seasons or episodes.
+  // Follow parentKey (season → show) or grandparentKey (episode → show).
+  const itemType = item.type as string | undefined;
+  if (itemType === "season") {
+    const parentKey = item.parentKey as string | undefined;
+    if (parentKey) {
+      const parentPath = parentKey.startsWith("/") ? parentKey : `/${parentKey}`;
+      try {
+        const parentData = await plexFetch(parentPath);
+        item = parentData?.MediaContainer?.Metadata?.[0] ?? item;
+      } catch {
+        // Non-fatal — fall back to season metadata (will have empty tags)
+      }
+    }
+  } else if (itemType === "episode") {
+    const grandparentKey = item.grandparentKey as string | undefined;
+    if (grandparentKey) {
+      const grandparentPath = grandparentKey.startsWith("/") ? grandparentKey : `/${grandparentKey}`;
+      try {
+        const grandparentData = await plexFetch(grandparentPath);
+        item = grandparentData?.MediaContainer?.Metadata?.[0] ?? item;
+      } catch {
+        // Non-fatal — fall back to episode metadata
+      }
+    }
+  }
 
   function extractTags(field: unknown): string[] {
     if (!Array.isArray(field)) return [];
