@@ -76,6 +76,10 @@ export default async function globalSetup(_: FullConfig) {
       PLEX_API_BASE: mocks.plexUrl,
       // Disable secure cookies so the session cookie works over plain HTTP
       SECURE_COOKIES: "false",
+      // Raise the per-user API rate limit for E2E — the test suite makes many
+      // rapid API calls (page loads, conversation creates, message reloads) that
+      // would otherwise trip the default 60 req/min limit.
+      API_RATE_LIMIT_MAX: "1000",
       // Suppress Next.js telemetry noise
       NEXT_TELEMETRY_DISABLED: "1",
     },

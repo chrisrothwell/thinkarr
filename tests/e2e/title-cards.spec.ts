@@ -111,6 +111,12 @@ test.describe("Title card — not_requested movie", () => {
 
     await expect(page.getByTestId("message-assistant")).toBeVisible({ timeout: 20_000 });
 
+    // Wait for the post-stream conversation reload (finally block in use-chat.ts) to
+    // complete before clicking Request.  If we click while the reload is in-flight,
+    // setToolCalls(new Map()) remounts the TitleCard and the request-success state
+    // update goes to the now-unmounted component, causing a flaky failure.
+    await page.waitForLoadState("networkidle");
+
     const card = page.getByTestId("title-card").first();
     const requestBtn = card.getByTestId("request-button");
     await expect(requestBtn).toBeVisible({ timeout: 10_000 });
