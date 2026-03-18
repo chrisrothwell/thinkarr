@@ -580,3 +580,20 @@ All Plex and Overseerr tools now return the same field names as the `display_tit
 | `src/hooks/use-voice-input.ts` | Added secure-context check, mediaDevices API check, and DOMException-specific error messages |
 | `src/hooks/use-realtime-chat.ts` | Added secure-context check, mediaDevices API check, and DOMException-specific error messages |
 | `src/__tests__/lib/overseerr.test.ts` | Added tests for `mediaStatus` field: "pending" for approved/pending-approval requests, "not_requested" for declined |
+
+### Phase 24: Second-pass fixes for #76, #101, #104 (thumbnail proxy + Permissions-Policy)
+
+#### Fixed
+
+- [x] **#101 — Overseerr thumbnails not rendering in title card (root cause)** — The TMDB thumbnail URL was correct but the image loaded as a cross-origin third-party resource in the `<img>` tag. Browser extensions (e.g. ad blockers) and some browser security policies block third-party embedded images even when the URL is valid; the image loads fine when opened in a new tab because there is no cross-origin context. Fix: created `/api/tmdb/thumb` server-side proxy route that fetches TMDB images server-side and serves them as same-origin responses (identical pattern to the existing `/api/plex/thumb` Plex image proxy). Updated `display-titles-tool.ts` to route all external `https://` thumbPaths through `/api/tmdb/thumb?url=…` instead of passing them directly to the browser. Security: session-gated, URL validated to `image.tmdb.org` HTTPS-only to prevent open-proxy abuse. — `src/app/api/tmdb/thumb/route.ts`, `src/lib/tools/display-titles-tool.ts`
+
+- [x] **#104 — Browser never prompts for microphone (root cause)** — The `Permissions-Policy: camera=(), microphone=(), geolocation=()` header in `next.config.ts` explicitly denied microphone access for all origins at the HTTP header level, before any JavaScript ran. The browser silently blocked `getUserMedia` with `NotAllowedError` without showing a permission prompt, because the feature was policy-denied by the server. Fix: removed `microphone=()` from the Permissions-Policy header. `camera=()` and `geolocation=()` are retained as those features are genuinely unused. — `next.config.ts`
+
+#### New / changed files
+
+| File | Change |
+|------|--------|
+| `next.config.ts` | Removed `microphone=()` from Permissions-Policy header |
+| `src/app/api/tmdb/thumb/route.ts` | New server-side proxy for TMDB thumbnail images |
+| `src/lib/tools/display-titles-tool.ts` | External `https://` thumbPaths routed through `/api/tmdb/thumb` proxy |
+| `src/__tests__/api/tmdb-thumb.test.ts` | 8 unit tests for the TMDB proxy route (auth, URL validation, upstream error handling, successful proxy) |
