@@ -185,6 +185,7 @@ export interface OverseerrRequest {
   title: string;
   year?: string;
   status: string;
+  mediaStatus: string;  // "pending" | "not_requested" — maps directly to display_titles mediaStatus
   requestedBy: string;
   requestedAt: string;
   seasonsRequested?: number[];
@@ -239,12 +240,18 @@ export async function listRequests(): Promise<OverseerrRequest[]> {
     const posterPath = media?.posterPath as string | undefined;
     const tmdbId = media?.tmdbId as number | undefined;
 
+    // Derive mediaStatus from Overseerr media status — used by display_titles
+    // status 3 = Declined request → content not_requested; all other active requests → pending
+    const reqStatus = r.status as number;
+    const mediaStatus = reqStatus === 3 ? "not_requested" : "pending";
+
     return {
       id: r.id as number,
       mediaType: r.type as string,
       title: (titleMap.get(r.id as number) ?? "Unknown") as string,
       year: ((media?.releaseDate || media?.firstAirDate) as string | undefined)?.substring(0, 4),
       status: requestStatusLabel(r.status as number),
+      mediaStatus,
       requestedBy: ((r.requestedBy as Record<string, unknown>)?.displayName || "Unknown") as string,
       requestedAt: r.createdAt as string,
       seasonsRequested: seasonsList && seasonsList.length > 0 ? seasonsList : undefined,

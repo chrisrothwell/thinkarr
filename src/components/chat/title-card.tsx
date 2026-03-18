@@ -129,7 +129,7 @@ export function TitleCard({ title }: TitleCardProps) {
 
         {/* Buttons */}
         <div className="flex flex-wrap gap-2 mt-auto pt-1">
-          {title.mediaStatus === "available" && plexWebUrl && (
+          {(title.mediaStatus === "available" || title.mediaStatus === "partial") && plexWebUrl && (
             <a
               href={plexWebUrl}
               target="_blank"

@@ -110,6 +110,19 @@ export function useRealtimeChat(modelId: string) {
     setError(null);
     setTranscript([]);
 
+    // Microphone access requires a secure context (HTTPS or localhost)
+    if (!window.isSecureContext) {
+      setError("Microphone access requires a secure connection (HTTPS). Please reload over HTTPS.");
+      setConnecting(false);
+      return;
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setError("Your browser does not support microphone access. Please use a modern browser.");
+      setConnecting(false);
+      return;
+    }
+
     try {
       // 1. Get ephemeral session token from our server
       const sessionRes = await fetch("/api/realtime/session", {
@@ -182,7 +195,19 @@ export function useRealtimeChat(modelId: string) {
 
       setConnected(true);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Connection failed";
+      let msg: string;
+      if (e instanceof DOMException) {
+        if (e.name === "NotAllowedError" || e.name === "PermissionDeniedError") {
+          msg =
+            "Microphone access was denied. To fix this: click the lock or camera icon in your browser\u2019s address bar, allow microphone access, then reload the page.";
+        } else if (e.name === "NotFoundError" || e.name === "DevicesNotFoundError") {
+          msg = "No microphone found. Please connect a microphone and try again.";
+        } else {
+          msg = `Microphone error: ${e.message}`;
+        }
+      } else {
+        msg = e instanceof Error ? e.message : "Connection failed";
+      }
       setError(msg);
       pcRef.current?.close();
       pcRef.current = null;
