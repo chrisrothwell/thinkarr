@@ -51,8 +51,9 @@ async function waitForServer(url: string, timeoutMs = 60_000): Promise<void> {
 export default async function globalSetup(_: FullConfig) {
   // 1. Start mock servers
   const mocks = await startMockServers();
-  console.log(`[e2e] Mock Plex server:  ${mocks.plexUrl}`);
-  console.log(`[e2e] Mock LLM server:   ${mocks.llmUrl}`);
+  console.log(`[e2e] Mock Plex server:       ${mocks.plexUrl}`);
+  console.log(`[e2e] Mock LLM server:        ${mocks.llmUrl}`);
+  console.log(`[e2e] Mock Overseerr server:  ${mocks.overseerrUrl}`);
 
   // 2. Create isolated temp DB directory
   const configDir = mkdtempSync(path.join(tmpdir(), "thinkarr-e2e-"));
@@ -128,6 +129,10 @@ export default async function globalSetup(_: FullConfig) {
       plex: {
         url: mocks.plexUrl,
         token: "e2e-plex-admin-token",
+      },
+      overseerr: {
+        url: mocks.overseerrUrl,
+        apiKey: "e2e-overseerr-key",
       },
     },
   });

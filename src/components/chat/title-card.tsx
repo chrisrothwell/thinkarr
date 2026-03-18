@@ -79,7 +79,7 @@ export function TitleCard({ title }: TitleCardProps) {
     title.overseerrMediaType != null;
 
   return (
-    <div className="flex gap-3 rounded-xl border border-border bg-card p-3 w-full">
+    <div className="flex gap-3 rounded-xl border border-border bg-card p-3 w-full" data-testid="title-card">
       {/* Thumbnail */}
       {title.thumbUrl ? (
         // eslint-disable-next-line @next/next/no-img-element
@@ -104,7 +104,7 @@ export function TitleCard({ title }: TitleCardProps) {
 
         {/* Status badge + rating */}
         <div className="flex items-center gap-2 flex-wrap">
-          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${status.className}`}>
+          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${status.className}`} data-testid="title-status">
             {status.label}
           </span>
           {title.rating != null && (
@@ -135,6 +135,7 @@ export function TitleCard({ title }: TitleCardProps) {
               target="_blank"
               rel="noopener noreferrer"
               className="text-xs px-3 py-1 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors font-medium"
+              data-testid="watch-now-button"
             >
               Watch Now
             </a>
@@ -160,6 +161,7 @@ export function TitleCard({ title }: TitleCardProps) {
               onClick={handleRequest}
               disabled={requesting}
               className="text-xs px-3 py-1 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors font-medium disabled:opacity-50 flex items-center gap-1"
+              data-testid="request-button"
             >
               {requesting ? (
                 <>
@@ -173,7 +175,7 @@ export function TitleCard({ title }: TitleCardProps) {
           )}
 
           {requestStatus === "success" && (
-            <span className="text-xs px-3 py-1 rounded-lg bg-green-500/20 text-green-400 border border-green-500/30 font-medium">
+            <span className="text-xs px-3 py-1 rounded-lg bg-green-500/20 text-green-400 border border-green-500/30 font-medium" data-testid="request-success">
               Requested
             </span>
           )}
