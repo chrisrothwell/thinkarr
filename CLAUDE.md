@@ -105,9 +105,9 @@ Do this as a separate commit on the same branch before pushing, so the PR includ
 
 When GitHub Code Scanning raises a `js/ssrf` (or other) alert that is a confirmed false positive — i.e. the code has explicit URL validation that CodeQL cannot trace through — **dismiss the alert via the GitHub API**. Do not:
 
-- Add `// lgtm[...]` comments (ignored by GitHub Code Scanning — only worked on the legacy lgtm.com product)
-- Create or modify `.github/workflows/codeql.yml` to replace GitHub's built-in scanning
-- Create `.github/codeql/codeql-config.yml` to suppress queries
+- Add `// lgtm[...]` comments — ignored by GitHub Code Scanning (only worked on the legacy lgtm.com product)
+- Create `.github/codeql/codeql-config.yml` alone — GitHub's auto-setup ignores this file unless a custom workflow explicitly references it via `config-file:`
+- Create `.github/workflows/codeql.yml` to replace GitHub's built-in scanning — this repo uses GitHub's auto-setup intentionally
 
 ### How to dismiss via `gh` CLI
 
