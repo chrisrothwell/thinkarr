@@ -622,3 +622,8 @@ All Plex and Overseerr tools now return the same field names as the `display_tit
 | `playwright.config.ts` | Added `title-cards` project |
 | `src/components/chat/title-card.tsx` | Added data-testid to card, status badge, Watch Now, Request button, Requested badge |
 | `src/components/chat/title-carousel.tsx` | Added data-testid to scrollable container |
+
+
+### Phase 26: Version bump to 1.1.1-beta.4
+
+- Bumped `package.json` version from `1.1.1-beta.3` to `1.1.1-beta.4`
