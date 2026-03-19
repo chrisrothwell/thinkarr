@@ -51,8 +51,9 @@ async function waitForServer(url: string, timeoutMs = 60_000): Promise<void> {
 export default async function globalSetup(_: FullConfig) {
   // 1. Start mock servers
   const mocks = await startMockServers();
-  console.log(`[e2e] Mock Plex server:  ${mocks.plexUrl}`);
-  console.log(`[e2e] Mock LLM server:   ${mocks.llmUrl}`);
+  console.log(`[e2e] Mock Plex server:       ${mocks.plexUrl}`);
+  console.log(`[e2e] Mock LLM server:        ${mocks.llmUrl}`);
+  console.log(`[e2e] Mock Overseerr server:  ${mocks.overseerrUrl}`);
 
   // 2. Create isolated temp DB directory
   const configDir = mkdtempSync(path.join(tmpdir(), "thinkarr-e2e-"));
@@ -75,6 +76,10 @@ export default async function globalSetup(_: FullConfig) {
       PLEX_API_BASE: mocks.plexUrl,
       // Disable secure cookies so the session cookie works over plain HTTP
       SECURE_COOKIES: "false",
+      // Raise the per-user API rate limit for E2E — the test suite makes many
+      // rapid API calls (page loads, conversation creates, message reloads) that
+      // would otherwise trip the default 60 req/min limit.
+      API_RATE_LIMIT_MAX: "1000",
       // Suppress Next.js telemetry noise
       NEXT_TELEMETRY_DISABLED: "1",
     },
@@ -128,6 +133,10 @@ export default async function globalSetup(_: FullConfig) {
       plex: {
         url: mocks.plexUrl,
         token: "e2e-plex-admin-token",
+      },
+      overseerr: {
+        url: mocks.overseerrUrl,
+        apiKey: "e2e-overseerr-key",
       },
     },
   });

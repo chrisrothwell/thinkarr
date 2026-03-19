@@ -549,3 +549,98 @@ All Plex and Overseerr tools now return the same field names as the `display_tit
 | `public/icon.svg` | New Thinkarr app icon (512×512 SVG) |
 | `src/__tests__/lib/plex.test.ts` | Updated tests for normalized field names + season/episode parent tag lookup |
 | `src/__tests__/lib/overseerr.test.ts` | Updated tests for normalized field names + rating/cast |
+
+### Phase 23: Bug Fixes for Issues #76, #101, #104 (Second Pass)
+
+#### Fixed
+
+- [x] **#76 — PWA install prompt never fires (manifest missing required PNG icons)** — Root cause: browsers (Chrome/Edge) require at least 192×192 and 512×512 PNG icons in the manifest before firing `beforeinstallprompt`; the previous fix only added an SVG icon which is insufficient. Additionally the install banner and Settings General tab were mobile-only, hiding the Install button from desktop Chrome/Edge users. Fixes: (1) generated `public/icon-192.png` (192×192) and `public/icon-512.png` (512×512) dark-theme PNG icons using a Node.js zlib-based generator; (2) added both PNG icons to `manifest.json`, keeping the SVG as a third entry; (3) removed `!isMobile` early-return from `PwaInstallBanner` so the banner appears on all devices (desktop Chrome/Edge, Android) when the deferred prompt is available — iOS-specific instructions remain mobile-only; (4) updated Settings General tab to show the Install button on desktop when `pwaInstallAvailable` is true, not just on mobile. — `public/manifest.json`, `public/icon-192.png`, `public/icon-512.png`, `src/components/chat/pwa-install-banner.tsx`, `src/app/settings/page.tsx`
+
+- [x] **#101 — Overseerr list requests does not display as title cards** — Root cause: `listRequests()` did not return a `mediaStatus` field, so the LLM could not pass the correct value to `display_titles` (which requires `"available" | "partial" | "pending" | "not_requested"`). Fix: added `mediaStatus` to `OverseerrRequest` interface, derived from the request's status (status 3/Declined → `"not_requested"`, all others → `"pending"`). Updated `overseerr_list_requests` tool description to say "ALWAYS follow with display_titles". Updated system prompt to explicitly mention calling `display_titles` after `overseerr_list_requests`. — `src/lib/services/overseerr.ts`, `src/lib/tools/overseerr-tools.ts`, `src/lib/llm/default-prompt.ts`
+
+- [x] **#101 — "Watch Now" button missing for partially-available Plex content** — Root cause: `title-card.tsx` only showed "Watch Now" for `mediaStatus === "available"`; content that exists in Plex but not all seasons (`mediaStatus === "partial"`) should also be watchable. Fix: changed the Watch Now button condition to `(title.mediaStatus === "available" || title.mediaStatus === "partial") && plexWebUrl`. — `src/components/chat/title-card.tsx`
+
+- [x] **#101 — Overseerr search thumbnail field incorrectly referenced in system prompt** — Root cause: the system prompt said `"posterUrl"` when describing Overseerr thumbnail fields, but the actual field name returned by `overseerr_search` is `"thumbPath"`. The LLM was therefore looking for a non-existent field, causing missing thumbnails. Fix: corrected the system prompt to consistently use `"thumbPath"` for Overseerr results. — `src/lib/llm/default-prompt.ts`
+
+- [x] **#104 — Browser does not prompt for microphone permissions; shows unhelpful error** — Root causes: (1) if the app is served over HTTP (not HTTPS), `navigator.mediaDevices` is undefined in modern browsers (Permissions API requires a secure context); (2) if microphone permission was previously blocked, `getUserMedia` throws immediately without re-prompting; (3) error messages were generic ("Microphone access denied") with no guidance on how to fix them. Fixes: added pre-flight checks in both `useVoiceInput.startRecording()` and `useRealtimeChat.connect()`: check `window.isSecureContext` (show HTTPS error if false), check `navigator.mediaDevices?.getUserMedia` exists (show unsupported-browser error if not). Updated catch blocks to detect `NotAllowedError`/`PermissionDeniedError` (show actionable message with browser settings instructions), `NotFoundError`/`DevicesNotFoundError` (show "no microphone found" message), and other DOMExceptions. The realtime chat no longer shows the generic "Connection failed" for permission issues. — `src/hooks/use-voice-input.ts`, `src/hooks/use-realtime-chat.ts`
+
+#### New / changed files
+
+| File | Change |
+|------|--------|
+| `public/manifest.json` | Added `icon-192.png` (192×192) and `icon-512.png` (512×512) PNG icons; fixed SVG purpose to `"any"` |
+| `public/icon-192.png` | New 192×192 PNG icon (dark theme, "T" lettermark) |
+| `public/icon-512.png` | New 512×512 PNG icon (dark theme, "T" lettermark) |
+| `src/components/chat/pwa-install-banner.tsx` | Removed `!isMobile` early-return; banner now shows on desktop when deferred prompt available |
+| `src/app/settings/page.tsx` | General tab shows Install button on desktop; removed mobile-only guard |
+| `src/lib/services/overseerr.ts` | Added `mediaStatus` field to `OverseerrRequest`; derived from request status |
+| `src/lib/tools/overseerr-tools.ts` | `overseerr_list_requests` description now says "ALWAYS follow with display_titles" |
+| `src/lib/llm/default-prompt.ts` | Fixed "posterUrl" → "thumbPath"; added explicit "including overseerr_list_requests" + mediaStatus mapping guidance |
+| `src/components/chat/title-card.tsx` | Watch Now button shown for `"partial"` mediaStatus in addition to `"available"` |
+| `src/hooks/use-voice-input.ts` | Added secure-context check, mediaDevices API check, and DOMException-specific error messages |
+| `src/hooks/use-realtime-chat.ts` | Added secure-context check, mediaDevices API check, and DOMException-specific error messages |
+| `src/__tests__/lib/overseerr.test.ts` | Added tests for `mediaStatus` field: "pending" for approved/pending-approval requests, "not_requested" for declined |
+
+### Phase 24: Second-pass fixes for #76, #101, #104 (thumbnail proxy + Permissions-Policy)
+
+#### Fixed
+
+- [x] **#101 — Overseerr thumbnails not rendering in title card (root cause)** — The TMDB thumbnail URL was correct but the image loaded as a cross-origin third-party resource in the `<img>` tag. Browser extensions (e.g. ad blockers) and some browser security policies block third-party embedded images even when the URL is valid; the image loads fine when opened in a new tab because there is no cross-origin context. Fix: created `/api/tmdb/thumb` server-side proxy route that fetches TMDB images server-side and serves them as same-origin responses (identical pattern to the existing `/api/plex/thumb` Plex image proxy). Updated `display-titles-tool.ts` to route all external `https://` thumbPaths through `/api/tmdb/thumb?url=…` instead of passing them directly to the browser. Security: session-gated, URL validated to `image.tmdb.org` HTTPS-only to prevent open-proxy abuse. — `src/app/api/tmdb/thumb/route.ts`, `src/lib/tools/display-titles-tool.ts`
+
+- [x] **#104 — Browser never prompts for microphone (root cause)** — The `Permissions-Policy: camera=(), microphone=(), geolocation=()` header in `next.config.ts` explicitly denied microphone access for all origins at the HTTP header level, before any JavaScript ran. The browser silently blocked `getUserMedia` with `NotAllowedError` without showing a permission prompt, because the feature was policy-denied by the server. Fix: removed `microphone=()` from the Permissions-Policy header. `camera=()` and `geolocation=()` are retained as those features are genuinely unused. — `next.config.ts`
+
+#### New / changed files
+
+| File | Change |
+|------|--------|
+| `next.config.ts` | Removed `microphone=()` from Permissions-Policy header |
+| `src/app/api/tmdb/thumb/route.ts` | New server-side proxy for TMDB thumbnail images |
+| `src/lib/tools/display-titles-tool.ts` | External `https://` thumbPaths routed through `/api/tmdb/thumb` proxy |
+| `src/__tests__/api/tmdb-thumb.test.ts` | 8 unit tests for the TMDB proxy route (auth, URL validation, upstream error handling, successful proxy) |
+
+### Phase 25: E2E Tests for Title Cards and Chat Experience (Issue #110)
+
+#### Added
+
+- [x] **#110 — E2E tests for title card rendering** — Added `tests/e2e/title-cards.spec.ts` covering the full `display_titles` tool-call flow end-to-end: the LLM mock returns a `display_titles` tool call, the orchestrator executes it server-side, and the resulting title cards are verified in the browser. Tests cover: "Available" card with Watch Now button, "Not Requested" card with Request button, successful request submission (Overseerr mock), and multiple titles rendered as a scrollable carousel with correct per-card status badges.
+
+- [x] **Mock server enhancements** — Extended `tests/e2e/helpers/mock-servers.ts`: (1) Plex mock now handles `GET /` returning `machineIdentifier` so the `display_titles` tool can build Plex web URLs; (2) Added Overseerr mock server handling `POST /api/v1/request` so the Request button flow is fully exercisable; (3) LLM mock extended to return streaming tool call responses (`display_titles`) when the user message matches E2E trigger phrases, and returns normal text on the second pass (after tool results arrive).
+
+- [x] **Global setup — Overseerr configured** — `tests/e2e/global-setup.ts` now includes Overseerr in the initial `POST /api/setup` call so title card request tests work without manual configuration.
+
+- [x] **`data-testid` attributes added** — Added `data-testid` to `TitleCard` (root div, status badge, Watch Now link, Request button, Requested badge) and `TitleCarousel` (scrollable container) to enable stable Playwright locators.
+
+- [x] **Playwright config** — Added `title-cards` project to `playwright.config.ts` targeting `title-cards.spec.ts` with admin session state.
+
+#### New / changed files
+
+| File | Change |
+|------|--------|
+| `tests/e2e/title-cards.spec.ts` | New — 7 E2E tests covering title card rendering, buttons, request flow, carousel |
+| `tests/e2e/helpers/mock-servers.ts` | Plex GET / for machineId; Overseerr mock server; LLM tool call simulation |
+| `tests/e2e/global-setup.ts` | Added Overseerr to initial setup call |
+| `playwright.config.ts` | Added `title-cards` project |
+| `src/components/chat/title-card.tsx` | Added data-testid to card, status badge, Watch Now, Request button, Requested badge |
+| `src/components/chat/title-carousel.tsx` | Added data-testid to scrollable container |
+
+
+### Phase 26: Version bump to 1.1.1-beta.4
+
+- Bumped `package.json` version from `1.1.1-beta.3` to `1.1.1-beta.4`
+
+### Phase 27: Fix CodeQL SSRF findings (Critical)
+
+#### Fixed
+
+- **`src/app/api/tmdb/thumb/route.ts`** — Replaced `fetch(imageUrl, ...)` with `fetch(parsed.toString(), ...)`. The URL was already validated (hostname pinned to `image.tmdb.org`, protocol must be `https:`), but the raw user-supplied string was still passed to `fetch`. Using the serialised validated `URL` object breaks CodeQL's taint propagation path.
+
+- **`src/lib/services/test-connection.ts` — `probeVoiceSupport`** — Added `validateServiceUrl` guard (early return `false` on invalid URL) and reconstructed the base URL from `parsed.origin + parsed.pathname` instead of the raw user string, eliminating the SSRF taint path.
+
+- **`src/lib/services/test-connection.ts` — `probeRealtimeSupport`** — Added `validateServiceUrl` guard (early return `null` on invalid URL) and reconstructed base URL from `parsed.origin + parsed.pathname`. The existing `isOpenAIEndpoint` hostname check is preserved; the new guard and URL reconstruction satisfy CodeQL's sanitizer requirements.
+
+#### Changed files
+
+| File | Change |
+|------|--------|
+| `src/app/api/tmdb/thumb/route.ts` | Use `parsed.toString()` in `fetch` instead of raw `imageUrl` |
+| `src/lib/services/test-connection.ts` | Add `validateServiceUrl` + URL reconstruction in `probeVoiceSupport` and `probeRealtimeSupport` |

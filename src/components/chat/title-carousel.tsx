@@ -41,6 +41,7 @@ export function TitleCarousel({ titles }: TitleCarouselProps) {
       <div
         ref={scrollRef}
         className="flex gap-3 overflow-x-auto snap-x snap-mandatory [&::-webkit-scrollbar]:hidden pb-1"
+        data-testid="title-carousel"
       >
         {titles.map((t, i) => (
           <div key={i} className="w-[352px] shrink-0 snap-start">

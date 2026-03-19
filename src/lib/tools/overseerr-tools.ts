@@ -14,7 +14,7 @@ export function registerOverseerrTools() {
 
   defineTool({
     name: "overseerr_list_requests",
-    description: "List recent media requests from Overseerr. Returns request metadata (status, requester, date) with thumbPath (poster), overseerrId, and mediaType — all fields map directly to display_titles. Use overseerr_search with the title for full details including rating and cast.",
+    description: "List recent media requests from Overseerr. Returns request metadata including thumbPath (poster), overseerrId, overseerrMediaType (as mediaType), mediaStatus, and title — all fields map directly to display_titles. ALWAYS follow with display_titles to render title cards. Use overseerr_search with the title if you also need rating and cast.",
     schema: z.object({}),
     handler: async () => overseerr.listRequests(),
   });

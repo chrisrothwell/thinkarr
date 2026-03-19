@@ -101,6 +101,34 @@ For every PR, update `PLAN.md` to reflect what was built or changed:
 
 Do this as a separate commit on the same branch before pushing, so the PR includes the documentation alongside the code.
 
+## Rule: CodeQL false positives
+
+When GitHub Code Scanning raises a `js/ssrf` (or other) alert that is a confirmed false positive — i.e. the code has explicit URL validation that CodeQL cannot trace through — **dismiss the alert via the GitHub API**. Do not:
+
+- Add `// lgtm[...]` comments — ignored by GitHub Code Scanning (only worked on the legacy lgtm.com product)
+- Create `.github/codeql/codeql-config.yml` alone — GitHub's auto-setup ignores this file unless a custom workflow explicitly references it via `config-file:`
+- Create `.github/workflows/codeql.yml` to replace GitHub's built-in scanning — this repo uses GitHub's auto-setup intentionally
+
+### How to dismiss via `gh` CLI
+
+```bash
+# 1. Find the alert numbers
+gh api repos/chrisrothwell/thinkarr/code-scanning/alerts \
+  --jq '.[] | select(.state=="open") | "\(.number) \(.rule.id) \(.most_recent_instance.location.path)"'
+
+# 2. Dismiss each false positive (replace 14 with the actual alert number)
+gh api --method PATCH \
+  repos/chrisrothwell/thinkarr/code-scanning/alerts/14 \
+  -f state=dismissed \
+  -f dismissed_reason=false_positive \
+  -f dismissed_comment="<one-line explanation of why the validation makes this safe>"
+```
+
+### Accepted dismissed_reason values
+- `false_positive` — CodeQL cannot trace through a custom validation function
+- `won't fix` — risk accepted and documented
+- `used in tests` — alert is in test-only code
+
 ## Rule: tests for every change
 
 For every feature or bug fix, check whether a unit or E2E test already covers the changed behaviour.

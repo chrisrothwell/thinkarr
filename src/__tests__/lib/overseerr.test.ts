@@ -264,7 +264,7 @@ describe("search — issue #101: includes rating and cast from detail endpoint",
   });
 });
 
-describe("listRequests — issue #101: includes thumbPath, overseerrId, and tmdbId", () => {
+describe("listRequests — issue #101: includes thumbPath, overseerrId, tmdbId and mediaStatus", () => {
   beforeEach(() => {
     vi.resetModules();
   });
@@ -312,6 +312,69 @@ describe("listRequests — issue #101: includes thumbPath, overseerrId, and tmdb
     const results = await listRequests();
     expect(results[0].thumbPath).toBeUndefined();
     expect(results[0].tmdbId).toBe(551);
+  });
+
+  it("returns mediaStatus 'pending' for an approved request (status 2)", async () => {
+    const approvedRequest = {
+      id: 706,
+      type: "movie",
+      status: 2, // Approved
+      media: { id: 1, mediaType: "movie", tmdbId: 550, title: "Fight Club" },
+      requestedBy: { displayName: "alice" },
+      createdAt: "2026-01-01T00:00:00.000Z",
+      seasons: [],
+    };
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ results: [approvedRequest] }),
+    }));
+
+    const { listRequests } = await import("@/lib/services/overseerr");
+    const results = await listRequests();
+    expect(results[0].mediaStatus).toBe("pending");
+  });
+
+  it("returns mediaStatus 'pending' for a pending-approval request (status 1)", async () => {
+    const pendingRequest = {
+      id: 708,
+      type: "tv",
+      status: 1, // Pending Approval
+      media: { id: 2, mediaType: "tv", tmdbId: 1396, title: "Breaking Bad" },
+      requestedBy: { displayName: "bob" },
+      createdAt: "2026-01-02T00:00:00.000Z",
+      seasons: [{ seasonNumber: 1 }],
+    };
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ results: [pendingRequest] }),
+    }));
+
+    const { listRequests } = await import("@/lib/services/overseerr");
+    const results = await listRequests();
+    expect(results[0].mediaStatus).toBe("pending");
+  });
+
+  it("returns mediaStatus 'not_requested' for a declined request (status 3)", async () => {
+    const declinedRequest = {
+      id: 709,
+      type: "movie",
+      status: 3, // Declined
+      media: { id: 3, mediaType: "movie", tmdbId: 680, title: "Pulp Fiction" },
+      requestedBy: { displayName: "dave" },
+      createdAt: "2026-01-03T00:00:00.000Z",
+      seasons: [],
+    };
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ results: [declinedRequest] }),
+    }));
+
+    const { listRequests } = await import("@/lib/services/overseerr");
+    const results = await listRequests();
+    expect(results[0].mediaStatus).toBe("not_requested");
   });
 });
 

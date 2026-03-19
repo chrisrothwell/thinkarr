@@ -12,8 +12,9 @@ const securityHeaders = [
   { key: "X-Frame-Options", value: "DENY" },
   // Limit referrer information sent to third-party origins
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
-  // Disable browser features not used by the app
-  { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
+  // Disable browser features not used by the app.
+  // Note: microphone is intentionally NOT blocked here — voice and realtime chat require it.
+  { key: "Permissions-Policy", value: "camera=(), geolocation=()" },
   // Prevent search engines from indexing home-server instances
   { key: "X-Robots-Tag", value: "noindex, nofollow" },
   // Content Security Policy — restricts resource loading to same origin.
