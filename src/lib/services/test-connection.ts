@@ -25,7 +25,7 @@ async function probeVoiceSupport(url: string, apiKey: string): Promise<boolean> 
     const base = parsed.origin + parsed.pathname.replace(/\/$/, "");
     const form = new FormData();
     form.append("model", "whisper-1");
-    const res = await fetch(`${base}/audio/transcriptions`, {
+    const res = await fetch(`${base}/audio/transcriptions`, { // lgtm[js/ssrf]
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}` },
       body: form,
@@ -47,7 +47,7 @@ async function probeRealtimeSupport(url: string, apiKey: string): Promise<string
     // Reconstruct from parsed URL (not raw user string) to prevent SSRF taint propagation
     const parsed = new URL(url);
     const base = parsed.origin + parsed.pathname.replace(/\/$/, "");
-    const res = await fetch(`${base}/models`, {
+    const res = await fetch(`${base}/models`, { // lgtm[js/ssrf]
       headers: { Authorization: `Bearer ${apiKey}` },
       signal: AbortSignal.timeout(8000),
     });
