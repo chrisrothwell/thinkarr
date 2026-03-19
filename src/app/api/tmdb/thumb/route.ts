@@ -43,10 +43,9 @@ export async function GET(request: Request) {
 
   try {
     // Host is pinned to the ALLOWED_HOSTNAME constant; user only controls the path/query.
-    // The scheme and host are hardcoded — this is not exploitable SSRF.
+    // The scheme and host are hardcoded — not exploitable SSRF (see .github/codeql/codeql-config.yml).
     const safeUrl = `https://${ALLOWED_HOSTNAME}${parsed.pathname}${parsed.search}`;
-    // lgtm[js/ssrf] — host is the hardcoded ALLOWED_HOSTNAME constant, not user-supplied
-    const res = await fetch(safeUrl, { signal: AbortSignal.timeout(10000) }); // lgtm[js/ssrf]
+    const res = await fetch(safeUrl, { signal: AbortSignal.timeout(10000) });
 
     if (!res.ok) {
       return new NextResponse("Upstream error", { status: res.status });

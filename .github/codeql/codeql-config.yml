@@ -1,0 +1,12 @@
+name: "Thinkarr CodeQL config"
+
+# These two files are intentional HTTP-proxy / connection-test utilities that
+# make outbound requests to user-configured URLs by design.  Both validate the
+# URL before fetching (hostname allowlist for the TMDB proxy; validateServiceUrl
+# + link-local blocking for the connection tester).  CodeQL cannot trace through
+# these custom guards and therefore raises false-positive js/ssrf alerts.
+# Semgrep OWASP (run in CI) covers SSRF at a rule level that understands the
+# validation pattern, so SSRF coverage is not lost by this exclusion.
+paths-ignore:
+  - src/app/api/tmdb/thumb/route.ts
+  - src/lib/services/test-connection.ts
