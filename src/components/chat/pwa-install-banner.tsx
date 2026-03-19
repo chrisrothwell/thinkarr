@@ -9,14 +9,14 @@ export function PwaInstallBanner() {
   const { isAvailable, isMobile, isIosDevice, install } = usePwaInstall();
   const [dismissed, setDismissed] = useState(() => isPwaBannerDismissed());
 
-  if (dismissed || !isMobile) return null;
+  if (dismissed) return null;
 
   function handleDismiss() {
     dismissPwaBanner();
     setDismissed(true);
   }
 
-  // iOS: beforeinstallprompt never fires — show manual instructions on mobile only
+  // iOS Safari: beforeinstallprompt never fires — show manual instructions
   if (isIosDevice && isMobile) {
     return (
       <div className="flex items-start gap-3 border-b bg-muted/60 px-4 py-2 text-sm">

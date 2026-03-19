@@ -14,7 +14,9 @@ interface Bucket {
 const buckets = new Map<number, Bucket>();
 
 const WINDOW_MS = 60_000; // 1 minute
-const MAX_REQUESTS = 60;
+const MAX_REQUESTS = process.env.API_RATE_LIMIT_MAX
+  ? parseInt(process.env.API_RATE_LIMIT_MAX, 10)
+  : 60;
 
 /** Prune expired buckets to prevent unbounded memory growth. */
 function prune() {

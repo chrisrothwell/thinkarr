@@ -12,6 +12,18 @@ export function useVoiceInput() {
 
   const startRecording = useCallback(async () => {
     setError(null);
+
+    // Microphone access requires a secure context (HTTPS or localhost)
+    if (!window.isSecureContext) {
+      setError("Microphone access requires a secure connection (HTTPS). Please reload over HTTPS.");
+      return;
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setError("Your browser does not support microphone access. Please use a modern browser.");
+      return;
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
@@ -26,8 +38,19 @@ export function useVoiceInput() {
       mediaRecorder.start();
       setRecording(true);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Microphone access denied";
-      setError(msg);
+      if (e instanceof DOMException) {
+        if (e.name === "NotAllowedError" || e.name === "PermissionDeniedError") {
+          setError(
+            "Microphone access was denied. To fix this: click the lock or camera icon in your browser\u2019s address bar, allow microphone access, then reload the page.",
+          );
+        } else if (e.name === "NotFoundError" || e.name === "DevicesNotFoundError") {
+          setError("No microphone found. Please connect a microphone and try again.");
+        } else {
+          setError(`Microphone error: ${e.message}`);
+        }
+      } else {
+        setError(e instanceof Error ? e.message : "Microphone access denied");
+      }
     }
   }, []);
 

@@ -636,12 +636,7 @@ export default function SettingsPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                {!pwaMobile ? (
-                  <p className="text-sm text-muted-foreground">
-                    PWA installation is available on mobile devices. Open Thinkarr on your phone or
-                    tablet to install it as an app.
-                  </p>
-                ) : pwaIsIos ? (
+                {pwaIsIos && pwaMobile ? (
                   <p className="text-sm text-muted-foreground">
                     To install on iOS, open Thinkarr in{" "}
                     <span className="font-medium text-foreground">Safari</span>, tap the{" "}
@@ -652,7 +647,9 @@ export default function SettingsPage() {
                 ) : pwaInstallAvailable ? (
                   <div className="flex items-center gap-3">
                     <p className="flex-1 text-sm text-muted-foreground">
-                      Tap Install to add Thinkarr to your home screen for quick access.
+                      {pwaMobile
+                        ? "Tap Install to add Thinkarr to your home screen for quick access."
+                        : "Click Install to add Thinkarr as a desktop app for quick access."}
                     </p>
                     <Button variant="outline" size="sm" onClick={() => triggerPwaInstall()}>
                       <Download className="mr-2 h-4 w-4" />

@@ -61,7 +61,11 @@ If an Overseerr TV result has seasonCount > 1, you MUST call this tool with one 
         summary: t.summary ?? undefined,
         rating: t.rating ?? undefined,
         thumbUrl: t.thumbPath
-          ? (t.thumbPath.startsWith("http") ? t.thumbPath : buildThumbUrl(t.thumbPath))
+          ? (t.thumbPath.startsWith("http")
+              // Proxy external TMDB/HTTP thumbnails through our server so they load
+              // as same-origin resources (prevents ad-blocker / cross-origin blocking).
+              ? `/api/tmdb/thumb?url=${encodeURIComponent(t.thumbPath)}`
+              : buildThumbUrl(t.thumbPath))
           : undefined,
         plexKey: t.plexKey ?? undefined,
         plexUrl: baseUrl,
