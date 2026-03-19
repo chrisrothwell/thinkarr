@@ -42,8 +42,12 @@ export async function GET(request: Request) {
   }
 
   try {
-    // Use the validated parsed URL (not the raw user-supplied string) to prevent SSRF taint propagation
-    const res = await fetch(parsed.toString(), {
+    // Host is pinned to the ALLOWED_HOSTNAME constant; user only controls the path/query.
+    // This reconstruction ensures the scheme and host are never user-supplied, which satisfies
+    // the SSRF requirement even though CodeQL cannot statically infer the hostname check above.
+    // lgtm[js/ssrf]
+    const safeUrl = `https://${ALLOWED_HOSTNAME}${parsed.pathname}${parsed.search}`;
+    const res = await fetch(safeUrl, { // lgtm[js/ssrf]
       signal: AbortSignal.timeout(10000),
     });
 
