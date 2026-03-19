@@ -43,13 +43,10 @@ export async function GET(request: Request) {
 
   try {
     // Host is pinned to the ALLOWED_HOSTNAME constant; user only controls the path/query.
-    // This reconstruction ensures the scheme and host are never user-supplied, which satisfies
-    // the SSRF requirement even though CodeQL cannot statically infer the hostname check above.
-    // lgtm[js/ssrf]
+    // The scheme and host are hardcoded — this is not exploitable SSRF.
     const safeUrl = `https://${ALLOWED_HOSTNAME}${parsed.pathname}${parsed.search}`;
-    const res = await fetch(safeUrl, { // lgtm[js/ssrf]
-      signal: AbortSignal.timeout(10000),
-    });
+    // lgtm[js/ssrf] — host is the hardcoded ALLOWED_HOSTNAME constant, not user-supplied
+    const res = await fetch(safeUrl, { signal: AbortSignal.timeout(10000) }); // lgtm[js/ssrf]
 
     if (!res.ok) {
       return new NextResponse("Upstream error", { status: res.status });

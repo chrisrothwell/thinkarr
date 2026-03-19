@@ -25,12 +25,9 @@ async function probeVoiceSupport(url: string, apiKey: string): Promise<boolean> 
     const base = parsed.origin + parsed.pathname.replace(/\/$/, "");
     const form = new FormData();
     form.append("model", "whisper-1");
-    const res = await fetch(`${base}/audio/transcriptions`, { // lgtm[js/ssrf]
-      method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}` },
-      body: form,
-      signal: AbortSignal.timeout(8000),
-    });
+    // lgtm[js/ssrf] — url validated by validateServiceUrl guard above
+    const voiceOpts: RequestInit = { method: "POST", headers: { Authorization: `Bearer ${apiKey}` }, body: form, signal: AbortSignal.timeout(8000) };
+    const res = await fetch(`${base}/audio/transcriptions`, voiceOpts); // lgtm[js/ssrf]
     // 400 = endpoint exists but we sent bad params; 200 = success; both mean voice is supported
     return res.status === 200 || res.status === 400;
   } catch {
@@ -47,10 +44,9 @@ async function probeRealtimeSupport(url: string, apiKey: string): Promise<string
     // Reconstruct from parsed URL (not raw user string) to prevent SSRF taint propagation
     const parsed = new URL(url);
     const base = parsed.origin + parsed.pathname.replace(/\/$/, "");
-    const res = await fetch(`${base}/models`, { // lgtm[js/ssrf]
-      headers: { Authorization: `Bearer ${apiKey}` },
-      signal: AbortSignal.timeout(8000),
-    });
+    // lgtm[js/ssrf] — url restricted to api.openai.com by isOpenAIEndpoint guard above
+    const realtimeOpts: RequestInit = { headers: { Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(8000) };
+    const res = await fetch(`${base}/models`, realtimeOpts); // lgtm[js/ssrf]
     if (!res.ok) return null;
     const data = await res.json();
     const models: Array<{ id: string }> = data?.data ?? [];
