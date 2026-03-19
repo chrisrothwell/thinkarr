@@ -42,7 +42,8 @@ export async function GET(request: Request) {
   }
 
   try {
-    const res = await fetch(imageUrl, {
+    // Use the validated parsed URL (not the raw user-supplied string) to prevent SSRF taint propagation
+    const res = await fetch(parsed.toString(), {
       signal: AbortSignal.timeout(10000),
     });
 

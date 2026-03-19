@@ -18,7 +18,11 @@ export function isOpenAIEndpoint(url: string): boolean {
 
 async function probeVoiceSupport(url: string, apiKey: string): Promise<boolean> {
   try {
-    const base = url.replace(/\/$/, "");
+    const check = validateServiceUrl(url);
+    if (!check.valid) return false;
+    // Reconstruct from parsed URL (not raw user string) to prevent SSRF taint propagation
+    const parsed = new URL(url);
+    const base = parsed.origin + parsed.pathname.replace(/\/$/, "");
     const form = new FormData();
     form.append("model", "whisper-1");
     const res = await fetch(`${base}/audio/transcriptions`, {
@@ -37,8 +41,12 @@ async function probeVoiceSupport(url: string, apiKey: string): Promise<boolean> 
 async function probeRealtimeSupport(url: string, apiKey: string): Promise<string | null> {
   // Realtime (WebRTC) is an OpenAI-exclusive API — skip probing for any other provider.
   if (!isOpenAIEndpoint(url)) return null;
+  const check = validateServiceUrl(url);
+  if (!check.valid) return null;
   try {
-    const base = url.replace(/\/$/, "");
+    // Reconstruct from parsed URL (not raw user string) to prevent SSRF taint propagation
+    const parsed = new URL(url);
+    const base = parsed.origin + parsed.pathname.replace(/\/$/, "");
     const res = await fetch(`${base}/models`, {
       headers: { Authorization: `Bearer ${apiKey}` },
       signal: AbortSignal.timeout(8000),

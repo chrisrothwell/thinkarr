@@ -627,3 +627,20 @@ All Plex and Overseerr tools now return the same field names as the `display_tit
 ### Phase 26: Version bump to 1.1.1-beta.4
 
 - Bumped `package.json` version from `1.1.1-beta.3` to `1.1.1-beta.4`
+
+### Phase 27: Fix CodeQL SSRF findings (Critical)
+
+#### Fixed
+
+- **`src/app/api/tmdb/thumb/route.ts`** — Replaced `fetch(imageUrl, ...)` with `fetch(parsed.toString(), ...)`. The URL was already validated (hostname pinned to `image.tmdb.org`, protocol must be `https:`), but the raw user-supplied string was still passed to `fetch`. Using the serialised validated `URL` object breaks CodeQL's taint propagation path.
+
+- **`src/lib/services/test-connection.ts` — `probeVoiceSupport`** — Added `validateServiceUrl` guard (early return `false` on invalid URL) and reconstructed the base URL from `parsed.origin + parsed.pathname` instead of the raw user string, eliminating the SSRF taint path.
+
+- **`src/lib/services/test-connection.ts` — `probeRealtimeSupport`** — Added `validateServiceUrl` guard (early return `null` on invalid URL) and reconstructed base URL from `parsed.origin + parsed.pathname`. The existing `isOpenAIEndpoint` hostname check is preserved; the new guard and URL reconstruction satisfy CodeQL's sanitizer requirements.
+
+#### Changed files
+
+| File | Change |
+|------|--------|
+| `src/app/api/tmdb/thumb/route.ts` | Use `parsed.toString()` in `fetch` instead of raw `imageUrl` |
+| `src/lib/services/test-connection.ts` | Add `validateServiceUrl` + URL reconstruction in `probeVoiceSupport` and `probeRealtimeSupport` |
