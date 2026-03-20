@@ -123,35 +123,40 @@ export function buildThumbUrl(thumbPath: string): string | undefined {
   return `/api/plex/thumb?path=${encodeURIComponent(thumbPath)}`;
 }
 
-export async function searchLibrary(query: string): Promise<PlexSearchResult[]> {
-  const data = await plexFetch(`/hubs/search?query=${encodeURIComponent(query)}&limit=10`);
-  const results: PlexSearchResult[] = [];
+export async function searchLibrary(query: string, page = 1): Promise<{ results: PlexSearchResult[]; hasMore: boolean }> {
+  const offset = (page - 1) * 50;
+  const data = await plexFetch(`/hubs/search?query=${encodeURIComponent(query)}&limit=${offset + 51}`);
+  const all: PlexSearchResult[] = [];
   for (const hub of data?.MediaContainer?.Hub || []) {
     for (const item of hub.Metadata || []) {
-      results.push(mapMetadata(item, hub.type || item.type));
+      all.push(mapMetadata(item, hub.type || item.type));
     }
   }
-  return results;
+  const hasMore = all.length > offset + 50;
+  return { results: all.slice(offset, offset + 50), hasMore };
 }
 
-export async function getOnDeck(): Promise<PlexSearchResult[]> {
-  const data = await plexFetch("/library/onDeck?X-Plex-Container-Start=0&X-Plex-Container-Size=10");
-  return (data?.MediaContainer?.Metadata || []).map((item: Record<string, unknown>) => mapMetadata(item));
+export async function getOnDeck(page = 1): Promise<{ results: PlexSearchResult[]; hasMore: boolean }> {
+  const start = (page - 1) * 50;
+  const data = await plexFetch(`/library/onDeck?X-Plex-Container-Start=${start}&X-Plex-Container-Size=51`);
+  const items: PlexSearchResult[] = (data?.MediaContainer?.Metadata || []).map((item: Record<string, unknown>) => mapMetadata(item));
+  const hasMore = items.length > 50;
+  return { results: items.slice(0, 50), hasMore };
 }
 
-export async function getRecentlyAdded(): Promise<PlexSearchResult[]> {
-  const data = await plexFetch("/library/recentlyAdded?X-Plex-Container-Start=0&X-Plex-Container-Size=20");
+export async function getRecentlyAdded(page = 1): Promise<{ results: PlexSearchResult[]; hasMore: boolean }> {
+  // Fetch a large raw window to survive deduplication and return 50 unique entries per page.
+  // We fetch 200 items from the start each time so deduplication is stable across pages.
+  const data = await plexFetch("/library/recentlyAdded?X-Plex-Container-Start=0&X-Plex-Container-Size=200");
   const items: PlexSearchResult[] = (data?.MediaContainer?.Metadata || []).map(
     (item: Record<string, unknown>) => mapMetadata(item),
   );
 
   // Deduplicate TV seasons/episodes by show title — keep one representative entry per show
-  // so the LLM doesn't receive 10 entries for the same series.
+  // so the LLM doesn't receive many entries for the same series.
   const seen = new Set<string>();
   const deduped: PlexSearchResult[] = [];
   for (const item of items) {
-    // TV items (episodes/seasons) carry a showTitle — deduplicate by show.
-    // Movies use their own title as the dedup key.
     const key = item.showTitle
       ? `tv:${item.showTitle}`
       : `${item.mediaType}:${item.title}`;
@@ -159,13 +164,15 @@ export async function getRecentlyAdded(): Promise<PlexSearchResult[]> {
       seen.add(key);
       deduped.push(item);
     }
-    if (deduped.length >= 10) break;
   }
-  return deduped;
+
+  const offset = (page - 1) * 50;
+  const hasMore = deduped.length > offset + 50;
+  return { results: deduped.slice(offset, offset + 50), hasMore };
 }
 
 export async function checkAvailability(title: string): Promise<{ available: boolean; results: PlexSearchResult[] }> {
-  const results = await searchLibrary(title);
+  const { results } = await searchLibrary(title);
   return {
     available: results.length > 0,
     results: results.slice(0, 5),
@@ -177,7 +184,7 @@ export async function checkAvailability(title: string): Promise<{ available: boo
  * Searches all library sections for a matching collection name and returns
  * the media items inside it.
  */
-export async function searchCollections(collectionName: string): Promise<PlexSearchResult[]> {
+export async function searchCollections(collectionName: string, page = 1): Promise<{ results: PlexSearchResult[]; hasMore: boolean }> {
   const sectionsData = await plexFetch("/library/sections");
   const sections: Array<{ key: string }> = sectionsData?.MediaContainer?.Directory || [];
 
@@ -195,11 +202,15 @@ export async function searchCollections(collectionName: string): Promise<PlexSea
     if (!collectionKey) continue;
 
     const childrenData = await plexFetch(`/library/collections/${collectionKey}/children`);
-    const items: Record<string, unknown>[] = childrenData?.MediaContainer?.Metadata || [];
-    return items.slice(0, 20).map((item) => mapMetadata(item));
+    const all: PlexSearchResult[] = (childrenData?.MediaContainer?.Metadata || []).map(
+      (item: Record<string, unknown>) => mapMetadata(item),
+    );
+    const offset = (page - 1) * 50;
+    const hasMore = all.length > offset + 50;
+    return { results: all.slice(offset, offset + 50), hasMore };
   }
 
-  return [];
+  return { results: [], hasMore: false };
 }
 
 /**
@@ -222,14 +233,16 @@ const TAG_TYPE_PARAM: Record<string, string> = {
  * Supports genre, director, actor, country, studio, contentRating, label, and mood.
  * Queries all movie and TV sections for items matching the tag.
  */
-export async function searchByTag(tag: string, tagType: string = "genre"): Promise<PlexSearchResult[]> {
+export async function searchByTag(tag: string, tagType: string = "genre", page = 1): Promise<{ results: PlexSearchResult[]; hasMore: boolean }> {
   const sectionsData = await plexFetch("/library/sections");
   const sections: Array<{ key: string; type: string }> = sectionsData?.MediaContainer?.Directory || [];
 
   // Resolve the Plex API query parameter for the given tag type
   const paramName = TAG_TYPE_PARAM[tagType] ?? "genre";
 
-  const results: PlexSearchResult[] = [];
+  const offset = (page - 1) * 50;
+  const needed = offset + 51; // collect one extra to determine hasMore
+  const all: PlexSearchResult[] = [];
 
   for (const section of sections) {
     // Only movie (type=movie) and show (type=show) sections support tag filtering
@@ -241,12 +254,14 @@ export async function searchByTag(tag: string, tagType: string = "genre"): Promi
     );
     const items: Record<string, unknown>[] = data?.MediaContainer?.Metadata || [];
     for (const item of items) {
-      results.push(mapMetadata(item));
-      if (results.length >= 20) return results;
+      all.push(mapMetadata(item));
+      if (all.length >= needed) break;
     }
+    if (all.length >= needed) break;
   }
 
-  return results;
+  const hasMore = all.length > offset + 50;
+  return { results: all.slice(offset, offset + 50), hasMore };
 }
 
 export interface PlexTitleTags {

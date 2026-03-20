@@ -5,6 +5,7 @@
  * - getRecentlyAdded deduplicates TV entries by show
  * - searchCollections returns items from a matching collection (issue #15)
  * - searchByTag returns items tagged with a given genre (issue #15)
+ * - Pagination: all search functions return { results, hasMore } (issue #109)
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -76,7 +77,7 @@ describe("getRecentlyAdded — deduplication and title mapping", () => {
 
   it("maps movie items with correct mediaType and title", async () => {
     const { getRecentlyAdded } = await import("@/lib/services/plex");
-    const results = await getRecentlyAdded();
+    const { results } = await getRecentlyAdded();
     const movie = results.find((r) => r.mediaType === "movie");
     expect(movie).toBeDefined();
     expect(movie!.title).toBe("The Matrix");
@@ -84,7 +85,7 @@ describe("getRecentlyAdded — deduplication and title mapping", () => {
 
   it("maps season items: mediaType is 'tv', title includes show name, not bare 'Season N'", async () => {
     const { getRecentlyAdded } = await import("@/lib/services/plex");
-    const results = await getRecentlyAdded();
+    const { results } = await getRecentlyAdded();
     // Seasons now have mediaType "tv" (normalized from "season")
     const season = results.find((r) => r.mediaType === "tv" && r.showTitle);
     expect(season).toBeDefined();
@@ -96,7 +97,7 @@ describe("getRecentlyAdded — deduplication and title mapping", () => {
 
   it("deduplicates multiple seasons from the same show", async () => {
     const { getRecentlyAdded } = await import("@/lib/services/plex");
-    const results = await getRecentlyAdded();
+    const { results } = await getRecentlyAdded();
     const tvItems = results.filter((r) => r.mediaType === "tv");
     // All three seasons share showTitle "Breaking Bad" → only one should appear
     expect(tvItems.length).toBe(1);
@@ -117,7 +118,7 @@ describe("mapMetadata — episode parent context", () => {
 
   it("episode items include showTitle, seasonNumber, episodeNumber", async () => {
     const { getRecentlyAdded } = await import("@/lib/services/plex");
-    const results = await getRecentlyAdded();
+    const { results } = await getRecentlyAdded();
     const ep = results.find((r) => r.mediaType === "episode");
     expect(ep).toBeDefined();
     expect(ep!.showTitle).toBe("Breaking Bad");
@@ -150,7 +151,7 @@ describe("searchCollections — issue #15", () => {
       }));
 
     const { searchCollections } = await import("@/lib/services/plex");
-    const results = await searchCollections("Marvel");
+    const { results } = await searchCollections("Marvel");
     expect(results).toHaveLength(1);
     expect(results[0].title).toBe("The Matrix");
   });
@@ -167,8 +168,57 @@ describe("searchCollections — issue #15", () => {
       }));
 
     const { searchCollections } = await import("@/lib/services/plex");
-    const results = await searchCollections("Nonexistent");
+    const { results, hasMore } = await searchCollections("Nonexistent");
     expect(results).toHaveLength(0);
+    expect(hasMore).toBe(false);
+  });
+});
+
+describe("searchCollections — issue #109: pagination", () => {
+  it("returns hasMore=true when collection has more than 50 items", async () => {
+    // Build 51 items
+    const items = Array.from({ length: 51 }, (_, i) => ({ ...MOVIE_ITEM, title: `Film ${i}`, key: `/library/metadata/${i}` }));
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ MediaContainer: { Directory: [{ key: "1" }] } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ MediaContainer: { Metadata: [{ ratingKey: "1", title: "Big" }] } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ MediaContainer: { Metadata: items } }),
+      }));
+
+    const { searchCollections } = await import("@/lib/services/plex");
+    const { results, hasMore } = await searchCollections("Big", 1);
+    expect(results).toHaveLength(50);
+    expect(hasMore).toBe(true);
+  });
+
+  it("page 2 returns the correct slice", async () => {
+    const items = Array.from({ length: 60 }, (_, i) => ({ ...MOVIE_ITEM, title: `Film ${i}`, key: `/library/metadata/${i}` }));
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ MediaContainer: { Directory: [{ key: "1" }] } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ MediaContainer: { Metadata: [{ ratingKey: "1", title: "Big" }] } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ MediaContainer: { Metadata: items } }),
+      }));
+
+    const { searchCollections } = await import("@/lib/services/plex");
+    const { results, hasMore } = await searchCollections("Big", 2);
+    expect(results).toHaveLength(10); // items 50-59
+    expect(results[0].title).toBe("Film 50");
+    expect(hasMore).toBe(false);
   });
 });
 
@@ -191,7 +241,7 @@ describe("searchByTag — issue #15", () => {
       }));
 
     const { searchByTag } = await import("@/lib/services/plex");
-    const results = await searchByTag("Action");
+    const { results } = await searchByTag("Action");
     expect(results).toHaveLength(1);
     expect(results[0].title).toBe("The Matrix");
   });
@@ -271,8 +321,75 @@ describe("searchByTag — issue #15", () => {
       }));
 
     const { searchByTag } = await import("@/lib/services/plex");
-    const results = await searchByTag("Action");
+    const { results } = await searchByTag("Action");
     expect(results).toHaveLength(0);
+  });
+});
+
+describe("searchByTag — issue #109: pagination", () => {
+  it("returns hasMore=true when more than 50 items match", async () => {
+    const items = Array.from({ length: 51 }, (_, i) => ({ ...MOVIE_ITEM, title: `Film ${i}`, key: `/library/metadata/${i}` }));
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ MediaContainer: { Directory: [{ key: "1", type: "movie" }] } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ MediaContainer: { Metadata: items } }),
+      }));
+
+    const { searchByTag } = await import("@/lib/services/plex");
+    const { results, hasMore } = await searchByTag("Action");
+    expect(results).toHaveLength(50);
+    expect(hasMore).toBe(true);
+  });
+
+  it("page 2 returns the correct offset slice", async () => {
+    // Need 101 items to get a full page 2 + hasMore detection item
+    const items = Array.from({ length: 101 }, (_, i) => ({ ...MOVIE_ITEM, title: `Film ${i}`, key: `/library/metadata/${i}` }));
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ MediaContainer: { Directory: [{ key: "1", type: "movie" }] } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ MediaContainer: { Metadata: items } }),
+      }));
+
+    const { searchByTag } = await import("@/lib/services/plex");
+    const { results, hasMore } = await searchByTag("Action", "genre", 2);
+    expect(results[0].title).toBe("Film 50");
+    expect(results).toHaveLength(50);
+    expect(hasMore).toBe(true);
+  });
+});
+
+describe("getOnDeck — issue #109: pagination", () => {
+  it("returns hasMore=false when fewer than 51 items returned", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ MediaContainer: { Metadata: [MOVIE_ITEM] } }),
+    }));
+
+    const { getOnDeck } = await import("@/lib/services/plex");
+    const { results, hasMore } = await getOnDeck();
+    expect(results).toHaveLength(1);
+    expect(hasMore).toBe(false);
+  });
+
+  it("returns hasMore=true when 51 items returned from API", async () => {
+    const items = Array.from({ length: 51 }, (_, i) => ({ ...MOVIE_ITEM, title: `Film ${i}`, key: `/library/metadata/${i}` }));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ MediaContainer: { Metadata: items } }),
+    }));
+
+    const { getOnDeck } = await import("@/lib/services/plex");
+    const { results, hasMore } = await getOnDeck();
+    expect(results).toHaveLength(50);
+    expect(hasMore).toBe(true);
   });
 });
 

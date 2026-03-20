@@ -71,7 +71,7 @@ describe("search — issue #101: includes request details from mediaInfo", () =>
     }));
 
     const { search } = await import("@/lib/services/overseerr");
-    const results = await search("Fight Club");
+    const { results } = await search("Fight Club");
     expect(results).toHaveLength(1);
     expect(results[0].requests).toHaveLength(1);
     expect(results[0].requests![0].requestedBy).toBe("alice");
@@ -95,7 +95,7 @@ describe("search — issue #101: includes request details from mediaInfo", () =>
     }));
 
     const { search } = await import("@/lib/services/overseerr");
-    const results = await search("Fight Club");
+    const { results } = await search("Fight Club");
     expect(results[0].requests).toBeUndefined();
   });
 
@@ -133,7 +133,7 @@ describe("search — issue #101: includes request details from mediaInfo", () =>
       }));
 
     const { search } = await import("@/lib/services/overseerr");
-    const results = await search("Breaking Bad");
+    const { results } = await search("Breaking Bad");
     expect(results[0].requests![0].seasonsRequested).toEqual([1, 2]);
   });
 });
@@ -167,7 +167,7 @@ describe("search — issue #101: includes rating and cast from detail endpoint",
       }));
 
     const { search } = await import("@/lib/services/overseerr");
-    const results = await search("Fight Club");
+    const { results } = await search("Fight Club");
     expect(results[0].rating).toBe(8.4);
   });
 
@@ -203,7 +203,7 @@ describe("search — issue #101: includes rating and cast from detail endpoint",
       }));
 
     const { search } = await import("@/lib/services/overseerr");
-    const results = await search("Fight Club");
+    const { results } = await search("Fight Club");
     expect(results[0].cast).toEqual(["Brad Pitt", "Edward Norton", "Helena Bonham Carter"]);
   });
 
@@ -235,7 +235,7 @@ describe("search — issue #101: includes rating and cast from detail endpoint",
       }));
 
     const { search } = await import("@/lib/services/overseerr");
-    const results = await search("Breaking Bad");
+    const { results } = await search("Breaking Bad");
     expect(results[0].seasonCount).toBe(5);
     expect(results[0].cast).toEqual(["Bryan Cranston", "Aaron Paul"]);
   });
@@ -259,8 +259,50 @@ describe("search — issue #101: includes rating and cast from detail endpoint",
       .mockRejectedValueOnce(new Error("Network error")));
 
     const { search } = await import("@/lib/services/overseerr");
-    const results = await search("Fight Club");
+    const { results } = await search("Fight Club");
     expect(results[0].cast).toBeUndefined();
+  });
+});
+
+describe("search — issue #109: pagination and hasMore", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("passes page parameter to the Overseerr API", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ results: [], totalPages: 3 }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { search } = await import("@/lib/services/overseerr");
+    await search("test", 2);
+
+    const calledUrl = fetchMock.mock.calls[0][0] as string;
+    expect(calledUrl).toContain("page=2");
+  });
+
+  it("returns hasMore=true when more pages exist", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ results: [{ id: 1, mediaType: "movie", title: "Film", releaseDate: "2020-01-01", mediaInfo: { status: 5 } }], totalPages: 3 }),
+    }));
+
+    const { search } = await import("@/lib/services/overseerr");
+    const { hasMore } = await search("test", 1);
+    expect(hasMore).toBe(true);
+  });
+
+  it("returns hasMore=false on the last page", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ results: [], totalPages: 1 }),
+    }));
+
+    const { search } = await import("@/lib/services/overseerr");
+    const { hasMore } = await search("test", 1);
+    expect(hasMore).toBe(false);
   });
 });
 
@@ -286,7 +328,7 @@ describe("listRequests — issue #101: includes thumbPath, overseerrId, tmdbId a
     }));
 
     const { listRequests } = await import("@/lib/services/overseerr");
-    const results = await listRequests();
+    const { results } = await listRequests();
     expect(results[0].thumbPath).toBe("https://image.tmdb.org/t/p/w300/poster.jpg");
     expect(results[0].tmdbId).toBe(550);
     expect(results[0].overseerrId).toBe(550);
@@ -309,7 +351,7 @@ describe("listRequests — issue #101: includes thumbPath, overseerrId, tmdbId a
     }));
 
     const { listRequests } = await import("@/lib/services/overseerr");
-    const results = await listRequests();
+    const { results } = await listRequests();
     expect(results[0].thumbPath).toBeUndefined();
     expect(results[0].tmdbId).toBe(551);
   });
@@ -331,7 +373,7 @@ describe("listRequests — issue #101: includes thumbPath, overseerrId, tmdbId a
     }));
 
     const { listRequests } = await import("@/lib/services/overseerr");
-    const results = await listRequests();
+    const { results } = await listRequests();
     expect(results[0].mediaStatus).toBe("pending");
   });
 
@@ -352,7 +394,7 @@ describe("listRequests — issue #101: includes thumbPath, overseerrId, tmdbId a
     }));
 
     const { listRequests } = await import("@/lib/services/overseerr");
-    const results = await listRequests();
+    const { results } = await listRequests();
     expect(results[0].mediaStatus).toBe("pending");
   });
 
@@ -373,8 +415,71 @@ describe("listRequests — issue #101: includes thumbPath, overseerrId, tmdbId a
     }));
 
     const { listRequests } = await import("@/lib/services/overseerr");
-    const results = await listRequests();
+    const { results } = await listRequests();
     expect(results[0].mediaStatus).toBe("not_requested");
+  });
+});
+
+describe("listRequests — issue #109: pagination and hasMore", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("uses skip=0 for page 1", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ results: [], pageInfo: { results: 0 } }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { listRequests } = await import("@/lib/services/overseerr");
+    await listRequests(1);
+    expect(fetchMock.mock.calls[0][0]).toContain("skip=0");
+    expect(fetchMock.mock.calls[0][0]).toContain("take=50");
+  });
+
+  it("uses skip=50 for page 2", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ results: [], pageInfo: { results: 0 } }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { listRequests } = await import("@/lib/services/overseerr");
+    await listRequests(2);
+    expect(fetchMock.mock.calls[0][0]).toContain("skip=50");
+  });
+
+  it("returns hasMore=true when total exceeds current page", async () => {
+    const request = {
+      id: 1,
+      type: "movie",
+      status: 2,
+      media: { tmdbId: 1, title: "Film" },
+      requestedBy: { displayName: "alice" },
+      createdAt: "2026-01-01T00:00:00.000Z",
+      seasons: [],
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      // 1 result returned but total is 60 → page 1 of 50 has more
+      json: async () => ({ results: [request], pageInfo: { results: 60 } }),
+    }));
+
+    const { listRequests } = await import("@/lib/services/overseerr");
+    const { hasMore } = await listRequests(1);
+    expect(hasMore).toBe(true);
+  });
+
+  it("returns hasMore=false when all results fit on first page", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ results: [], pageInfo: { results: 10 } }),
+    }));
+
+    const { listRequests } = await import("@/lib/services/overseerr");
+    const { hasMore } = await listRequests(1);
+    expect(hasMore).toBe(false);
   });
 });
 
@@ -395,7 +500,7 @@ describe("listRequests — issue #89: titles should not return Unknown", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const { listRequests } = await import("@/lib/services/overseerr");
-    const results = await listRequests();
+    const { results } = await listRequests();
     expect(results[0].title).toBe("Fight Club");
     // Only one fetch (the /request call) — no extra TMDB lookup needed
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -420,7 +525,7 @@ describe("listRequests — issue #89: titles should not return Unknown", () => {
       }));
 
     const { listRequests } = await import("@/lib/services/overseerr");
-    const results = await listRequests();
+    const { results } = await listRequests();
     expect(results).toHaveLength(1);
     expect(results[0].title).toBe("Fight Club");
     expect(results[0].title).not.toBe("Unknown");
@@ -445,7 +550,7 @@ describe("listRequests — issue #89: titles should not return Unknown", () => {
       }));
 
     const { listRequests } = await import("@/lib/services/overseerr");
-    const results = await listRequests();
+    const { results } = await listRequests();
     expect(results).toHaveLength(1);
     expect(results[0].title).toBe("Breaking Bad");
     expect(results[0].title).not.toBe("Unknown");
@@ -470,7 +575,7 @@ describe("listRequests — issue #89: titles should not return Unknown", () => {
       }));
 
     const { listRequests } = await import("@/lib/services/overseerr");
-    const results = await listRequests();
+    const { results } = await listRequests();
     expect(results[0].seasonsRequested).toEqual([1, 2]);
   });
 
@@ -488,7 +593,7 @@ describe("listRequests — issue #89: titles should not return Unknown", () => {
       }));
 
     const { listRequests } = await import("@/lib/services/overseerr");
-    const results = await listRequests();
+    const { results } = await listRequests();
     expect(results).toHaveLength(1);
     // Falls back gracefully — media.title/name also absent so returns "Unknown"
     expect(results[0].title).toBeDefined();
