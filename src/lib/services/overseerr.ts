@@ -124,7 +124,7 @@ export async function search(query: string, page = 1): Promise<{ results: Overse
     }),
   );
 
-  return raw.map((r) => {
+  const results = raw.map((r) => {
     const mediaInfo = r.mediaInfo as Record<string, unknown> | undefined;
     const isTV = r.mediaType === "tv";
     const rawSeasons = (mediaInfo?.seasons as Record<string, unknown>[]) || [];
