@@ -124,29 +124,33 @@ export function buildThumbUrl(thumbPath: string): string | undefined {
 }
 
 export async function searchLibrary(query: string, page = 1): Promise<{ results: PlexSearchResult[]; hasMore: boolean }> {
-  const offset = (page - 1) * 50;
-  const data = await plexFetch(`/hubs/search?query=${encodeURIComponent(query)}&limit=${offset + 51}`);
+  // Hub search limit is per-hub, not a global total. Fetch 50 per hub (the batch size);
+  // sub-paginate to 10 items per LLM page (5 LLM pages per hub batch).
+  const llmOffset = ((page - 1) % 5) * 10;
+  const data = await plexFetch(`/hubs/search?query=${encodeURIComponent(query)}&limit=50`);
   const all: PlexSearchResult[] = [];
   for (const hub of data?.MediaContainer?.Hub || []) {
     for (const item of hub.Metadata || []) {
       all.push(mapMetadata(item, hub.type || item.type));
     }
   }
-  const hasMore = all.length > offset + 50;
-  return { results: all.slice(offset, offset + 50), hasMore };
+  const hasMore = all.length > llmOffset + 10;
+  return { results: all.slice(llmOffset, llmOffset + 10), hasMore };
 }
 
 export async function getOnDeck(page = 1): Promise<{ results: PlexSearchResult[]; hasMore: boolean }> {
-  const start = (page - 1) * 50;
-  const data = await plexFetch(`/library/onDeck?X-Plex-Container-Start=${start}&X-Plex-Container-Size=51`);
+  // Fetch 50 items per API batch; return 10 per LLM page (5 LLM pages per batch).
+  const apiBatch = Math.floor((page - 1) / 5);
+  const llmOffset = ((page - 1) % 5) * 10;
+  const start = apiBatch * 50;
+  const data = await plexFetch(`/library/onDeck?X-Plex-Container-Start=${start}&X-Plex-Container-Size=50`);
   const items: PlexSearchResult[] = (data?.MediaContainer?.Metadata || []).map((item: Record<string, unknown>) => mapMetadata(item));
-  const hasMore = items.length > 50;
-  return { results: items.slice(0, 50), hasMore };
+  const hasMore = items.length > llmOffset + 10;
+  return { results: items.slice(llmOffset, llmOffset + 10), hasMore };
 }
 
 export async function getRecentlyAdded(page = 1): Promise<{ results: PlexSearchResult[]; hasMore: boolean }> {
-  // Fetch a large raw window to survive deduplication and return 50 unique entries per page.
-  // We fetch 200 items from the start each time so deduplication is stable across pages.
+  // Fetch 200 raw items so deduplication is stable; return 10 deduplicated items per LLM page.
   const data = await plexFetch("/library/recentlyAdded?X-Plex-Container-Start=0&X-Plex-Container-Size=200");
   const items: PlexSearchResult[] = (data?.MediaContainer?.Metadata || []).map(
     (item: Record<string, unknown>) => mapMetadata(item),
@@ -166,9 +170,9 @@ export async function getRecentlyAdded(page = 1): Promise<{ results: PlexSearchR
     }
   }
 
-  const offset = (page - 1) * 50;
-  const hasMore = deduped.length > offset + 50;
-  return { results: deduped.slice(offset, offset + 50), hasMore };
+  const offset = (page - 1) * 10;
+  const hasMore = deduped.length > offset + 10;
+  return { results: deduped.slice(offset, offset + 10), hasMore };
 }
 
 export async function checkAvailability(title: string): Promise<{ available: boolean; results: PlexSearchResult[] }> {
@@ -205,9 +209,10 @@ export async function searchCollections(collectionName: string, page = 1): Promi
     const all: PlexSearchResult[] = (childrenData?.MediaContainer?.Metadata || []).map(
       (item: Record<string, unknown>) => mapMetadata(item),
     );
-    const offset = (page - 1) * 50;
-    const hasMore = all.length > offset + 50;
-    return { results: all.slice(offset, offset + 50), hasMore };
+    // Fetch all children; return 10 per LLM page.
+    const offset = (page - 1) * 10;
+    const hasMore = all.length > offset + 10;
+    return { results: all.slice(offset, offset + 10), hasMore };
   }
 
   return { results: [], hasMore: false };
@@ -240,8 +245,12 @@ export async function searchByTag(tag: string, tagType: string = "genre", page =
   // Resolve the Plex API query parameter for the given tag type
   const paramName = TAG_TYPE_PARAM[tagType] ?? "genre";
 
-  const offset = (page - 1) * 50;
-  const needed = offset + 51; // collect one extra to determine hasMore
+  // Fetch 50 items per API batch; return 10 per LLM page (5 LLM pages per batch).
+  const apiBatch = Math.floor((page - 1) / 5);
+  const llmOffset = ((page - 1) % 5) * 10;
+  const apiBatchStart = apiBatch * 50;
+  const needed = apiBatchStart + llmOffset + 11; // one extra item to detect hasMore
+
   const all: PlexSearchResult[] = [];
 
   for (const section of sections) {
@@ -260,8 +269,8 @@ export async function searchByTag(tag: string, tagType: string = "genre", page =
     if (all.length >= needed) break;
   }
 
-  const hasMore = all.length > offset + 50;
-  return { results: all.slice(offset, offset + 50), hasMore };
+  const hasMore = all.length > apiBatchStart + llmOffset + 10;
+  return { results: all.slice(apiBatchStart + llmOffset, apiBatchStart + llmOffset + 10), hasMore };
 }
 
 export interface PlexTitleTags {

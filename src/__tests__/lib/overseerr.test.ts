@@ -438,7 +438,8 @@ describe("listRequests — issue #109: pagination and hasMore", () => {
     expect(fetchMock.mock.calls[0][0]).toContain("take=50");
   });
 
-  it("uses skip=50 for page 2", async () => {
+  it("uses skip=50 for LLM page 6 (second API batch)", async () => {
+    // Pages 1-5 use apiBatch=0 (skip=0); page 6 is the first page of apiBatch=1 (skip=50).
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ results: [], pageInfo: { results: 0 } }),
@@ -446,39 +447,62 @@ describe("listRequests — issue #109: pagination and hasMore", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const { listRequests } = await import("@/lib/services/overseerr");
-    await listRequests(2);
+    await listRequests(6);
     expect(fetchMock.mock.calls[0][0]).toContain("skip=50");
   });
 
-  it("returns hasMore=true when total exceeds current page", async () => {
-    const request = {
-      id: 1,
-      type: "movie",
-      status: 2,
-      media: { tmdbId: 1, title: "Film" },
+  it("LLM pages 1-5 all use skip=0 (same API batch)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ results: [], pageInfo: { results: 0 } }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { listRequests } = await import("@/lib/services/overseerr");
+    await listRequests(5);
+    expect(fetchMock.mock.calls[0][0]).toContain("skip=0");
+  });
+
+  it("returns hasMore=true when API batch has more than 10 items at current LLM offset", async () => {
+    // 11 results returned → LLM page 1 shows 0-9, hasMore=true (item 10 exists)
+    const makeRequest = (id: number) => ({
+      id, type: "movie", status: 2,
+      media: { tmdbId: id, title: `Film ${id}` },
       requestedBy: { displayName: "alice" },
-      createdAt: "2026-01-01T00:00:00.000Z",
-      seasons: [],
-    };
+      createdAt: "2026-01-01T00:00:00.000Z", seasons: [],
+    });
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
       ok: true,
-      // 1 result returned but total is 60 → page 1 of 50 has more
-      json: async () => ({ results: [request], pageInfo: { results: 60 } }),
+      json: async () => ({
+        results: Array.from({ length: 11 }, (_, i) => makeRequest(i + 1)),
+        pageInfo: { results: 11 },
+      }),
     }));
 
     const { listRequests } = await import("@/lib/services/overseerr");
-    const { hasMore } = await listRequests(1);
+    const { results, hasMore } = await listRequests(1);
+    expect(results).toHaveLength(10);
     expect(hasMore).toBe(true);
   });
 
-  it("returns hasMore=false when all results fit on first page", async () => {
+  it("returns hasMore=false when exactly 10 results fit on first LLM page", async () => {
+    const makeRequest = (id: number) => ({
+      id, type: "movie", status: 2,
+      media: { tmdbId: id, title: `Film ${id}` },
+      requestedBy: { displayName: "alice" },
+      createdAt: "2026-01-01T00:00:00.000Z", seasons: [],
+    });
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ results: [], pageInfo: { results: 10 } }),
+      json: async () => ({
+        results: Array.from({ length: 10 }, (_, i) => makeRequest(i + 1)),
+        pageInfo: { results: 10 },
+      }),
     }));
 
     const { listRequests } = await import("@/lib/services/overseerr");
-    const { hasMore } = await listRequests(1);
+    const { results, hasMore } = await listRequests(1);
+    expect(results).toHaveLength(10);
     expect(hasMore).toBe(false);
   });
 });

@@ -175,9 +175,9 @@ describe("searchCollections — issue #15", () => {
 });
 
 describe("searchCollections — issue #109: pagination", () => {
-  it("returns hasMore=true when collection has more than 50 items", async () => {
-    // Build 51 items
-    const items = Array.from({ length: 51 }, (_, i) => ({ ...MOVIE_ITEM, title: `Film ${i}`, key: `/library/metadata/${i}` }));
+  it("returns hasMore=true when collection has more than 10 items", async () => {
+    // Build 11 items — page 1 shows 0-9, hasMore=true (item 10 exists)
+    const items = Array.from({ length: 11 }, (_, i) => ({ ...MOVIE_ITEM, title: `Film ${i}`, key: `/library/metadata/${i}` }));
     vi.stubGlobal("fetch", vi.fn()
       .mockResolvedValueOnce({
         ok: true,
@@ -194,12 +194,12 @@ describe("searchCollections — issue #109: pagination", () => {
 
     const { searchCollections } = await import("@/lib/services/plex");
     const { results, hasMore } = await searchCollections("Big", 1);
-    expect(results).toHaveLength(50);
+    expect(results).toHaveLength(10);
     expect(hasMore).toBe(true);
   });
 
-  it("page 2 returns the correct slice", async () => {
-    const items = Array.from({ length: 60 }, (_, i) => ({ ...MOVIE_ITEM, title: `Film ${i}`, key: `/library/metadata/${i}` }));
+  it("page 2 returns items 10-19", async () => {
+    const items = Array.from({ length: 20 }, (_, i) => ({ ...MOVIE_ITEM, title: `Film ${i}`, key: `/library/metadata/${i}` }));
     vi.stubGlobal("fetch", vi.fn()
       .mockResolvedValueOnce({
         ok: true,
@@ -216,8 +216,8 @@ describe("searchCollections — issue #109: pagination", () => {
 
     const { searchCollections } = await import("@/lib/services/plex");
     const { results, hasMore } = await searchCollections("Big", 2);
-    expect(results).toHaveLength(10); // items 50-59
-    expect(results[0].title).toBe("Film 50");
+    expect(results).toHaveLength(10);
+    expect(results[0].title).toBe("Film 10");
     expect(hasMore).toBe(false);
   });
 });
@@ -327,8 +327,9 @@ describe("searchByTag — issue #15", () => {
 });
 
 describe("searchByTag — issue #109: pagination", () => {
-  it("returns hasMore=true when more than 50 items match", async () => {
-    const items = Array.from({ length: 51 }, (_, i) => ({ ...MOVIE_ITEM, title: `Film ${i}`, key: `/library/metadata/${i}` }));
+  it("returns hasMore=true when more than 10 items match", async () => {
+    // 11 items → page 1 shows 0-9, hasMore=true
+    const items = Array.from({ length: 11 }, (_, i) => ({ ...MOVIE_ITEM, title: `Film ${i}`, key: `/library/metadata/${i}` }));
     vi.stubGlobal("fetch", vi.fn()
       .mockResolvedValueOnce({
         ok: true,
@@ -341,13 +342,13 @@ describe("searchByTag — issue #109: pagination", () => {
 
     const { searchByTag } = await import("@/lib/services/plex");
     const { results, hasMore } = await searchByTag("Action");
-    expect(results).toHaveLength(50);
+    expect(results).toHaveLength(10);
     expect(hasMore).toBe(true);
   });
 
-  it("page 2 returns the correct offset slice", async () => {
-    // Need 101 items to get a full page 2 + hasMore detection item
-    const items = Array.from({ length: 101 }, (_, i) => ({ ...MOVIE_ITEM, title: `Film ${i}`, key: `/library/metadata/${i}` }));
+  it("page 2 returns items 10-19 (second LLM page of first API batch)", async () => {
+    // page=2: apiBatch=0, llmOffset=10; need 21 items to detect hasMore
+    const items = Array.from({ length: 21 }, (_, i) => ({ ...MOVIE_ITEM, title: `Film ${i}`, key: `/library/metadata/${i}` }));
     vi.stubGlobal("fetch", vi.fn()
       .mockResolvedValueOnce({
         ok: true,
@@ -360,14 +361,14 @@ describe("searchByTag — issue #109: pagination", () => {
 
     const { searchByTag } = await import("@/lib/services/plex");
     const { results, hasMore } = await searchByTag("Action", "genre", 2);
-    expect(results[0].title).toBe("Film 50");
-    expect(results).toHaveLength(50);
+    expect(results[0].title).toBe("Film 10");
+    expect(results).toHaveLength(10);
     expect(hasMore).toBe(true);
   });
 });
 
 describe("getOnDeck — issue #109: pagination", () => {
-  it("returns hasMore=false when fewer than 51 items returned", async () => {
+  it("returns hasMore=false when fewer than 11 items returned", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ MediaContainer: { Metadata: [MOVIE_ITEM] } }),
@@ -379,8 +380,8 @@ describe("getOnDeck — issue #109: pagination", () => {
     expect(hasMore).toBe(false);
   });
 
-  it("returns hasMore=true when 51 items returned from API", async () => {
-    const items = Array.from({ length: 51 }, (_, i) => ({ ...MOVIE_ITEM, title: `Film ${i}`, key: `/library/metadata/${i}` }));
+  it("returns hasMore=true and exactly 10 results when API returns 11 items", async () => {
+    const items = Array.from({ length: 11 }, (_, i) => ({ ...MOVIE_ITEM, title: `Film ${i}`, key: `/library/metadata/${i}` }));
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ MediaContainer: { Metadata: items } }),
@@ -388,7 +389,7 @@ describe("getOnDeck — issue #109: pagination", () => {
 
     const { getOnDeck } = await import("@/lib/services/plex");
     const { results, hasMore } = await getOnDeck();
-    expect(results).toHaveLength(50);
+    expect(results).toHaveLength(10);
     expect(hasMore).toBe(true);
   });
 });

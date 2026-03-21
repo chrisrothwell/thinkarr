@@ -93,8 +93,10 @@ function seasonStatusLabel(status: number): string {
 }
 
 export async function search(query: string, page = 1): Promise<{ results: OverseerrSearchResult[]; hasMore: boolean }> {
+  // Overseerr/TMDB search returns ~20 items per API page.
+  // We return 10 items per LLM page, so page maps 1:1 to TMDB pages.
   const data = await overseerrFetch(`/search?query=${encodeURIComponent(query)}&page=${page}&language=en`);
-  const raw = (data?.results || []).slice(0, 50) as Record<string, unknown>[];
+  const raw = (data?.results || []) as Record<string, unknown>[];
 
   // Fetch details for all results in parallel:
   //   - movies: get cast (credits not in search results)
@@ -179,7 +181,9 @@ export async function search(query: string, page = 1): Promise<{ results: Overse
   });
 
   const totalPages = (data?.totalPages as number | undefined) ?? 1;
-  return { results, hasMore: page < totalPages };
+  // Return 10 items to the LLM; hasMore if this API page had more or there are further pages.
+  const hasMore = results.length > 10 || page < totalPages;
+  return { results: results.slice(0, 10), hasMore };
 }
 
 export interface OverseerrRequest {
@@ -198,7 +202,10 @@ export interface OverseerrRequest {
 }
 
 export async function listRequests(page = 1): Promise<{ results: OverseerrRequest[]; hasMore: boolean }> {
-  const skip = (page - 1) * 50;
+  // Fetch 50 items from the API; return 10 per LLM page (5 LLM pages per API batch).
+  const apiBatch = Math.floor((page - 1) / 5);
+  const skip = apiBatch * 50;
+  const llmOffset = ((page - 1) % 5) * 10;
   const data = await overseerrFetch(`/request?take=50&skip=${skip}&sort=added`);
   const rawRequests: Record<string, unknown>[] = data?.results || [];
 
@@ -267,8 +274,8 @@ export async function listRequests(page = 1): Promise<{ results: OverseerrReques
 
   const pageInfo = data?.pageInfo as Record<string, number> | undefined;
   const total = pageInfo?.results ?? rawRequests.length;
-  const hasMore = skip + rawRequests.length < total;
-  return { results, hasMore };
+  const hasMore = llmOffset + 10 < results.length || skip + rawRequests.length < total;
+  return { results: results.slice(llmOffset, llmOffset + 10), hasMore };
 }
 
 function requestStatusLabel(status: number): string {
