@@ -628,6 +628,35 @@ All Plex and Overseerr tools now return the same field names as the `display_tit
 
 - Bumped `package.json` version from `1.1.1-beta.3` to `1.1.1-beta.4`
 
+### Phase 28: Plex Watch Now button for Overseerr results + Pagination (Issues #117, #109)
+
+#### Fixed
+
+- [x] **#117 — Watch Now button not shown after Overseerr search returns "Available"** — Root cause: `overseerr_search` returns results with `mediaStatus: "available"` but no `plexKey`. The Watch Now button in `title-card.tsx` requires `plexKey` + `plexMachineId` to build the `app.plex.tv` deep-link URL; without `plexKey` the button was never rendered. Fix: in `display-titles-tool.ts`, for any title that is `"available"` or `"partial"` and has no `plexKey`, run a parallel side-query to `plex.searchLibrary(title)` and match by title (case-insensitive) + year. If a match is found, inject the `plexKey` before building the `DisplayTitle` objects. The side-query is non-fatal; if Plex is unconfigured or returns no match, the button simply doesn't render (acceptable). — `src/lib/tools/display-titles-tool.ts`
+
+- [x] **#109 — Search result caps raised to 50 with pagination on all tools** — All Overseerr and Plex search functions now return up to 50 results per page (up from the previous 10–20 per-function limits) along with a `hasMore: boolean` flag so the LLM knows whether to offer "show more". A `page` parameter (1-based, optional, defaults to 1) is exposed on all relevant tools. The `display_titles` tool's `max` input cap is raised from 10 to 50 to match. Changes per function:
+  - `overseerr.search(query, page)` — passes `page=N` to the Overseerr API; caps at 50 items; derives `hasMore` from `totalPages`.
+  - `overseerr.listRequests(page)` — uses `take=50&skip=(page-1)*50`; derives `hasMore` from `pageInfo.results`.
+  - `plex.searchLibrary(query, page)` — fetches with `limit=(offset+51)` to detect overflow; returns slice + `hasMore`.
+  - `plex.getOnDeck(page)` — uses `X-Plex-Container-Start` / `X-Plex-Container-Size=51`; returns 50 items + `hasMore`.
+  - `plex.getRecentlyAdded(page)` — fetches 200 raw items, deduplicates by show title, then slices to the requested page window; returns 50 deduplicated items + `hasMore`.
+  - `plex.searchCollections(name, page)` — fetches all collection children, slices by page offset; returns 50 items + `hasMore`.
+  - `plex.searchByTag(tag, tagType, page)` — accumulates results stopping at `offset+51`; slices to page; returns 50 items + `hasMore`.
+  — `src/lib/services/overseerr.ts`, `src/lib/services/plex.ts`, `src/lib/tools/overseerr-tools.ts`, `src/lib/tools/plex-tools.ts`, `src/lib/tools/display-titles-tool.ts`
+
+#### New / changed files
+
+| File | Change |
+|------|--------|
+| `src/lib/tools/display-titles-tool.ts` | Plex side-query for available/partial titles missing plexKey; max titles raised to 50 |
+| `src/lib/services/overseerr.ts` | `search` and `listRequests` accept `page` param; return `{ results, hasMore }` |
+| `src/lib/services/plex.ts` | All search functions accept `page` param; return `{ results, hasMore }`; cap raised to 50 |
+| `src/lib/tools/overseerr-tools.ts` | `overseerr_search` and `overseerr_list_requests` expose `page` param |
+| `src/lib/tools/plex-tools.ts` | All search tools expose `page` param; descriptions updated to note 50-item pages |
+| `src/__tests__/lib/overseerr.test.ts` | Updated all tests for new `{ results, hasMore }` return shape; added pagination tests |
+| `src/__tests__/lib/plex.test.ts` | Updated all tests for new `{ results, hasMore }` return shape; added pagination tests |
+| `src/__tests__/lib/display-titles-tool.test.ts` | New — 4 unit tests for the Plex side-query (plexKey injection, no-overwrite, no-match, skip for non-available) |
+
 ### Phase 27: Fix CodeQL SSRF findings (Critical)
 
 #### Fixed

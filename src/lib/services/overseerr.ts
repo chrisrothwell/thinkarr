@@ -92,9 +92,11 @@ function seasonStatusLabel(status: number): string {
   }
 }
 
-export async function search(query: string): Promise<OverseerrSearchResult[]> {
-  const data = await overseerrFetch(`/search?query=${encodeURIComponent(query)}&page=1&language=en`);
-  const raw = (data?.results || []).slice(0, 10) as Record<string, unknown>[];
+export async function search(query: string, page = 1): Promise<{ results: OverseerrSearchResult[]; hasMore: boolean }> {
+  // Overseerr/TMDB search returns ~20 items per API page.
+  // We return 10 items per LLM page, so page maps 1:1 to TMDB pages.
+  const data = await overseerrFetch(`/search?query=${encodeURIComponent(query)}&page=${page}&language=en`);
+  const raw = (data?.results || []) as Record<string, unknown>[];
 
   // Fetch details for all results in parallel:
   //   - movies: get cast (credits not in search results)
@@ -122,7 +124,7 @@ export async function search(query: string): Promise<OverseerrSearchResult[]> {
     }),
   );
 
-  return raw.map((r) => {
+  const results = raw.map((r) => {
     const mediaInfo = r.mediaInfo as Record<string, unknown> | undefined;
     const isTV = r.mediaType === "tv";
     const rawSeasons = (mediaInfo?.seasons as Record<string, unknown>[]) || [];
@@ -177,6 +179,11 @@ export async function search(query: string): Promise<OverseerrSearchResult[]> {
       requests: requests.length > 0 ? requests : undefined,
     };
   });
+
+  const totalPages = (data?.totalPages as number | undefined) ?? 1;
+  // Return 10 items to the LLM; hasMore if this API page had more or there are further pages.
+  const hasMore = results.length > 10 || page < totalPages;
+  return { results: results.slice(0, 10), hasMore };
 }
 
 export interface OverseerrRequest {
@@ -194,8 +201,12 @@ export interface OverseerrRequest {
   overseerrId?: number; // Same as tmdbId — pass directly as overseerrId to display_titles
 }
 
-export async function listRequests(): Promise<OverseerrRequest[]> {
-  const data = await overseerrFetch("/request?take=20&skip=0&sort=added");
+export async function listRequests(page = 1): Promise<{ results: OverseerrRequest[]; hasMore: boolean }> {
+  // Fetch 50 items from the API; return 10 per LLM page (5 LLM pages per API batch).
+  const apiBatch = Math.floor((page - 1) / 5);
+  const skip = apiBatch * 50;
+  const llmOffset = ((page - 1) % 5) * 10;
+  const data = await overseerrFetch(`/request?take=50&skip=${skip}&sort=added`);
   const rawRequests: Record<string, unknown>[] = data?.results || [];
 
   // Build initial title map from fields already in the media object.
@@ -231,7 +242,7 @@ export async function listRequests(): Promise<OverseerrRequest[]> {
     );
   }
 
-  return rawRequests.map((r: Record<string, unknown>) => {
+  const results: OverseerrRequest[] = rawRequests.map((r: Record<string, unknown>) => {
     const media = r.media as Record<string, unknown> | undefined;
     const isTV = r.type === "tv";
     const seasonsList = isTV
@@ -260,6 +271,11 @@ export async function listRequests(): Promise<OverseerrRequest[]> {
       overseerrId: tmdbId ?? undefined,
     };
   });
+
+  const pageInfo = data?.pageInfo as Record<string, number> | undefined;
+  const total = pageInfo?.results ?? rawRequests.length;
+  const hasMore = llmOffset + 10 < results.length || skip + rawRequests.length < total;
+  return { results: results.slice(llmOffset, llmOffset + 10), hasMore };
 }
 
 function requestStatusLabel(status: number): string {
