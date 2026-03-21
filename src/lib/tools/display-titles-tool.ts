@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { defineTool } from "./registry";
-import { buildThumbUrl, getPlexMachineId } from "@/lib/services/plex";
+import { buildThumbUrl, getPlexMachineId, searchLibrary } from "@/lib/services/plex";
 import { getConfig } from "@/lib/config";
 import type { DisplayTitle } from "@/types/titles";
 
@@ -47,14 +47,45 @@ mediaStatus mapping:
 IMPORTANT — multi-season TV shows:
 If an Overseerr TV result has seasonCount > 1, you MUST call this tool with one entry per season (S1 through S{seasonCount}), not one entry for the whole show. Set seasonNumber on each entry. Do NOT create a single card for a multi-season show — it will cause the request to fail.`,
     schema: z.object({
-      titles: z.array(titleInputSchema).min(1).max(10),
+      titles: z.array(titleInputSchema).min(1).max(50),
     }),
     handler: async (args) => {
       const plexUrl = getConfig("plex.url");
       const baseUrl = plexUrl ? plexUrl.replace(/\/$/, "") : undefined;
       const machineId = baseUrl ? await getPlexMachineId() : undefined;
 
-      const displayTitles: DisplayTitle[] = args.titles.map((t) => ({
+      // Issue #117: for available/partial titles from Overseerr (no plexKey), do a
+      // side-query to Plex to find the matching item and populate plexKey so the
+      // Watch Now button can be rendered.
+      const plexKeyOverrides = new Map<number, string>();
+      if (baseUrl) {
+        const needsLookup = args.titles
+          .map((t, i) => ({ t, i }))
+          .filter(({ t }) =>
+            (t.mediaStatus === "available" || t.mediaStatus === "partial") &&
+            !t.plexKey &&
+            t.title,
+          );
+
+        if (needsLookup.length > 0) {
+          await Promise.all(
+            needsLookup.map(async ({ t, i }) => {
+              try {
+                const { results } = await searchLibrary(t.title);
+                const titleLower = t.title.toLowerCase();
+                const match = results.find((r) => {
+                  if (r.title.toLowerCase() !== titleLower) return false;
+                  if (t.year && r.year) return r.year === t.year;
+                  return true;
+                });
+                if (match) plexKeyOverrides.set(i, match.plexKey);
+              } catch { /* non-fatal */ }
+            }),
+          );
+        }
+      }
+
+      const displayTitles: DisplayTitle[] = args.titles.map((t, i) => ({
         mediaType: t.mediaType,
         title: t.title,
         year: t.year ?? undefined,
@@ -67,7 +98,7 @@ If an Overseerr TV result has seasonCount > 1, you MUST call this tool with one 
               ? `/api/tmdb/thumb?url=${encodeURIComponent(t.thumbPath)}`
               : buildThumbUrl(t.thumbPath))
           : undefined,
-        plexKey: t.plexKey ?? undefined,
+        plexKey: t.plexKey ?? plexKeyOverrides.get(i) ?? undefined,
         plexUrl: baseUrl,
         plexMachineId: machineId,
         overseerrId: t.overseerrId ?? undefined,
