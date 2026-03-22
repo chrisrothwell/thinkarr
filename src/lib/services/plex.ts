@@ -138,6 +138,57 @@ export async function searchLibrary(query: string, page = 1): Promise<{ results:
   return { results: all.slice(llmOffset, llmOffset + 10), hasMore };
 }
 
+/**
+ * Find the Plex metadata key for a TV series by title (and optionally year).
+ * Scans ALL hubs returned by the hub search — not just the first 10 items —
+ * so that show-level results buried behind episode/season hubs are found.
+ * Returns the key of the first show-level result whose title matches, or
+ * undefined if no match is found.
+ *
+ * Used by display_titles to inject plexKey for TV series from Overseerr (#117).
+ */
+export async function findShowPlexKey(title: string, year?: number): Promise<string | undefined> {
+  const data = await plexFetch(`/hubs/search?query=${encodeURIComponent(title)}&limit=50`);
+  const titleLower = title.toLowerCase();
+
+  // Collect all raw hub items so we can search across all hubs, not just the first 10.
+  // Priority: show-level hits first, then season hits (by showTitle), then episode hits.
+  let showMatch: string | undefined;
+  let seasonFallback: string | undefined;  // parentKey of a matching season
+  let episodeFallback: string | undefined; // parentKey of a matching episode (via grandparentTitle)
+
+  for (const hub of data?.MediaContainer?.Hub || []) {
+    for (const item of hub.Metadata as Record<string, unknown>[]) {
+      const resolvedType = ((hub.type || item.type) as string | undefined) ?? "";
+
+      if (resolvedType === "show") {
+        const itemTitle = (item.title as string | undefined)?.toLowerCase();
+        const itemYear = item.year as number | undefined;
+        if (itemTitle === titleLower && (!year || !itemYear || itemYear === year)) {
+          // Exact show match — best possible result, return immediately
+          return item.key as string;
+        }
+      } else if (resolvedType === "season" && !seasonFallback) {
+        // Season: parentTitle is the show name; parentKey is the show's metadata key
+        const parentTitle = (item.parentTitle as string | undefined)?.toLowerCase();
+        const parentKey = item.parentKey as string | undefined;
+        if (parentTitle === titleLower && parentKey) {
+          seasonFallback = parentKey;
+        }
+      } else if (resolvedType === "episode" && !episodeFallback) {
+        // Episode: grandparentTitle is the show name; grandparentKey is the show's metadata key
+        const grandparentTitle = (item.grandparentTitle as string | undefined)?.toLowerCase();
+        const grandparentKey = item.grandparentKey as string | undefined;
+        if (grandparentTitle === titleLower && grandparentKey) {
+          episodeFallback = grandparentKey;
+        }
+      }
+    }
+  }
+
+  return showMatch ?? seasonFallback ?? episodeFallback;
+}
+
 export async function getOnDeck(page = 1): Promise<{ results: PlexSearchResult[]; hasMore: boolean }> {
   // Fetch 50 items per API batch; return 10 per LLM page (5 LLM pages per batch).
   const apiBatch = Math.floor((page - 1) / 5);

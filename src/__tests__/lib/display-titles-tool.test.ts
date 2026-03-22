@@ -2,7 +2,8 @@
  * Unit tests for display-titles-tool.ts — issue #117:
  * When an Overseerr result is "available" but has no plexKey, the tool should
  * perform a side-query to Plex and inject the matching plexKey so the Watch Now
- * button can be rendered.
+ * button can be rendered. For TV series this requires findShowPlexKey which
+ * searches all hubs (not just first 10) and returns the show-level key.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -108,5 +109,124 @@ describe("display_titles — issue #117: Plex side-query for available titles wi
 
     const hubsCalls = fetchMock.mock.calls.filter((c) => (c[0] as string).includes("/hubs/search"));
     expect(hubsCalls).toHaveLength(0);
+  });
+
+  // ---------------------------------------------------------------------------
+  // TV series — issue #117 comment: "works for movies but not for TV series"
+  // ---------------------------------------------------------------------------
+
+  it("injects the show-level plexKey for an available TV series entry", async () => {
+    // Hub search returns: 3 episode hubs first, then the show hub.
+    // searchLibrary's first-10 limit would miss the show; findShowPlexKey must not.
+    const TV_HUB_RESPONSE = {
+      MediaContainer: {
+        Hub: [
+          // Episode hub (comes first in real Plex responses)
+          {
+            type: "episode",
+            Metadata: [
+              {
+                type: "episode",
+                title: "Pilot",
+                grandparentTitle: "Breaking Bad",
+                grandparentKey: "/library/metadata/100",
+                key: "/library/metadata/200",
+                parentIndex: 1,
+                index: 1,
+              },
+            ],
+          },
+          // Season hub
+          {
+            type: "season",
+            Metadata: [
+              {
+                type: "season",
+                title: "Season 1",
+                parentTitle: "Breaking Bad",
+                parentKey: "/library/metadata/100",
+                key: "/library/metadata/150",
+                index: 1,
+              },
+            ],
+          },
+          // Show hub — buried after episodes and seasons
+          {
+            type: "show",
+            Metadata: [
+              {
+                type: "show",
+                title: "Breaking Bad",
+                year: 2008,
+                key: "/library/metadata/100",
+                thumb: "/thumb",
+                addedAt: 1700000000,
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string) => {
+      if ((url as string).includes("/hubs/search")) {
+        return Promise.resolve({ ok: true, json: async () => TV_HUB_RESPONSE });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ MediaContainer: { machineIdentifier: "server1" } }) });
+    }));
+
+    const { registerDisplayTitlesTool } = await import("@/lib/tools/display-titles-tool");
+    const { executeTool } = await import("@/lib/tools/registry");
+    registerDisplayTitlesTool();
+
+    const raw = await executeTool("display_titles", JSON.stringify({
+      titles: [
+        { mediaType: "tv", title: "Breaking Bad", year: 2008, mediaStatus: "available", seasonNumber: 1 },
+        { mediaType: "tv", title: "Breaking Bad", year: 2008, mediaStatus: "available", seasonNumber: 2 },
+      ],
+    }));
+    const { displayTitles } = JSON.parse(raw) as { displayTitles: Array<{ plexKey?: string }> };
+    // Both season entries should share the show-level key
+    expect(displayTitles[0].plexKey).toBe("/library/metadata/100");
+    expect(displayTitles[1].plexKey).toBe("/library/metadata/100");
+  });
+
+  it("falls back to season's parentKey when no show hub is returned", async () => {
+    const SEASON_ONLY_RESPONSE = {
+      MediaContainer: {
+        Hub: [
+          {
+            type: "season",
+            Metadata: [
+              {
+                type: "season",
+                title: "Season 1",
+                parentTitle: "Stranger Things",
+                parentKey: "/library/metadata/300",
+                key: "/library/metadata/350",
+                index: 1,
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string) => {
+      if ((url as string).includes("/hubs/search")) {
+        return Promise.resolve({ ok: true, json: async () => SEASON_ONLY_RESPONSE });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ MediaContainer: { machineIdentifier: "server2" } }) });
+    }));
+
+    const { registerDisplayTitlesTool } = await import("@/lib/tools/display-titles-tool");
+    const { executeTool } = await import("@/lib/tools/registry");
+    registerDisplayTitlesTool();
+
+    const raw = await executeTool("display_titles", JSON.stringify({
+      titles: [{ mediaType: "tv", title: "Stranger Things", mediaStatus: "available", seasonNumber: 1 }],
+    }));
+    const { displayTitles } = JSON.parse(raw) as { displayTitles: Array<{ plexKey?: string }> };
+    expect(displayTitles[0].plexKey).toBe("/library/metadata/300");
   });
 });

@@ -51,20 +51,40 @@ export function ToolCall({ toolCall }: ToolCallProps) {
       ? `Running ${action}...`
       : action;
 
+  const durationLabel = toolCall.durationMs != null
+    ? toolCall.durationMs >= 1000
+      ? `${(toolCall.durationMs / 1000).toFixed(1)}s`
+      : `${toolCall.durationMs}ms`
+    : null;
+
   return (
-    <div className="my-1 rounded-lg border bg-background/50 text-sm">
+    <div className={cn("my-1 rounded-lg border bg-background/50 text-sm", toolCall.status === "error" && "border-destructive/50")}>
       <button
         onClick={() => setExpanded(!expanded)}
         className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-accent/30 rounded-lg transition-colors"
       >
         {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
         <Wrench size={14} className="text-muted-foreground" />
-        <span className="flex-1 text-muted-foreground">{label}</span>
+        <span className={cn("flex-1 text-muted-foreground", toolCall.status === "error" && "text-destructive")}>{label}</span>
+        {durationLabel && <span className="text-xs text-muted-foreground/60">{durationLabel}</span>}
         {statusIcon}
       </button>
 
+      {/* Inline error summary — visible without expanding */}
+      {toolCall.status === "error" && toolCall.error && !expanded && (
+        <div className="px-3 pb-2">
+          <p className="text-xs text-destructive">{toolCall.error}</p>
+        </div>
+      )}
+
       {expanded && (
         <div className="border-t px-3 py-2 space-y-2">
+          {toolCall.status === "error" && toolCall.error && (
+            <div>
+              <p className="text-xs text-destructive font-medium mb-1">Error:</p>
+              <p className="text-xs text-destructive">{toolCall.error}</p>
+            </div>
+          )}
           {toolCall.arguments && toolCall.arguments !== "{}" && (
             <div>
               <p className="text-xs text-muted-foreground mb-1">Arguments:</p>

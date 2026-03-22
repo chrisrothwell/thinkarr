@@ -673,3 +673,46 @@ All Plex and Overseerr tools now return the same field names as the `display_tit
 |------|--------|
 | `src/app/api/tmdb/thumb/route.ts` | Use `parsed.toString()` in `fetch` instead of raw `imageUrl` |
 | `src/lib/services/test-connection.ts` | Add `validateServiceUrl` + URL reconstruction in `probeVoiceSupport` and `probeRealtimeSupport` |
+
+### Phase 29: Bug Fixes for Issues #117, #122, #126, #127, #128
+
+#### Fixed
+
+- [x] **#117 — Watch Now button missing for TV series from Overseerr** — Phase 28 fixed movies but TV series were still broken. Root cause: `searchLibrary` (used in the original side-query) only returns the first 10 results across all hubs combined; for TV series, Plex returns episode and season hubs before the show hub, so the show-level result was missed. Season items also have modified titles ("Show — Season N") that broke the exact-match check. Fix: new `findShowPlexKey(title, year?)` in `plex.ts` scans ALL hubs without pagination, preferring show-level items (type "show") first, then falling back to a season's `parentKey` or episode's `grandparentKey`. `display-titles-tool.ts` now calls `findShowPlexKey` for TV and per-season entries; the existing `searchLibrary` match is retained for movies only. — `src/lib/services/plex.ts`, `src/lib/tools/display-titles-tool.ts`
+
+- [x] **#128 — Overseerr search fails for queries with special characters** — Root cause: the Overseerr `/search` API rejects queries whose reserved characters are not percent-encoded. While `encodeURIComponent` was previously used, `URLSearchParams` provides a more robust and idiomatic encoding approach. Fix: replaced template-literal URL construction with `new URLSearchParams({ query, page, language })` in `overseerr.search()`. — `src/lib/services/overseerr.ts`
+
+- [x] **#127 — Tool calls can get stuck (error handling + timeout + recovery)** — Three improvements:
+  1. **Timeout**: each tool execution is now race-d against a 30-second `AbortSignal.timeout` promise. If the tool exceeds 30 s the call resolves with an error JSON result instead of hanging indefinitely.
+  2. **Error recovery**: tool execution errors (thrown exceptions or timeouts) are now caught inside the orchestrator's tool call loop. A JSON error result is saved to the DB and added to `apiMessages` so the API message sequence stays valid — the LLM receives the tool error and can still reply, preventing the conversation from being permanently blocked.
+  3. **Error in card**: the `ToolResultEvent` now carries `error: boolean` and `durationMs`. The `tool_result` handler in `useChat` populates the `ToolCallDisplay` with `status: "error"` and `error: string`. `tool-call.tsx` shows a red border, red label, and inline error text (both collapsed and expanded), replacing the previous global error banner. Historical tool call errors are reconstructed from the saved JSON result. — `src/lib/llm/orchestrator.ts`, `src/types/chat.ts`, `src/hooks/use-chat.ts`, `src/components/chat/tool-call.tsx`, `src/components/chat/message-list.tsx`
+
+- [x] **#126 — Display response times and token usage per call** — Added timing and token metrics throughout the LLM pipeline:
+  - **Tool call duration**: orchestrator captures `Date.now()` before/after each tool execution and sends `durationMs` in `ToolResultEvent`. `tool-call.tsx` displays this as `Xs` or `Nms` in the card header.
+  - **LLM response duration**: orchestrator timestamps the start of each `client.chat.completions.create` call and calculates `llmDurationMs` after the stream completes.
+  - **Token usage**: requests include `stream_options: { include_usage: true }`; usage figures from the final streaming chunk are captured (`promptTokens`, `completionTokens`, `totalTokens`).
+  - **Logging**: both round completions (tool-calling) and final responses log `llmDurationMs`, `promptTokens`, `completionTokens`, `totalTokens` at `info` level.
+  - **SSE**: `DoneEvent` includes `llmDurationMs`, `promptTokens`, `completionTokens`, `totalTokens` (available to the client for future display).
+  — `src/lib/llm/orchestrator.ts`, `src/types/chat.ts`, `src/components/chat/tool-call.tsx`
+
+- [x] **#122 — Tests for non-admin user** — New unit test file covering admin vs non-admin access control:
+  - `GET /api/settings` returns 403 for unauthenticated and non-admin users, 200 for admins.
+  - `PATCH /api/settings` returns 403 for non-admin users.
+  - `GET /api/settings/users` returns 403 for non-admin users, 200 for admins.
+  - `GET /api/conversations` with and without `?all=true` confirms non-admin users only see their own conversations; `?all=true` is silently ignored for non-admins.
+  — `src/__tests__/api/non-admin-user.test.ts` (new)
+
+#### New / changed files
+
+| File | Change |
+|------|--------|
+| `src/lib/services/overseerr.ts` | `search()` uses `URLSearchParams` for query string construction (#128) |
+| `src/lib/llm/orchestrator.ts` | Tool call timeout (30 s), error capture, `durationMs` tracking, `llmDurationMs` + token usage from stream (#127, #126) |
+| `src/types/chat.ts` | `ToolCallStartEvent` gains `startedAt`; `ToolResultEvent` gains `durationMs` and `error`; `DoneEvent` gains `llmDurationMs`, `promptTokens`, `completionTokens`, `totalTokens`; `ToolCallDisplay` gains `durationMs` and `error` (#127, #126) |
+| `src/hooks/use-chat.ts` | `tool_result` handler uses `event.error` flag; populates `durationMs` and `error` on `ToolCallDisplay` (#127, #126) |
+| `src/components/chat/tool-call.tsx` | Shows duration label in card header; red border + inline error for failed tool calls (#127, #126) |
+| `src/components/chat/message-list.tsx` | Historical tool call reconstruction extracts error message from JSON result for `ToolCallDisplay.error` (#127) |
+| `src/__tests__/api/non-admin-user.test.ts` | New — 9 unit tests for non-admin access control on settings and conversations endpoints (#122) |
+| `src/lib/services/plex.ts` | New `findShowPlexKey(title, year?)` — scans all hubs, returns show-level plexKey for TV series (#117) |
+| `src/lib/tools/display-titles-tool.ts` | TV/season entries use `findShowPlexKey`; movie entries retain `searchLibrary` match (#117) |
+| `src/__tests__/lib/display-titles-tool.test.ts` | 2 new TV series tests: show buried behind episode/season hubs; season parentKey fallback (#117) |

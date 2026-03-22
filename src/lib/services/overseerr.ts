@@ -95,7 +95,9 @@ function seasonStatusLabel(status: number): string {
 export async function search(query: string, page = 1): Promise<{ results: OverseerrSearchResult[]; hasMore: boolean }> {
   // Overseerr/TMDB search returns ~20 items per API page.
   // We return 10 items per LLM page, so page maps 1:1 to TMDB pages.
-  const data = await overseerrFetch(`/search?query=${encodeURIComponent(query)}&page=${page}&language=en`);
+  // Use URLSearchParams to guarantee all characters are properly percent-encoded (#128).
+  const qs = new URLSearchParams({ query, page: String(page), language: "en" });
+  const data = await overseerrFetch(`/search?${qs.toString()}`);
   const raw = (data?.results || []) as Record<string, unknown>[];
 
   // Fetch details for all results in parallel:

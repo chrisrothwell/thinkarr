@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { defineTool } from "./registry";
-import { buildThumbUrl, getPlexMachineId, searchLibrary } from "@/lib/services/plex";
+import { buildThumbUrl, getPlexMachineId, searchLibrary, findShowPlexKey } from "@/lib/services/plex";
 import { getConfig } from "@/lib/config";
 import type { DisplayTitle } from "@/types/titles";
 
@@ -71,14 +71,27 @@ If an Overseerr TV result has seasonCount > 1, you MUST call this tool with one 
           await Promise.all(
             needsLookup.map(async ({ t, i }) => {
               try {
-                const { results } = await searchLibrary(t.title);
-                const titleLower = t.title.toLowerCase();
-                const match = results.find((r) => {
-                  if (r.title.toLowerCase() !== titleLower) return false;
-                  if (t.year && r.year) return r.year === t.year;
-                  return true;
-                });
-                if (match) plexKeyOverrides.set(i, match.plexKey);
+                let plexKey: string | undefined;
+
+                if (t.mediaType === "tv" || t.seasonNumber != null) {
+                  // For TV series (including per-season entries), use findShowPlexKey which
+                  // searches ALL hubs and returns the show-level key. The paginated
+                  // searchLibrary only returns the first 10 items, which may miss the
+                  // show-level result when episode/season hubs come first (#117).
+                  plexKey = await findShowPlexKey(t.title, t.year ?? undefined);
+                } else {
+                  // Movies: use standard hub search (show-level results are at the top)
+                  const { results } = await searchLibrary(t.title);
+                  const titleLower = t.title.toLowerCase();
+                  const match = results.find((r) => {
+                    if (r.title.toLowerCase() !== titleLower) return false;
+                    if (t.year && r.year) return r.year === t.year;
+                    return true;
+                  });
+                  plexKey = match?.plexKey;
+                }
+
+                if (plexKey) plexKeyOverrides.set(i, plexKey);
               } catch { /* non-fatal */ }
             }),
           );
