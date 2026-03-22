@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
+import { eq } from "drizzle-orm";
 import * as schema from "@/lib/db/schema";
 import path from "path";
 
@@ -85,6 +86,7 @@ describe("schema — column definitions", () => {
     expect(c).toHaveProperty("tool_call_id");
     expect(c).toHaveProperty("tool_name");
     expect(c).toHaveProperty("created_at");
+    expect(c).toHaveProperty("duration_ms");
   });
 
   it("app_config has correct columns", () => {
@@ -158,5 +160,74 @@ describe("migrations — idempotency", () => {
   it("can be applied twice without error", () => {
     const db = drizzle(sqlite, { schema });
     expect(() => migrate(db, { migrationsFolder: MIGRATIONS_DIR })).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Schema-migration parity: Drizzle ORM round-trip
+//
+// These tests INSERT and SELECT via the Drizzle schema (not raw SQL) so that
+// any column present in schema.ts but absent from the migration files causes
+// an immediate SQLite "no column named X" failure rather than a silent gap.
+// This is exactly the class of bug that caused issue #134 (duration_ms added
+// to schema.ts without a corresponding ALTER TABLE migration).
+// ---------------------------------------------------------------------------
+
+describe("schema-migration parity — Drizzle round-trip", () => {
+  function seedParents(): { uid: bigint | number; convId: string } {
+    const uid = sqlite
+      .prepare("INSERT INTO users (plex_id, plex_username, created_at) VALUES ('rt_u','rt_u',0)")
+      .run().lastInsertRowid;
+    sqlite
+      .prepare("INSERT INTO conversations (id, user_id, created_at, updated_at) VALUES ('rt_c',?,0,0)")
+      .run(uid);
+    return { uid, convId: "rt_c" };
+  }
+
+  it("can insert and read back a message with all schema fields including duration_ms", () => {
+    const db = drizzle(sqlite, { schema });
+    const { convId } = seedParents();
+
+    // If duration_ms (or any other field) is in schema.ts but not in a migration,
+    // this insert will throw: "table messages has no column named duration_ms"
+    expect(() =>
+      db
+        .insert(schema.messages)
+        .values({
+          id: "rt_m1",
+          conversationId: convId,
+          role: "tool",
+          content: "result",
+          toolCalls: null,
+          toolCallId: "tc_1",
+          toolName: "plex_search",
+          durationMs: 1234,
+        })
+        .run(),
+    ).not.toThrow();
+
+    const row = db
+      .select()
+      .from(schema.messages)
+      .where(eq(schema.messages.id, "rt_m1"))
+      .get();
+    expect(row?.durationMs).toBe(1234);
+  });
+
+  it("duration_ms defaults to null when not provided", () => {
+    const db = drizzle(sqlite, { schema });
+    const { convId } = seedParents();
+
+    db
+      .insert(schema.messages)
+      .values({ id: "rt_m2", conversationId: convId, role: "user", content: "hello" })
+      .run();
+
+    const row = db
+      .select()
+      .from(schema.messages)
+      .where(eq(schema.messages.id, "rt_m2"))
+      .get();
+    expect(row?.durationMs).toBeNull();
   });
 });
