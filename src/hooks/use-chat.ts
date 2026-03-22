@@ -141,12 +141,16 @@ export function useChat(conversationId: string | null, options?: UseChatOptions)
                   const next = new Map(prev);
                   const existing = next.get(event.toolCallId);
                   if (existing) {
-                    const parsed = safeJsonParse(event.result);
-                    const isError = parsed?.error !== undefined;
+                    const isError = event.error === true;
+                    const errorMessage = isError
+                      ? (safeJsonParse(event.result)?.error as string | undefined) ?? "Tool call failed"
+                      : undefined;
                     next.set(event.toolCallId, {
                       ...existing,
                       result: event.result,
                       status: isError ? "error" : "done",
+                      durationMs: event.durationMs,
+                      error: errorMessage,
                     });
                   }
                   return next;

@@ -21,6 +21,7 @@ export interface ToolCallStartEvent {
   toolCallId: string;
   toolName: string;
   arguments: string;
+  startedAt: number; // Unix ms timestamp
 }
 
 export interface ToolResultEvent {
@@ -28,6 +29,8 @@ export interface ToolResultEvent {
   toolCallId: string;
   toolName: string;
   result: string;
+  durationMs: number; // how long the tool call took
+  error?: boolean;    // true if the tool threw an error
 }
 
 export interface ErrorEvent {
@@ -38,6 +41,10 @@ export interface ErrorEvent {
 export interface DoneEvent {
   type: "done";
   messageId: string;
+  llmDurationMs?: number;   // total LLM streaming time for the final response
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
 }
 
 export interface TitleUpdateEvent {
@@ -58,4 +65,6 @@ export interface ToolCallDisplay {
   arguments: string;
   result?: string;
   status: "calling" | "done" | "error";
+  durationMs?: number; // tool execution time in ms
+  error?: string;      // error message when status === "error"
 }

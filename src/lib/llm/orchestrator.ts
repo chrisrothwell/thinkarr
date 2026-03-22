@@ -145,12 +145,18 @@ export async function* orchestrate(
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     let fullContent = "";
     const toolCalls: { id: string; function: { name: string; arguments: string } }[] = [];
+    let llmDurationMs: number | undefined;
+    let promptTokens: number | undefined;
+    let completionTokens: number | undefined;
+    let totalTokens: number | undefined;
 
     try {
+      const llmStart = Date.now();
       const stream = await client.chat.completions.create({
         model,
         messages: apiMessages,
         stream: true,
+        stream_options: { include_usage: true },
         ...(tools && tools.length > 0 ? { tools } : {}),
       });
 
@@ -158,6 +164,13 @@ export async function* orchestrate(
       const toolCallDeltas: Map<number, { id: string; name: string; args: string }> = new Map();
 
       for await (const chunk of stream) {
+        // Token usage is sent in the final chunk
+        if (chunk.usage) {
+          promptTokens = chunk.usage.prompt_tokens;
+          completionTokens = chunk.usage.completion_tokens;
+          totalTokens = chunk.usage.total_tokens;
+        }
+
         const choice = chunk.choices[0];
         if (!choice) continue;
 
@@ -184,6 +197,8 @@ export async function* orchestrate(
         }
       }
 
+      llmDurationMs = Date.now() - llmStart;
+
       // Collect completed tool calls
       for (const [, tc] of toolCallDeltas) {
         if (tc.id && tc.name) {
@@ -203,9 +218,26 @@ export async function* orchestrate(
     // If no tool calls, save the final assistant message and we're done
     if (toolCalls.length === 0) {
       const messageId = saveMessage(conversationId, "assistant", fullContent);
-      yield { type: "done", messageId };
+      logger.info("LLM response complete", {
+        conversationId,
+        llmDurationMs,
+        promptTokens,
+        completionTokens,
+        totalTokens,
+      });
+      yield { type: "done", messageId, llmDurationMs, promptTokens, completionTokens, totalTokens };
       return;
     }
+
+    logger.info("LLM tool round complete", {
+      conversationId,
+      round,
+      llmDurationMs,
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      toolCallCount: toolCalls.length,
+    });
 
     // Save assistant message with tool calls (may have partial content too)
     const serializedToolCalls = JSON.stringify(
@@ -231,24 +263,43 @@ export async function* orchestrate(
     });
 
     // 4. Execute each tool call
+    const TOOL_TIMEOUT_MS = 30_000;
     for (const tc of toolCalls) {
       logger.info("Tool call", { conversationId, toolName: tc.function.name });
+      const startedAt = Date.now();
       yield {
         type: "tool_call_start",
         toolCallId: tc.id,
         toolName: tc.function.name,
         arguments: tc.function.arguments,
+        startedAt,
       };
 
-      const result = await executeTool(tc.function.name, tc.function.arguments);
+      let result: string;
+      let isError = false;
+      try {
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`Tool call timed out after ${TOOL_TIMEOUT_MS / 1000}s`)), TOOL_TIMEOUT_MS),
+        );
+        result = await Promise.race([
+          executeTool(tc.function.name, tc.function.arguments),
+          timeoutPromise,
+        ]);
+      } catch (e: unknown) {
+        isError = true;
+        result = JSON.stringify({ error: e instanceof Error ? e.message : "Tool execution failed" });
+        logger.warn("Tool call error", { conversationId, toolName: tc.function.name, error: result });
+      }
 
-      // Save tool result to DB
+      const durationMs = Date.now() - startedAt;
+
+      // Save tool result to DB (even on error — ensures the API message sequence stays valid)
       saveMessage(conversationId, "tool", result, {
         toolCallId: tc.id,
         toolName: tc.function.name,
       });
 
-      // Add to conversation for next round
+      // Add to conversation for next round — the LLM needs a tool message for every tool_calls entry
       apiMessages.push({
         role: "tool",
         tool_call_id: tc.id,
@@ -260,6 +311,8 @@ export async function* orchestrate(
         toolCallId: tc.id,
         toolName: tc.function.name,
         result,
+        durationMs,
+        error: isError,
       };
     }
 

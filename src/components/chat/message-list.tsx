@@ -36,15 +36,17 @@ function buildHistoricalToolCalls(messages: Message[]): Map<string, ToolCallDisp
         const displays: ToolCallDisplay[] = [];
         for (const call of calls) {
           const resultMsg = toolResults.get(call.id);
-          const hasError = resultMsg?.content
-            ? safeJsonHasError(resultMsg.content)
-            : false;
+          const errorMessage = resultMsg?.content
+            ? safeJsonExtractError(resultMsg.content)
+            : undefined;
+          const hasError = errorMessage !== undefined;
           displays.push({
             id: call.id,
             name: call.function.name,
             arguments: call.function.arguments || "{}",
             result: resultMsg?.content || undefined,
             status: resultMsg ? (hasError ? "error" : "done") : "calling",
+            error: errorMessage,
           });
         }
         if (displays.length > 0) {
@@ -59,12 +61,16 @@ function buildHistoricalToolCalls(messages: Message[]): Map<string, ToolCallDisp
   return result;
 }
 
-function safeJsonHasError(str: string): boolean {
+/** Returns the error string from a JSON tool result, or undefined if not an error. */
+function safeJsonExtractError(str: string): string | undefined {
   try {
     const parsed = JSON.parse(str);
-    return parsed?.error !== undefined;
+    if (parsed?.error !== undefined) {
+      return typeof parsed.error === "string" ? parsed.error : JSON.stringify(parsed.error);
+    }
+    return undefined;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
