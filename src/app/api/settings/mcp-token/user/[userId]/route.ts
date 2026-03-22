@@ -4,11 +4,18 @@ import { getSession } from "@/lib/auth/session";
 import { getDb, schema } from "@/lib/db";
 import { eq } from "drizzle-orm";
 import { getUserMcpToken, setUserMcpToken } from "@/lib/config";
+import { logger } from "@/lib/logger";
 import type { ApiResponse } from "@/types/api";
 
 async function resolveTargetUser(userId: number) {
   const db = getDb();
-  return db.select().from(schema.users).where(eq(schema.users.id, userId)).get();
+  try {
+    return db.select().from(schema.users).where(eq(schema.users.id, userId)).get();
+  } catch (e: unknown) {
+    const error = e instanceof Error ? e.message : "Database error";
+    logger.error("Failed to resolve user", { userId, error });
+    return null;
+  }
 }
 
 /** GET — return the per-user MCP token (auto-generate if missing). Admin or the user themselves. */

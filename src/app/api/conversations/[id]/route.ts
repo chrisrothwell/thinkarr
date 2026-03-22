@@ -59,6 +59,7 @@ export async function GET(
       .orderBy(asc(schema.messages.createdAt))
       .all();
 
+    logger.info("Conversation messages loaded", { conversationId: id, userId: session.user.id, messageCount: messages.length });
     return NextResponse.json<ApiResponse>({
       success: true,
       data: { ...conversation, messages },
