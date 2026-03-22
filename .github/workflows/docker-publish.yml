@@ -107,7 +107,7 @@ jobs:
           trap 'docker rm -f thinkarr-dirty-test 2>/dev/null || true; rm -rf "${DIRTY_DIR}"' EXIT
 
           # Create dirty DB using the project's own drizzle setup
-          node scripts/create-dirty-db.cjs "${DIRTY_DIR}"
+          node scripts/create-dirty-db.mjs "${DIRTY_DIR}"
 
           # Start container with dirty DB mounted as /config
           docker run -d \

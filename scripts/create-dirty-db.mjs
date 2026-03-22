@@ -11,26 +11,25 @@
  *
  * When the container starts with this DB:
  *   - migrate() sees 0001 in __drizzle_migrations and skips it.
- *   - The defensive fallback in getDb() must add duration_ms back.
- *   - GET /api/health must return 200 (proves the fallback fired).
+ *   - ensureSchemaIntegrity() in getDb() must add duration_ms back.
+ *   - GET /api/health must return 200 (proves the repair fired).
  *
  * Usage:
- *   node scripts/create-dirty-db.cjs <output-directory>
- *
- * The .cjs extension ensures CommonJS semantics regardless of the package.json
- * "type" field — both drizzle-orm and better-sqlite3 ship CJS builds.
+ *   node scripts/create-dirty-db.mjs <output-directory>
  */
-"use strict";
 
-const Database = require("better-sqlite3");
-const { drizzle } = require("drizzle-orm/better-sqlite3");
-const { migrate } = require("drizzle-orm/better-sqlite3/migrator");
-const path = require("path");
-const fs = require("fs");
+import Database from "better-sqlite3";
+import { drizzle } from "drizzle-orm/better-sqlite3";
+import { migrate } from "drizzle-orm/better-sqlite3/migrator";
+import path from "path";
+import fs from "fs";
+import { fileURLToPath } from "url";
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const dirtyDir = process.argv[2];
 if (!dirtyDir) {
-  console.error("Usage: node scripts/create-dirty-db.cjs <output-directory>");
+  console.error("Usage: node scripts/create-dirty-db.mjs <output-directory>");
   process.exit(1);
 }
 
@@ -42,7 +41,7 @@ sqlite.pragma("journal_mode = WAL");
 sqlite.pragma("foreign_keys = ON");
 
 // Apply all migrations so __drizzle_migrations has the correct hashes
-migrate(drizzle(sqlite), { migrationsFolder: path.join(process.cwd(), "drizzle") });
+migrate(drizzle(sqlite), { migrationsFolder: path.join(repoRoot, "drizzle") });
 
 const colsBefore = sqlite
   .prepare("PRAGMA table_info(messages)")
@@ -60,8 +59,6 @@ const colsAfter = sqlite
   .map((c) => c.name);
 console.log("Columns after dirty state: ", colsAfter.join(", "));
 console.log(`Dirty DB written to:        ${dbPath}`);
-console.log(
-  "State: __drizzle_migrations shows 0001 applied; duration_ms column absent",
-);
+console.log("State: __drizzle_migrations shows 0001 applied; duration_ms column absent");
 
 sqlite.close();

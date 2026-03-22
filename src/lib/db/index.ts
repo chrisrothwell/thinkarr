@@ -36,7 +36,7 @@ let _db: ReturnType<typeof drizzle<typeof schema>> | null = null;
 export function ensureSchemaIntegrity(sqlite: Database.Database): void {
   type ColRow = { name: string };
 
-  const tables = Object.values(schema).filter(
+  const tables = (Object.values(schema) as unknown[]).filter(
     (v): v is SQLiteTable => is(v, SQLiteTable),
   );
 
