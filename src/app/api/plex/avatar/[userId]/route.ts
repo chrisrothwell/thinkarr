@@ -15,6 +15,7 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { getDb, schema } from "@/lib/db";
 import { eq } from "drizzle-orm";
+import { logger } from "@/lib/logger";
 
 export async function GET(
   _request: Request,
@@ -32,11 +33,18 @@ export async function GET(
   }
 
   const db = getDb();
-  const user = db
-    .select({ plexAvatarUrl: schema.users.plexAvatarUrl, plexToken: schema.users.plexToken })
-    .from(schema.users)
-    .where(eq(schema.users.id, targetUserId))
-    .get();
+  let user: { plexAvatarUrl: string | null; plexToken: string | null } | undefined;
+  try {
+    user = db
+      .select({ plexAvatarUrl: schema.users.plexAvatarUrl, plexToken: schema.users.plexToken })
+      .from(schema.users)
+      .where(eq(schema.users.id, targetUserId))
+      .get();
+  } catch (e: unknown) {
+    const error = e instanceof Error ? e.message : "Database error";
+    logger.error("Failed to fetch user for avatar proxy", { targetUserId, requestingUserId: session.user.id, error });
+    return new NextResponse("Internal server error", { status: 500 });
+  }
 
   if (!user || !user.plexAvatarUrl) {
     return new NextResponse("No avatar", { status: 404 });

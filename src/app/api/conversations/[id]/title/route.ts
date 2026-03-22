@@ -3,6 +3,7 @@ import { getSession } from "@/lib/auth/session";
 import { getDb, schema } from "@/lib/db";
 import { eq, and } from "drizzle-orm";
 import { checkUserApiRateLimit } from "@/lib/security/api-rate-limit";
+import { logger } from "@/lib/logger";
 import type { ApiResponse } from "@/types/api";
 
 const TITLE_MAX_LENGTH = 200;
@@ -54,23 +55,33 @@ export async function PATCH(
 
   const db = getDb();
 
-  const conversation = db
-    .select()
-    .from(schema.conversations)
-    .where(and(eq(schema.conversations.id, id), eq(schema.conversations.userId, session.user.id)))
-    .get();
+  try {
+    const conversation = db
+      .select()
+      .from(schema.conversations)
+      .where(and(eq(schema.conversations.id, id), eq(schema.conversations.userId, session.user.id)))
+      .get();
 
-  if (!conversation) {
+    if (!conversation) {
+      return NextResponse.json<ApiResponse>(
+        { success: false, error: "Conversation not found" },
+        { status: 404 },
+      );
+    }
+
+    db.update(schema.conversations)
+      .set({ title: body.title, updatedAt: new Date() })
+      .where(eq(schema.conversations.id, id))
+      .run();
+  } catch (e: unknown) {
+    const error = e instanceof Error ? e.message : "Database error";
+    logger.error("Failed to update conversation title", { conversationId: id, userId: session.user.id, error });
     return NextResponse.json<ApiResponse>(
-      { success: false, error: "Conversation not found" },
-      { status: 404 },
+      { success: false, error: "Failed to update title" },
+      { status: 500 },
     );
   }
 
-  db.update(schema.conversations)
-    .set({ title: body.title, updatedAt: new Date() })
-    .where(eq(schema.conversations.id, id))
-    .run();
-
+  logger.info("Conversation title updated", { conversationId: id, userId: session.user.id });
   return NextResponse.json<ApiResponse>({ success: true });
 }

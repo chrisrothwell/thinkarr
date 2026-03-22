@@ -741,3 +741,44 @@ Logs revealed the Phase 29 fixes were incomplete. Specific root causes were conf
 | `src/components/chat/message-list.tsx` | `buildHistoricalToolCalls` includes `durationMs` from DB (#126) |
 | `src/lib/services/overseerr.ts` | `search()` uses `encodeURIComponent` instead of `URLSearchParams` (#128) |
 | `src/__tests__/lib/overseerr.test.ts` | 2 new tests: spaces encode as `%20`, reserved chars encode correctly (#128) |
+
+### Phase 31: Fix issue #134 — schema-migration parity test gap
+
+Issue #134 ("table messages has no column named duration_ms / Failed to load messages") was
+caused by the `duration_ms` column being added to `schema.ts` in Phase 29 without a migration
+file, meaning existing databases did not receive the new column. The Phase 30 second-pass added
+the migration (`drizzle/0001_add_message_duration.sql`), fixing the immediate runtime error.
+
+This phase addresses **why the tests did not catch it**:
+
+The `migrations.test.ts` "messages has correct columns" test only asserted the presence of
+specific *known* columns (id, conversation_id, role, content, etc.). It never checked for
+`duration_ms`, so the test passed even when the migration was absent. Additionally, all
+existing test fixtures inserted rows via raw SQL (not the Drizzle ORM schema), so no Drizzle
+query ever attempted to reference `duration_ms` and the mismatch was invisible.
+
+- [x] **Add `duration_ms` to column assertion** — `messages has correct columns` now includes
+  `expect(c).toHaveProperty("duration_ms")` so a missing migration is immediately detected. —
+  `src/__tests__/db/migrations.test.ts`
+
+- [x] **Add Drizzle ORM round-trip tests** — New describe block "schema-migration parity —
+  Drizzle round-trip" performs `db.insert(schema.messages).values({...durationMs: 1234...})`
+  and `db.select()...get()` using the live Drizzle schema against a migration-initialised
+  in-memory DB. Any column present in `schema.ts` but absent from the migrations will cause
+  the insert to throw "table messages has no column named X", catching the class of bug that
+  caused #134. A second test verifies `duration_ms` defaults to `null`. —
+  `src/__tests__/db/migrations.test.ts`
+
+- [x] **No error logging in conversation message loader** — `GET /api/conversations/[id]` had
+  no try/catch around its DB queries. When SQLite threw the column error, the exception
+  propagated unhandled and Next.js absorbed it silently — nothing ever reached `logger.error()`.
+  Fix: wrapped both GET and DELETE DB paths in try/catch blocks that call `logger.error()` with
+  `conversationId`, `userId`, and the error message before returning a structured 500. —
+  `src/app/api/conversations/[id]/route.ts`
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/__tests__/db/migrations.test.ts` | Added `duration_ms` to column check; added 2 Drizzle round-trip parity tests (#134) |
+| `src/app/api/conversations/[id]/route.ts` | Wrapped GET and DELETE DB ops in try/catch with `logger.error()` (#134) |
