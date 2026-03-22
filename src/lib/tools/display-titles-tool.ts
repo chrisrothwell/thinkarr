@@ -83,10 +83,8 @@ If an Overseerr TV result has seasonCount > 1, you MUST call this tool with one 
                   // cards. Plex knows the series as "Show", so we prefer showTitle when
                   // provided, or strip the " — Season N" decoration as a fallback so
                   // the Plex search finds the series root (#117).
-                  const plexSearchTitle =
-                    t.showTitle ??
-                    t.title.replace(/\s*[—–-]\s*Season\s+\d+\s*$/i, "").trim() ||
-                    t.title;
+                  const stripped = t.title.replace(/\s*[—–-]\s*Season\s+\d+\s*$/i, "").trim();
+                  const plexSearchTitle = t.showTitle ?? (stripped || t.title);
                   plexKey = await findShowPlexKey(plexSearchTitle, t.year ?? undefined);
                 } else {
                   // Movies: use standard hub search (show-level results are at the top)
