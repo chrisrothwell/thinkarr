@@ -26,6 +26,16 @@ export function getDb() {
       migrate(drizzle(sqlite), { migrationsFolder: migrationsPath });
       logger.info("Database migrations applied", { migrationsPath });
     }
+
+    // Defensive column check: ensure duration_ms exists on messages even if the
+    // migration tracker recorded it as applied but the ALTER TABLE never ran
+    // (e.g. due to a crash or a DB restored from backup taken before the column existed).
+    type ColRow = { name: string };
+    const cols = sqlite.prepare("PRAGMA table_info(messages)").all() as ColRow[];
+    if (!cols.some((c) => c.name === "duration_ms")) {
+      sqlite.exec("ALTER TABLE messages ADD COLUMN duration_ms INTEGER");
+      logger.warn("duration_ms column was missing from messages — added via fallback", { path: DB_PATH });
+    }
   }
   return _db;
 }

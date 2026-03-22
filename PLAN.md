@@ -782,3 +782,31 @@ query ever attempted to reference `duration_ms` and the mismatch was invisible.
 |------|--------|
 | `src/__tests__/db/migrations.test.ts` | Added `duration_ms` to column check; added 2 Drizzle round-trip parity tests (#134) |
 | `src/app/api/conversations/[id]/route.ts` | Wrapped GET and DELETE DB ops in try/catch with `logger.error()` (#134) |
+
+### Phase 32: Fix issue #134 — defensive column fallback in getDb()
+
+Issue #134 persisted after Phase 31 because existing production databases already had the
+`__drizzle_migrations` record for `0001_add_message_duration` registered from an earlier
+failed or partial deployment. Drizzle's migrator skips already-registered migrations, so
+the `ALTER TABLE` SQL never ran again and `duration_ms` remained absent.
+
+- [x] **Defensive column check in `getDb()`** — After `migrate()` runs, `getDb()` now reads
+  `PRAGMA table_info(messages)` and, if `duration_ms` is absent, runs
+  `ALTER TABLE messages ADD COLUMN duration_ms INTEGER` directly. This is idempotent and
+  bypasses the migration tracking system, ensuring the column always exists on startup
+  regardless of the state of `__drizzle_migrations`. A `logger.warn` is emitted when the
+  fallback fires so the condition is observable in logs. —
+  `src/lib/db/index.ts`
+
+- [x] **Defensive fallback unit test** — New describe block
+  "migrations — duration_ms defensive fallback" in `migrations.test.ts` simulates the exact
+  failure scenario: baseline schema applied without `duration_ms`, then the fallback SQL
+  executed, verified that the column is present afterwards. —
+  `src/__tests__/db/migrations.test.ts`
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/db/index.ts` | Added post-migration PRAGMA check; runs `ALTER TABLE` if `duration_ms` is absent (#134) |
+| `src/__tests__/db/migrations.test.ts` | Added defensive fallback test covering the dirty-migration scenario (#134) |

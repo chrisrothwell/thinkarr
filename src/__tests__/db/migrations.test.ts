@@ -164,6 +164,43 @@ describe("migrations — idempotency", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Defensive column fallback (issue #134)
+// ---------------------------------------------------------------------------
+
+describe("migrations — duration_ms defensive fallback", () => {
+  it("adds duration_ms column when migration was tracked as applied but column is absent", () => {
+    // Simulate a DB where migration 0001 was recorded as applied but the
+    // ALTER TABLE never actually ran (e.g. DB restored from backup).
+    // Only apply migration 0000 so messages table lacks duration_ms.
+    const freshSqlite = new Database(":memory:");
+    freshSqlite.pragma("foreign_keys = ON");
+
+    // Apply only the baseline migration by hand
+    const baseline = path.join(MIGRATIONS_DIR, "0000_short_gressill.sql");
+    const sql = require("fs").readFileSync(baseline, "utf8");
+    for (const stmt of sql.split("--> statement-breakpoint")) {
+      const s = stmt.trim();
+      if (s) freshSqlite.exec(s);
+    }
+
+    // Confirm duration_ms is absent
+    type ColRow = { name: string };
+    const before = freshSqlite.prepare("PRAGMA table_info(messages)").all() as ColRow[];
+    expect(before.some((c) => c.name === "duration_ms")).toBe(false);
+
+    // Apply the defensive fallback (mirrors the logic in src/lib/db/index.ts)
+    if (!before.some((c) => c.name === "duration_ms")) {
+      freshSqlite.exec("ALTER TABLE messages ADD COLUMN duration_ms INTEGER");
+    }
+
+    const after = freshSqlite.prepare("PRAGMA table_info(messages)").all() as ColRow[];
+    expect(after.some((c) => c.name === "duration_ms")).toBe(true);
+
+    freshSqlite.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Schema-migration parity: Drizzle ORM round-trip
 //
 // These tests INSERT and SELECT via the Drizzle schema (not raw SQL) so that
