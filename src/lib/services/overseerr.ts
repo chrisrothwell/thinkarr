@@ -95,9 +95,12 @@ function seasonStatusLabel(status: number): string {
 export async function search(query: string, page = 1): Promise<{ results: OverseerrSearchResult[]; hasMore: boolean }> {
   // Overseerr/TMDB search returns ~20 items per API page.
   // We return 10 items per LLM page, so page maps 1:1 to TMDB pages.
-  // Use URLSearchParams to guarantee all characters are properly percent-encoded (#128).
-  const qs = new URLSearchParams({ query, page: String(page), language: "en" });
-  const data = await overseerrFetch(`/search?${qs.toString()}`);
+  // Use encodeURIComponent to produce RFC 3986-compliant %20 encoding for spaces
+  // and other reserved characters (#128). URLSearchParams uses + for spaces which
+  // some servers do not decode as a space character.
+  const data = await overseerrFetch(
+    `/search?query=${encodeURIComponent(query)}&page=${encodeURIComponent(String(page))}&language=en`,
+  );
   const raw = (data?.results || []) as Record<string, unknown>[];
 
   // Fetch details for all results in parallel:

@@ -46,6 +46,7 @@ function buildHistoricalToolCalls(messages: Message[]): Map<string, ToolCallDisp
             arguments: call.function.arguments || "{}",
             result: resultMsg?.content || undefined,
             status: resultMsg ? (hasError ? "error" : "done") : "calling",
+            durationMs: resultMsg?.durationMs ?? undefined,
             error: errorMessage,
           });
         }

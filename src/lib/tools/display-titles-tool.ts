@@ -78,7 +78,16 @@ If an Overseerr TV result has seasonCount > 1, you MUST call this tool with one 
                   // searches ALL hubs and returns the show-level key. The paginated
                   // searchLibrary only returns the first 10 items, which may miss the
                   // show-level result when episode/season hubs come first (#117).
-                  plexKey = await findShowPlexKey(t.title, t.year ?? undefined);
+                  //
+                  // The LLM may set `title` to "Show — Season N" for per-season display
+                  // cards. Plex knows the series as "Show", so we prefer showTitle when
+                  // provided, or strip the " — Season N" decoration as a fallback so
+                  // the Plex search finds the series root (#117).
+                  const plexSearchTitle =
+                    t.showTitle ??
+                    t.title.replace(/\s*[—–-]\s*Season\s+\d+\s*$/i, "").trim() ||
+                    t.title;
+                  plexKey = await findShowPlexKey(plexSearchTitle, t.year ?? undefined);
                 } else {
                   // Movies: use standard hub search (show-level results are at the top)
                   const { results } = await searchLibrary(t.title);
