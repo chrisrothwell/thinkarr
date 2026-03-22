@@ -678,7 +678,7 @@ All Plex and Overseerr tools now return the same field names as the `display_tit
 
 #### Fixed
 
-- [x] **#117 — Watch Now button after Overseerr search (confirmed fixed)** — Fix was shipped in Phase 28. The `display_titles` tool's Plex side-query correctly populates `plexKey` for available/partial titles from Overseerr. Issue confirmed resolved; no additional code change required.
+- [x] **#117 — Watch Now button missing for TV series from Overseerr** — Phase 28 fixed movies but TV series were still broken. Root cause: `searchLibrary` (used in the original side-query) only returns the first 10 results across all hubs combined; for TV series, Plex returns episode and season hubs before the show hub, so the show-level result was missed. Season items also have modified titles ("Show — Season N") that broke the exact-match check. Fix: new `findShowPlexKey(title, year?)` in `plex.ts` scans ALL hubs without pagination, preferring show-level items (type "show") first, then falling back to a season's `parentKey` or episode's `grandparentKey`. `display-titles-tool.ts` now calls `findShowPlexKey` for TV and per-season entries; the existing `searchLibrary` match is retained for movies only. — `src/lib/services/plex.ts`, `src/lib/tools/display-titles-tool.ts`
 
 - [x] **#128 — Overseerr search fails for queries with special characters** — Root cause: the Overseerr `/search` API rejects queries whose reserved characters are not percent-encoded. While `encodeURIComponent` was previously used, `URLSearchParams` provides a more robust and idiomatic encoding approach. Fix: replaced template-literal URL construction with `new URLSearchParams({ query, page, language })` in `overseerr.search()`. — `src/lib/services/overseerr.ts`
 
@@ -713,3 +713,6 @@ All Plex and Overseerr tools now return the same field names as the `display_tit
 | `src/components/chat/tool-call.tsx` | Shows duration label in card header; red border + inline error for failed tool calls (#127, #126) |
 | `src/components/chat/message-list.tsx` | Historical tool call reconstruction extracts error message from JSON result for `ToolCallDisplay.error` (#127) |
 | `src/__tests__/api/non-admin-user.test.ts` | New — 9 unit tests for non-admin access control on settings and conversations endpoints (#122) |
+| `src/lib/services/plex.ts` | New `findShowPlexKey(title, year?)` — scans all hubs, returns show-level plexKey for TV series (#117) |
+| `src/lib/tools/display-titles-tool.ts` | TV/season entries use `findShowPlexKey`; movie entries retain `searchLibrary` match (#117) |
+| `src/__tests__/lib/display-titles-tool.test.ts` | 2 new TV series tests: show buried behind episode/season hubs; season parentKey fallback (#117) |
