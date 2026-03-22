@@ -93,8 +93,7 @@ afterEach(() => {
 
 describe("GET /api/settings — non-admin access control", () => {
   it("returns 403 for an unauthenticated request", async () => {
-    const req = new Request("http://localhost/api/settings");
-    const res = await settingsGET(req);
+    const res = await settingsGET();
     expect(res.status).toBe(403);
   });
 
@@ -102,8 +101,7 @@ describe("GET /api/settings — non-admin access control", () => {
     const uid = seedUser(testDb, { plexId: "nonadmin", plexUsername: "nonadmin", isAdmin: false });
     mockState.sessionCookie = seedSession(testDb, uid);
 
-    const req = new Request("http://localhost/api/settings");
-    const res = await settingsGET(req);
+    const res = await settingsGET();
     expect(res.status).toBe(403);
     const body = await res.json();
     expect(body.success).toBe(false);
@@ -113,8 +111,7 @@ describe("GET /api/settings — non-admin access control", () => {
     const uid = seedUser(testDb, { plexId: "adminuser", plexUsername: "adminuser", isAdmin: true });
     mockState.sessionCookie = seedSession(testDb, uid);
 
-    const req = new Request("http://localhost/api/settings");
-    const res = await settingsGET(req);
+    const res = await settingsGET();
     expect(res.status).toBe(200);
   });
 });
