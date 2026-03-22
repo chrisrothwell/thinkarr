@@ -4,15 +4,17 @@ import * as schema from "@/lib/db/schema";
 
 export async function GET() {
   try {
-    // Probe the schema — this query references every column that has caused
-    // production outages. If duration_ms (or any other expected column) is
-    // absent the SELECT throws immediately and we return 503, which fails
-    // the Docker HEALTHCHECK and the docker-e2e waitForServer() check in CI.
-    getDb()
-      .select({ id: schema.messages.id, durationMs: schema.messages.durationMs })
-      .from(schema.messages)
-      .limit(0)
-      .all();
+    const db = getDb();
+    // Probe every table in schema.ts with a zero-row SELECT that exercises
+    // all columns. Any column present in schema.ts but absent from the live
+    // database causes an immediate SQLite error, returning 503 and failing the
+    // Docker HEALTHCHECK before broken queries ever reach real users.
+    // Add new tables here as they are introduced in schema.ts.
+    db.select().from(schema.appConfig).limit(0).all();
+    db.select().from(schema.users).limit(0).all();
+    db.select().from(schema.sessions).limit(0).all();
+    db.select().from(schema.conversations).limit(0).all();
+    db.select().from(schema.messages).limit(0).all();
     return NextResponse.json({ status: "ok" });
   } catch (e) {
     return NextResponse.json({ status: "error", detail: String(e) }, { status: 503 });

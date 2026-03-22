@@ -876,3 +876,61 @@ build from passing CI. Three gaps remained:
 | `src/__tests__/db/migrations.test.ts` | New test: exact production dirty-migration chain including `migrate()` skip assertion |
 | `scripts/create-dirty-db.cjs` | New helper: creates on-disk dirty-state DB for Docker smoke test |
 | `.github/workflows/docker-publish.yml` | New step: Docker dirty-DB smoke test in docker-e2e job |
+
+### Phase 34: Make schema drift correction generic across all columns and tables
+
+Phase 33 fixed the immediate outage and hardened CI, but the defensive fallback in `getDb()`
+and the health probe in `/api/health` were still hardcoded to `messages.duration_ms`. Any new
+column added to schema.ts in a future migration would not be covered automatically.
+
+The root question: **how do we ensure all future schema changes are correctly applied?**
+
+The answer is a generic schema-integrity function that introspects the Drizzle schema at
+runtime using drizzle-orm's public API (`getTableColumns`, `getTableName`, `is`, `SQLiteTable`)
+and compares it against the live SQLite database via `PRAGMA table_info`. It handles two cases:
+
+**Safe to auto-repair (nullable columns):** The vast majority of `ALTER TABLE ADD COLUMN`
+migrations add nullable columns (no `NOT NULL` constraint). These are safe to add to existing
+tables because SQLite sets `NULL` for all existing rows. `ensureSchemaIntegrity` does this
+automatically for any nullable column in any table.
+
+**Crash loudly (NOT NULL columns):** `NOT NULL` columns cannot be auto-repaired because the
+correct backfill value for existing rows cannot be determined at runtime without the original
+migration SQL. Attempting to guess would risk data corruption. Instead the process throws
+immediately so the operator knows to intervene. The migration safety linter already enforces
+"ADD COLUMN NOT NULL must have DEFAULT", so correctly authored migrations will always be
+either nullable or carry a SQL-level DEFAULT — but that DEFAULT cannot be synthesised from
+Drizzle's `$defaultFn()` (JS-side function defaults that SQLite never sees). If a NOT NULL
+column is somehow missing, crashing loudly is the correct and safe behaviour.
+
+- [x] **Generic `ensureSchemaIntegrity(sqlite)` in `getDb()`** — Replaces the hardcoded
+  `duration_ms` PRAGMA check. After `migrate()` runs, `ensureSchemaIntegrity` iterates over
+  every table exported from `schema.ts` using `is(v, SQLiteTable)` to filter, calls
+  `getTableColumns(table)` to get the expected column set, and cross-references it against
+  `PRAGMA table_info`. Missing nullable columns are added with `ALTER TABLE ADD COLUMN
+  \`name\` TYPE`. Missing NOT NULL columns throw an error and crash the process. The function
+  is exported for direct unit testing. — `src/lib/db/index.ts`
+
+- [x] **Generic health probe in `/api/health`** — Replaces the single `messages.durationMs`
+  SELECT with explicit `SELECT * LIMIT 0` probes against every table in schema.ts. Any
+  column present in Drizzle's schema but absent from the live database surfaces as an
+  immediate SQLite error, returning 503 instead of 200 and failing the Docker HEALTHCHECK.
+  New tables must be added to the probe list when introduced. — `src/app/api/health/route.ts`
+
+- [x] **Generic `ensureSchemaIntegrity` unit tests** — Replaces the two hardcoded `duration_ms`
+  test blocks (Phase 32 "defensive fallback" and Phase 33 "exact production dirty-migration
+  scenario") with three focused tests against the exported function:
+  1. No-op when schema matches live database.
+  2. Auto-fixes any missing nullable column (drops `duration_ms`, verifies it is re-added).
+  3. Throws for a missing NOT NULL column (drops `messages.role`, verifies error message).
+  Plus one full-chain integration test: apply all migrations, drop column, re-run
+  `migrate()` (confirms skip), call `ensureSchemaIntegrity`, verify health-probe SELECT
+  succeeds. — `src/__tests__/db/migrations.test.ts`
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/db/index.ts` | Generic `ensureSchemaIntegrity`: introspects all schema tables; auto-fixes nullable, throws for NOT NULL; exported for tests |
+| `src/app/api/health/route.ts` | Probes all 5 schema tables (not just messages.duration_ms); add new tables here as schema grows |
+| `src/__tests__/db/migrations.test.ts` | Replaced 2 hardcoded duration_ms tests with 4 generic ensureSchemaIntegrity tests |

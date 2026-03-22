@@ -4,6 +4,7 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { eq } from "drizzle-orm";
 import * as schema from "@/lib/db/schema";
+import { ensureSchemaIntegrity } from "@/lib/db";
 import path from "path";
 
 const MIGRATIONS_DIR = path.join(process.cwd(), "drizzle");
@@ -164,105 +165,90 @@ describe("migrations — idempotency", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Defensive column fallback (issue #134)
+// ensureSchemaIntegrity — generic schema drift correction
+//
+// Tests for the exported ensureSchemaIntegrity() function, which replaced the
+// hardcoded duration_ms fallback. It works for ANY nullable column in ANY
+// table — not just duration_ms.
+//
+// Requires SQLite >= 3.35.0 for ALTER TABLE DROP COLUMN, which better-sqlite3
+// v12 provides via its bundled SQLite.
 // ---------------------------------------------------------------------------
 
-describe("migrations — duration_ms defensive fallback", () => {
-  it("adds duration_ms column when migration was tracked as applied but column is absent", () => {
-    // Simulate a DB where migration 0001 was recorded as applied but the
-    // ALTER TABLE never actually ran (e.g. DB restored from backup).
-    // Only apply migration 0000 so messages table lacks duration_ms.
-    const freshSqlite = new Database(":memory:");
-    freshSqlite.pragma("foreign_keys = ON");
+describe("ensureSchemaIntegrity — generic drift correction", () => {
+  it("is a no-op when the live schema matches schema.ts", () => {
+    // Fresh DB with all migrations applied — nothing should change.
+    expect(() => ensureSchemaIntegrity(sqlite)).not.toThrow();
+  });
 
-    // Apply only the baseline migration by hand
-    const baseline = path.join(MIGRATIONS_DIR, "0000_short_gressill.sql");
-    const sql = require("fs").readFileSync(baseline, "utf8");
-    for (const stmt of sql.split("--> statement-breakpoint")) {
-      const s = stmt.trim();
-      if (s) freshSqlite.exec(s);
-    }
+  it("automatically adds any missing nullable column (not just duration_ms)", () => {
+    sqlite.exec("ALTER TABLE messages DROP COLUMN duration_ms");
 
-    // Confirm duration_ms is absent
     type ColRow = { name: string };
-    const before = freshSqlite.prepare("PRAGMA table_info(messages)").all() as ColRow[];
+    const before = sqlite.prepare("PRAGMA table_info(messages)").all() as ColRow[];
     expect(before.some((c) => c.name === "duration_ms")).toBe(false);
 
-    // Apply the defensive fallback (mirrors the logic in src/lib/db/index.ts)
-    if (!before.some((c) => c.name === "duration_ms")) {
-      freshSqlite.exec("ALTER TABLE messages ADD COLUMN duration_ms INTEGER");
-    }
+    expect(() => ensureSchemaIntegrity(sqlite)).not.toThrow();
 
-    const after = freshSqlite.prepare("PRAGMA table_info(messages)").all() as ColRow[];
+    const after = sqlite.prepare("PRAGMA table_info(messages)").all() as ColRow[];
     expect(after.some((c) => c.name === "duration_ms")).toBe(true);
+  });
 
-    freshSqlite.close();
+  it("throws for a missing NOT NULL column — cannot safely backfill without the migration SQL", () => {
+    // Drop a NOT NULL column (messages.role). The correct backfill value for
+    // existing rows cannot be inferred at runtime — ensureSchemaIntegrity
+    // must crash loudly so the operator knows to intervene.
+    sqlite.exec("ALTER TABLE messages DROP COLUMN role");
+
+    expect(() => ensureSchemaIntegrity(sqlite)).toThrow(/NOT NULL/);
   });
 });
 
 // ---------------------------------------------------------------------------
-// Exact production dirty-migration scenario (issue #134)
+// ensureSchemaIntegrity — full production dirty-migration chain (issue #134)
 //
-// The unit test above ("defensive fallback") proves the fallback SQL works in
-// isolation. This test reproduces the FULL production failure chain:
-//
-//   1. All migrations run and are recorded in __drizzle_migrations with the
-//      correct drizzle-computed hashes (not manually inserted fake entries).
-//   2. The duration_ms column is then dropped — simulating a DB file restored
-//      from a backup taken before the migration ran, while __drizzle_migrations
-//      still reflects the post-migration state.
-//   3. migrate() is re-invoked — it MUST skip 0001 because the hash is present
-//      in __drizzle_migrations. This confirms the dirty state is reproducible.
-//   4. The defensive fallback (mirrors getDb()) adds the column back.
-//   5. The health-probe SELECT (mirrors /api/health) must succeed.
-//
-// Requires SQLite >= 3.35.0 for ALTER TABLE DROP COLUMN support, which
-// better-sqlite3 v12 provides via its bundled SQLite.
+// Proves the exact failure sequence that caused the production outage:
+//   1. All migrations ran — correct hashes in __drizzle_migrations
+//   2. DB file replaced with a pre-migration backup — column absent
+//   3. migrate() skips 0001 — it is already in __drizzle_migrations
+//   4. ensureSchemaIntegrity() detects the gap and auto-repairs the column
+//   5. Health-probe SELECT (mirrors GET /api/health) succeeds
 // ---------------------------------------------------------------------------
 
-describe("migrations — exact production dirty-migration scenario (issue #134)", () => {
-  it("migrate() skips 0001 when hash is in __drizzle_migrations; fallback restores the column", () => {
+describe("ensureSchemaIntegrity — full dirty-migration chain", () => {
+  it("recovers when migrate() skips a tracked-but-unapplied migration", () => {
     const dirtySqlite = new Database(":memory:");
     dirtySqlite.pragma("foreign_keys = ON");
     const db = drizzle(dirtySqlite, { schema });
 
-    // 1. Apply all migrations — drizzle populates __drizzle_migrations with the
-    //    real content-hashes it uses for tracking. Both 0000 and 0001 are applied.
+    // 1. Apply all migrations — drizzle writes real content-hashes to __drizzle_migrations.
     migrate(db, { migrationsFolder: MIGRATIONS_DIR });
 
     type ColRow = { name: string };
-    const afterClean = dirtySqlite.prepare("PRAGMA table_info(messages)").all() as ColRow[];
-    expect(afterClean.some((c) => c.name === "duration_ms")).toBe(true);
-
-    // 2. Drop the column — simulates a DB file restored from a pre-0001 backup.
-    //    __drizzle_migrations still shows 0001 as applied.
-    dirtySqlite.exec("ALTER TABLE messages DROP COLUMN duration_ms");
-    const afterDrop = dirtySqlite.prepare("PRAGMA table_info(messages)").all() as ColRow[];
-    expect(afterDrop.some((c) => c.name === "duration_ms")).toBe(false);
-
-    // 3. Re-run migrate() — it MUST skip 0001 (hash already in tracking table).
-    //    This is the step that caused the production outage: migrate() returned
-    //    without error, app started, first query threw "no column named duration_ms".
-    migrate(db, { migrationsFolder: MIGRATIONS_DIR });
-    const afterRemigrate = dirtySqlite.prepare("PRAGMA table_info(messages)").all() as ColRow[];
     expect(
-      afterRemigrate.some((c) => c.name === "duration_ms"),
-      "migrate() must NOT re-add the column — this confirms the dirty state requires the fallback",
+      (dirtySqlite.prepare("PRAGMA table_info(messages)").all() as ColRow[]).some(
+        (c) => c.name === "duration_ms",
+      ),
+    ).toBe(true);
+
+    // 2. Drop the column — simulates a backup-restore dirty state.
+    dirtySqlite.exec("ALTER TABLE messages DROP COLUMN duration_ms");
+
+    // 3. Re-run migrate() — must skip 0001 (hash is in __drizzle_migrations).
+    migrate(db, { migrationsFolder: MIGRATIONS_DIR });
+    expect(
+      (dirtySqlite.prepare("PRAGMA table_info(messages)").all() as ColRow[]).some(
+        (c) => c.name === "duration_ms",
+      ),
+      "migrate() must NOT restore the column — confirms ensureSchemaIntegrity is needed",
     ).toBe(false);
 
-    // 4. Apply the defensive fallback (mirrors logic in src/lib/db/index.ts getDb()).
-    if (!afterRemigrate.some((c) => c.name === "duration_ms")) {
-      dirtySqlite.exec("ALTER TABLE messages ADD COLUMN duration_ms INTEGER");
-    }
+    // 4. ensureSchemaIntegrity detects and repairs the gap.
+    expect(() => ensureSchemaIntegrity(dirtySqlite)).not.toThrow();
 
-    // 5. The health-probe SELECT must now succeed (mirrors GET /api/health).
-    const fixedDb = drizzle(dirtySqlite, { schema });
+    // 5. Health-probe SELECT succeeds.
     expect(() =>
-      fixedDb
-        .select({ id: schema.messages.id, durationMs: schema.messages.durationMs })
-        .from(schema.messages)
-        .limit(0)
-        .all(),
+      drizzle(dirtySqlite, { schema }).select().from(schema.messages).limit(0).all(),
     ).not.toThrow();
 
     dirtySqlite.close();
