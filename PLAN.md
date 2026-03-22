@@ -769,8 +769,16 @@ query ever attempted to reference `duration_ms` and the mismatch was invisible.
   caused #134. A second test verifies `duration_ms` defaults to `null`. —
   `src/__tests__/db/migrations.test.ts`
 
+- [x] **No error logging in conversation message loader** — `GET /api/conversations/[id]` had
+  no try/catch around its DB queries. When SQLite threw the column error, the exception
+  propagated unhandled and Next.js absorbed it silently — nothing ever reached `logger.error()`.
+  Fix: wrapped both GET and DELETE DB paths in try/catch blocks that call `logger.error()` with
+  `conversationId`, `userId`, and the error message before returning a structured 500. —
+  `src/app/api/conversations/[id]/route.ts`
+
 #### Files changed
 
 | File | Change |
 |------|--------|
 | `src/__tests__/db/migrations.test.ts` | Added `duration_ms` to column check; added 2 Drizzle round-trip parity tests (#134) |
+| `src/app/api/conversations/[id]/route.ts` | Wrapped GET and DELETE DB ops in try/catch with `logger.error()` (#134) |
