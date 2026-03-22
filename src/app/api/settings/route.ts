@@ -3,6 +3,7 @@ import { getSession } from "@/lib/auth/session";
 import { getConfig, setConfig } from "@/lib/config";
 import { logger } from "@/lib/logger";
 import { validateServiceUrl } from "@/lib/security/url-validation";
+import { checkUserApiRateLimit } from "@/lib/security/api-rate-limit";
 import type { ApiResponse } from "@/types/api";
 
 export interface LlmEndpoint {
@@ -14,6 +15,10 @@ export interface LlmEndpoint {
   systemPrompt: string;
   enabled: boolean;
   isDefault: boolean;
+  supportsVoice: boolean;
+  supportsRealtime: boolean;
+  realtimeModel: string;
+  realtimeSystemPrompt: string;
 }
 
 function getLlmEndpoints(): LlmEndpoint[] {
@@ -41,6 +46,10 @@ function getLlmEndpoints(): LlmEndpoint[] {
         systemPrompt: "",
         enabled: true,
         isDefault: true,
+        supportsVoice: false,
+        supportsRealtime: false,
+        realtimeModel: "",
+        realtimeSystemPrompt: "",
       },
     ];
   }
@@ -61,6 +70,13 @@ export async function GET() {
     return NextResponse.json<ApiResponse>(
       { success: false, error: "Admin access required" },
       { status: 403 },
+    );
+  }
+
+  if (!checkUserApiRateLimit(session.user.id)) {
+    return NextResponse.json<ApiResponse>(
+      { success: false, error: "Too many requests. Please slow down." },
+      { status: 429 },
     );
   }
 
@@ -94,6 +110,13 @@ export async function PATCH(request: Request) {
     return NextResponse.json<ApiResponse>(
       { success: false, error: "Admin access required" },
       { status: 403 },
+    );
+  }
+
+  if (!checkUserApiRateLimit(session.user.id)) {
+    return NextResponse.json<ApiResponse>(
+      { success: false, error: "Too many requests. Please slow down." },
+      { status: 429 },
     );
   }
 

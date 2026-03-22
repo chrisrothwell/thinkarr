@@ -1,6 +1,6 @@
 import { getConfig } from "@/lib/config";
-import { DEFAULT_SYSTEM_PROMPT } from "./default-prompt";
-export { DEFAULT_SYSTEM_PROMPT };
+import { DEFAULT_SYSTEM_PROMPT, DEFAULT_REALTIME_SYSTEM_PROMPT } from "./default-prompt";
+export { DEFAULT_SYSTEM_PROMPT, DEFAULT_REALTIME_SYSTEM_PROMPT };
 
 /** Build the live {{serviceList}} block based on currently-configured services. */
 function buildServiceList(): string {
@@ -23,5 +23,14 @@ function buildServiceList(): string {
  */
 export function buildSystemPrompt(customPrompt?: string): string {
   const template = customPrompt?.trim() || DEFAULT_SYSTEM_PROMPT;
+  return template.replace("{{serviceList}}", buildServiceList());
+}
+
+/**
+ * Build the system prompt for the Realtime (voice) API.
+ * Falls back to DEFAULT_REALTIME_SYSTEM_PROMPT if no custom prompt is provided.
+ */
+export function buildRealtimeSystemPrompt(customPrompt?: string): string {
+  const template = customPrompt?.trim() || DEFAULT_REALTIME_SYSTEM_PROMPT;
   return template.replace("{{serviceList}}", buildServiceList());
 }

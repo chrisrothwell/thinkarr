@@ -22,8 +22,9 @@ import {
   FileText,
   Download,
 } from "lucide-react";
-import { DEFAULT_SYSTEM_PROMPT } from "@/lib/llm/default-prompt";
+import { DEFAULT_SYSTEM_PROMPT, DEFAULT_REALTIME_SYSTEM_PROMPT } from "@/lib/llm/default-prompt";
 import { copyToClipboard } from "@/lib/utils";
+import { usePwaInstall } from "@/hooks/use-pwa-install";
 
 // --- Types ---
 
@@ -36,6 +37,14 @@ interface LlmEndpoint {
   systemPrompt: string;
   enabled: boolean;
   isDefault: boolean;
+  supportsVoice: boolean;
+  supportsRealtime: boolean;
+  realtimeModel: string;
+  realtimeSystemPrompt: string;
+  /** UI-only: tracks whether the user has chosen the default or a custom prompt. Not persisted. */
+  promptMode?: "default" | "custom";
+  /** UI-only: tracks whether the user has chosen the default or a custom realtime prompt. Not persisted. */
+  realtimePromptMode?: "default" | "custom";
 }
 
 interface ArrConfig {
@@ -66,6 +75,9 @@ interface UserEntry {
   canChangeModel: boolean;
   rateLimitMessages: number;
   rateLimitPeriod: "hour" | "day" | "week" | "month";
+  msgCount24h: number;
+  msgCount7d: number;
+  msgCount30d: number;
   mcpToken?: string;
   mcpTokenLoading?: boolean;
 }
@@ -84,34 +96,43 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
-  // LLM state
+  // Current session user (determines admin vs non-admin view)
+  const [currentUser, setCurrentUser] = useState<{ id: number; isAdmin: boolean; plexUsername: string; plexAvatarUrl: string | null; plexEmail: string | null } | null>(null);
+
+  // LLM state (admin only)
   const [endpoints, setEndpoints] = useState<LlmEndpoint[]>([]);
 
-  // Plex & Arrs state
+  // Plex & Arrs state (admin only)
   const [plexConfig, setPlexConfig] = useState<PlexConfig>({ url: "", token: "" });
   const [arrConfigs, setArrConfigs] = useState<Record<string, ArrConfig>>({});
 
-  // Initial setup mode + redirect countdown
+  // Initial setup mode + redirect countdown (admin only)
   const [isInitialSetup, setIsInitialSetup] = useState(false);
   const [redirectCountdown, setRedirectCountdown] = useState<number | null>(null);
   const countdownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Plex discovery state
+  // Track the last-saved config so we can warn on unsaved changes
+  const savedConfigRef = useRef<string>("");
+
+  // Plex discovery state (admin only)
   const [plexDiscovering, setPlexDiscovering] = useState(false);
   const [plexDevices, setPlexDevices] = useState<PlexDevice[]>([]);
   const [plexDiscoverError, setPlexDiscoverError] = useState<string | null>(null);
 
-  // MCP state
+  // MCP state — admin global token; also per-user token for non-admins
   const [mcpToken, setMcpToken] = useState<string>("");
   const [mcpTokenLoading, setMcpTokenLoading] = useState(false);
 
-  // User state
+  // User state (admin only)
   const [users, setUsers] = useState<UserEntry[]>([]);
 
-  // Test results
+  // Test results (admin only)
   const [testResults, setTestResults] = useState<Record<string, { success: boolean; message: string }>>({});
 
-  // Log state
+  // PWA install (also registers SW and captures beforeinstallprompt)
+  const { isAvailable: pwaInstallAvailable, isMobile: pwaMobile, isIosDevice: pwaIsIos, install: triggerPwaInstall } = usePwaInstall();
+
+  // Log state (admin only)
   const [logFiles, setLogFiles] = useState<{ name: string; size: number; modified: string }[]>([]);
   const [logFilesLoading, setLogFilesLoading] = useState(false);
   const [logFilesLoaded, setLogFilesLoaded] = useState(false);
@@ -123,37 +144,77 @@ export default function SettingsPage() {
 
   // --- Load data ---
   useEffect(() => {
-    Promise.all([
-      fetch("/api/settings").then((r) => r.json()),
-      fetch("/api/settings/users").then((r) => r.json()),
-      fetch("/api/settings/mcp-token").then((r) => r.json()),
-    ])
-      .then(([settingsData, usersData, mcpData]) => {
-        if (settingsData.success) {
-          const d = settingsData.data;
-          // No LLM endpoints = first-time setup; enable exit guard + redirect-on-complete
-          if ((d.llmEndpoints || []).length === 0) setIsInitialSetup(true);
-          setEndpoints(d.llmEndpoints || []);
-          setPlexConfig({ url: d.plex?.url || "", token: d.plex?.token || "" });
-          const arrs: Record<string, ArrConfig> = {};
-          for (const svc of ARR_SERVICES) {
-            arrs[svc.key] = {
-              url: d[svc.key]?.url || "",
-              apiKey: d[svc.key]?.apiKey || "",
-            };
+    // Always fetch session first to determine admin status
+    fetch("/api/auth/session")
+      .then((r) => r.json())
+      .then(async (sessionData) => {
+        if (!sessionData.success) return;
+        const user = sessionData.data.user;
+        setCurrentUser(user);
+
+        if (user.isAdmin) {
+          // Admin: load full settings
+          const [settingsData, usersData, mcpData] = await Promise.all([
+            fetch("/api/settings").then((r) => r.json()),
+            fetch("/api/settings/users").then((r) => r.json()),
+            fetch("/api/settings/mcp-token").then((r) => r.json()),
+          ]);
+
+          if (settingsData.success) {
+            const d = settingsData.data;
+            if ((d.llmEndpoints || []).length === 0) setIsInitialSetup(true);
+            setEndpoints(
+              (d.llmEndpoints || []).map((ep: LlmEndpoint) => ({
+                ...ep,
+                supportsVoice: ep.supportsVoice ?? false,
+                supportsRealtime: ep.supportsRealtime ?? false,
+                realtimeModel: ep.realtimeModel ?? "",
+                realtimeSystemPrompt: ep.realtimeSystemPrompt ?? "",
+                promptMode: ep.systemPrompt ? "custom" : "default",
+                realtimePromptMode: ep.realtimeSystemPrompt ? "custom" : "default",
+              })),
+            );
+            const loadedPlex = { url: d.plex?.url || "", token: d.plex?.token || "" };
+            setPlexConfig(loadedPlex);
+            const arrs: Record<string, ArrConfig> = {};
+            for (const svc of ARR_SERVICES) {
+              arrs[svc.key] = {
+                url: d[svc.key]?.url || "",
+                apiKey: d[svc.key]?.apiKey || "",
+              };
+            }
+            setArrConfigs(arrs);
+            // Snapshot the freshly loaded config so we can detect unsaved changes later
+            savedConfigRef.current = JSON.stringify({
+              endpoints: (d.llmEndpoints || []).map((ep: LlmEndpoint) => ({
+                ...ep,
+                promptMode: undefined,
+                realtimePromptMode: undefined,
+              })),
+              plex: loadedPlex,
+              arrs,
+            });
           }
-          setArrConfigs(arrs);
+          if (usersData.success) {
+            setUsers(
+              (usersData.data || []).map((u: UserEntry) => ({
+                ...u,
+                rateLimitMessages: u.rateLimitMessages ?? 100,
+                rateLimitPeriod: u.rateLimitPeriod ?? "day",
+                msgCount24h: u.msgCount24h ?? 0,
+                msgCount7d: u.msgCount7d ?? 0,
+                msgCount30d: u.msgCount30d ?? 0,
+              })),
+            );
+          }
+          if (mcpData.success) setMcpToken(mcpData.data?.token || "");
+        } else {
+          // Non-admin: load only their own MCP token
+          try {
+            const mcpData = await fetch(`/api/settings/mcp-token/user/${user.id}`).then((r) => r.json());
+            if (mcpData.success) setMcpToken(mcpData.data?.token || "");
+          } catch { /* non-fatal */ }
         }
-        if (usersData.success) {
-          setUsers(
-            (usersData.data || []).map((u: UserEntry) => ({
-              ...u,
-              rateLimitMessages: u.rateLimitMessages ?? 100,
-              rateLimitPeriod: u.rateLimitPeriod ?? "day",
-            })),
-          );
-        }
-        if (mcpData.success) setMcpToken(mcpData.data?.token || "");
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -190,7 +251,12 @@ export default function SettingsPage() {
   const handleSave = useCallback(async () => {
     setSaving(true);
     const body: Record<string, unknown> = {
-      llmEndpoints: endpoints,
+      llmEndpoints: endpoints.map(({ promptMode: _pm, realtimePromptMode: _rpm, ...ep }) => ({
+        ...ep,
+        // If user chose "default" mode, save empty string so the app default is used
+        systemPrompt: _pm === "default" ? "" : ep.systemPrompt,
+        realtimeSystemPrompt: _rpm === "default" ? "" : ep.realtimeSystemPrompt,
+      })),
       plex: { url: plexConfig.url, token: plexConfig.token },
     };
     for (const svc of ARR_SERVICES) {
@@ -206,6 +272,12 @@ export default function SettingsPage() {
       const data = await res.json();
       if (data.success) {
         setSaved(true);
+        // Update the saved snapshot so the back button no longer warns about unsaved changes
+        savedConfigRef.current = JSON.stringify({
+          endpoints: endpoints.map(({ promptMode: _pm, realtimePromptMode: _rpm, ...ep }) => ep),
+          plex: plexConfig,
+          arrs: arrConfigs,
+        });
         // In initial setup: check if critical services are now working; if so, start redirect countdown
         if (isInitialSetup && redirectCountdown === null) {
           try {
@@ -281,13 +353,31 @@ export default function SettingsPage() {
         }),
       });
       const data = await res.json();
+      const result = data.data;
       setTestResults((prev) => ({
         ...prev,
         [sectionKey]: {
-          success: data.data?.success ?? false,
-          message: data.data?.message || data.error,
+          success: result?.success ?? false,
+          message: result?.message || data.error,
         },
       }));
+      // If LLM test succeeded and capabilities were detected, update the endpoint
+      if (sectionKey === "llm" && endpointId && result?.success && result?.capabilities) {
+        const caps = result.capabilities as { supportsVoice: boolean; realtimeModel: string | null };
+        setEndpoints((prev) =>
+          prev.map((ep) => {
+            if (ep.id !== endpointId) return ep;
+            const realtimeModel = caps.realtimeModel ?? ep.realtimeModel ?? "";
+            return {
+              ...ep,
+              supportsVoice: caps.supportsVoice,
+              supportsRealtime: realtimeModel !== "",
+              realtimeModel,
+            };
+          }),
+        );
+        setSaved(false);
+      }
     } catch {
       setTestResults((prev) => ({
         ...prev,
@@ -309,7 +399,13 @@ export default function SettingsPage() {
         model: "gpt-4.1",
         systemPrompt: "",
         enabled: true,
-        isDefault: prev.length === 0, // First endpoint is default by default
+        isDefault: prev.length === 0,
+        supportsVoice: false,
+        supportsRealtime: false,
+        realtimeModel: "",
+        realtimeSystemPrompt: "",
+        promptMode: "default" as const,
+        realtimePromptMode: "default" as const,
       },
     ]);
     setSaved(false);
@@ -339,6 +435,20 @@ export default function SettingsPage() {
     setMcpTokenLoading(true);
     try {
       const res = await fetch("/api/settings/mcp-token", { method: "POST" });
+      const data = await res.json();
+      if (data.success) setMcpToken(data.data.token);
+    } catch {
+      // Silent fail
+    } finally {
+      setMcpTokenLoading(false);
+    }
+  }
+
+  async function regenerateOwnMcpToken() {
+    if (!currentUser) return;
+    setMcpTokenLoading(true);
+    try {
+      const res = await fetch(`/api/settings/mcp-token/user/${currentUser.id}`, { method: "POST" });
       const data = await res.json();
       if (data.success) setMcpToken(data.data.token);
     } catch {
@@ -466,6 +576,15 @@ export default function SettingsPage() {
             onClick={() => {
               if (isInitialSetup && redirectCountdown === null) {
                 if (!window.confirm("Setup is not complete. Are you sure you want to leave?")) return;
+              } else if (savedConfigRef.current) {
+                const currentSnapshot = JSON.stringify({
+                  endpoints: endpoints.map(({ promptMode: _pm, realtimePromptMode: _rpm, ...ep }) => ep),
+                  plex: plexConfig,
+                  arrs: arrConfigs,
+                });
+                if (currentSnapshot !== savedConfigRef.current) {
+                  if (!window.confirm("You have unsaved changes. If you leave now they will be lost.")) return;
+                }
               }
               router.push("/chat");
             }}
@@ -496,52 +615,97 @@ export default function SettingsPage() {
           </div>
         )}
 
-        <Tabs defaultValue="llm" onValueChange={(v) => { if (v === "logs") loadLogFiles(); }}>
+        <Tabs defaultValue={isInitialSetup ? "llm" : "general"} onValueChange={(v) => { if (v === "logs") loadLogFiles(); }}>
           <TabsList>
-            <TabsTrigger value="llm">LLM Setup</TabsTrigger>
-            <TabsTrigger value="services">Plex & Arrs</TabsTrigger>
+            <TabsTrigger value="general">General</TabsTrigger>
+            {currentUser?.isAdmin && <TabsTrigger value="llm">LLM Setup</TabsTrigger>}
+            {currentUser?.isAdmin && <TabsTrigger value="services">Plex & Arrs</TabsTrigger>}
             <TabsTrigger value="mcp">MCP</TabsTrigger>
             <TabsTrigger value="users">Users</TabsTrigger>
-            <TabsTrigger value="logs">Logs</TabsTrigger>
+            {currentUser?.isAdmin && <TabsTrigger value="logs">Logs</TabsTrigger>}
           </TabsList>
 
-          {/* ===== TAB 1: LLM Setup ===== */}
+          {/* ===== TAB: General ===== */}
+          <TabsContent value="general" className="mt-4 space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Install as App (PWA)</CardTitle>
+                <CardDescription>
+                  Thinkarr can be installed as a Progressive Web App for quick access from your
+                  home screen or taskbar.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {pwaIsIos && pwaMobile ? (
+                  <p className="text-sm text-muted-foreground">
+                    To install on iOS, open Thinkarr in{" "}
+                    <span className="font-medium text-foreground">Safari</span>, tap the{" "}
+                    <span className="font-medium text-foreground">Share</span> button, then choose{" "}
+                    <span className="font-medium text-foreground">Add to Home Screen</span>.
+                    Requires iOS 16.4 or later for full functionality.
+                  </p>
+                ) : pwaInstallAvailable ? (
+                  <div className="flex items-center gap-3">
+                    <p className="flex-1 text-sm text-muted-foreground">
+                      {pwaMobile
+                        ? "Tap Install to add Thinkarr to your home screen for quick access."
+                        : "Click Install to add Thinkarr as a desktop app for quick access."}
+                    </p>
+                    <Button variant="outline" size="sm" onClick={() => triggerPwaInstall()}>
+                      <Download className="mr-2 h-4 w-4" />
+                      Install
+                    </Button>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    Installation is not currently available. This may be because the app is already
+                    installed or your browser has not yet offered the install prompt. Try reloading
+                    the page.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* ===== TAB 1: LLM Setup (admin only) ===== */}
           <TabsContent value="llm" className="mt-4 space-y-4">
             {endpoints.map((ep) => (
               <Card key={ep.id}>
                 <CardHeader className="pb-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <Input
                         value={ep.name}
                         onChange={(e) => updateEndpoint(ep.id, "name", e.target.value)}
-                        className="h-8 w-48 text-sm font-semibold"
+                        className="h-8 w-full text-sm font-semibold sm:w-48"
                       />
-                      <label className="flex items-center gap-1.5 text-sm text-muted-foreground">
-                        <input
-                          type="checkbox"
-                          checked={ep.enabled}
-                          onChange={(e) => updateEndpoint(ep.id, "enabled", e.target.checked)}
-                          className="rounded"
-                        />
-                        Enabled
-                      </label>
-                      <label className="flex items-center gap-1.5 text-sm text-muted-foreground">
-                        <input
-                          type="radio"
-                          name="defaultEndpoint"
-                          checked={ep.isDefault}
-                          onChange={() => setDefaultEndpoint(ep.id)}
-                          className="rounded"
-                        />
-                        Default
-                      </label>
+                      <div className="flex items-center gap-3">
+                        <label className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                          <input
+                            type="checkbox"
+                            checked={ep.enabled}
+                            onChange={(e) => updateEndpoint(ep.id, "enabled", e.target.checked)}
+                            className="rounded"
+                          />
+                          Enabled
+                        </label>
+                        <label className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                          <input
+                            type="radio"
+                            name="defaultEndpoint"
+                            checked={ep.isDefault}
+                            onChange={() => setDefaultEndpoint(ep.id)}
+                            className="rounded"
+                          />
+                          Default
+                        </label>
+                      </div>
                     </div>
                     <Button
                       variant="ghost"
                       size="icon"
                       onClick={() => removeEndpoint(ep.id)}
-                      className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                      className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
                     >
                       <Trash2 size={14} />
                     </Button>
@@ -573,32 +737,111 @@ export default function SettingsPage() {
                     />
                   </div>
                   <div className="space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <Label>System Prompt</Label>
-                      {ep.systemPrompt && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-6 text-xs text-muted-foreground px-2"
-                          onClick={() => {
-                            updateEndpoint(ep.id, "systemPrompt", "");
-                            setSaved(false);
-                          }}
-                        >
-                          Reset to Default
-                        </Button>
-                      )}
+                    <Label>System Prompt</Label>
+                    {/* Radio: Use Default / Use Custom */}
+                    <div className="flex gap-4 text-sm">
+                      <label className="flex items-center gap-1.5 cursor-pointer">
+                        <input
+                          type="radio"
+                          name={`promptMode-${ep.id}`}
+                          checked={(ep.promptMode ?? "default") === "default"}
+                          onChange={() => updateEndpoint(ep.id, "promptMode", "default")}
+                        />
+                        Use Default Prompt
+                      </label>
+                      <label className="flex items-center gap-1.5 cursor-pointer">
+                        <input
+                          type="radio"
+                          name={`promptMode-${ep.id}`}
+                          checked={ep.promptMode === "custom"}
+                          onChange={() => updateEndpoint(ep.id, "promptMode", "custom")}
+                        />
+                        Use Custom Prompt
+                      </label>
                     </div>
                     <Textarea
-                      value={ep.systemPrompt}
-                      onChange={(e) => updateEndpoint(ep.id, "systemPrompt", e.target.value)}
-                      placeholder={DEFAULT_SYSTEM_PROMPT}
+                      value={(ep.promptMode ?? "default") === "default" ? DEFAULT_SYSTEM_PROMPT : ep.systemPrompt}
+                      onChange={(e) => {
+                        // Auto-switch to custom when the user edits the text
+                        if ((ep.promptMode ?? "default") === "default") {
+                          updateEndpoint(ep.id, "promptMode", "custom");
+                        }
+                        updateEndpoint(ep.id, "systemPrompt", e.target.value);
+                      }}
                       rows={6}
                     />
                     <p className="text-xs text-muted-foreground">
-                      Leave blank to use the default. Use <code className="font-mono">{"{{serviceList}}"}</code> as a placeholder for the configured services list.
+                      Use <code className="font-mono">{"{{serviceList}}"}</code> as a placeholder for the configured services list.
                     </p>
                   </div>
+
+                  {/* Capability badges (auto-detected after Test Connection) */}
+                  <div className="space-y-1.5">
+                    <Label>Capabilities</Label>
+                    <div className="flex flex-wrap gap-2 text-xs">
+                      <span className={`rounded-full px-2 py-0.5 font-medium ${ep.supportsVoice ? "bg-green-500/15 text-green-600 dark:text-green-400" : "bg-muted text-muted-foreground"}`}>
+                        {ep.supportsVoice ? "✓ Voice (Whisper)" : "✗ No voice"}
+                      </span>
+                      <span className={`rounded-full px-2 py-0.5 font-medium ${ep.supportsRealtime ? "bg-green-500/15 text-green-600 dark:text-green-400" : "bg-muted text-muted-foreground"}`}>
+                        {ep.supportsRealtime ? `✓ Realtime (${ep.realtimeModel || "configured"})` : "✗ No realtime"}
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">Click Test to auto-detect capabilities.</p>
+                  </div>
+
+                  {/* Realtime model override */}
+                  <div className="space-y-1.5">
+                    <Label>Realtime Model <span className="text-muted-foreground font-normal">(optional — leave blank to disable)</span></Label>
+                    <Input
+                      value={ep.realtimeModel}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        updateEndpoint(ep.id, "realtimeModel", val);
+                        updateEndpoint(ep.id, "supportsRealtime", val !== "");
+                      }}
+                      placeholder="gpt-4o-realtime-preview-2024-12-17"
+                    />
+                  </div>
+
+                  {/* Realtime system prompt — only shown when a realtime model is set */}
+                  {ep.realtimeModel && (
+                    <div className="space-y-1.5">
+                      <Label>Realtime System Prompt</Label>
+                      <div className="flex gap-4 text-sm">
+                        <label className="flex items-center gap-1.5 cursor-pointer">
+                          <input
+                            type="radio"
+                            name={`realtimePromptMode-${ep.id}`}
+                            checked={(ep.realtimePromptMode ?? "default") === "default"}
+                            onChange={() => updateEndpoint(ep.id, "realtimePromptMode", "default")}
+                          />
+                          Use Default Realtime Prompt
+                        </label>
+                        <label className="flex items-center gap-1.5 cursor-pointer">
+                          <input
+                            type="radio"
+                            name={`realtimePromptMode-${ep.id}`}
+                            checked={ep.realtimePromptMode === "custom"}
+                            onChange={() => updateEndpoint(ep.id, "realtimePromptMode", "custom")}
+                          />
+                          Use Custom Prompt
+                        </label>
+                      </div>
+                      <Textarea
+                        value={(ep.realtimePromptMode ?? "default") === "default" ? DEFAULT_REALTIME_SYSTEM_PROMPT : ep.realtimeSystemPrompt}
+                        onChange={(e) => {
+                          if ((ep.realtimePromptMode ?? "default") === "default") {
+                            updateEndpoint(ep.id, "realtimePromptMode", "custom");
+                          }
+                          updateEndpoint(ep.id, "realtimeSystemPrompt", e.target.value);
+                        }}
+                        rows={6}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Use <code className="font-mono">{"{{serviceList}}"}</code> as a placeholder for the configured services list.
+                      </p>
+                    </div>
+                  )}
                 </CardContent>
                 <CardFooter className="flex items-center gap-3">
                   <Button
@@ -799,7 +1042,7 @@ export default function SettingsPage() {
                 </div>
 
                 <div className="space-y-1.5">
-                  <Label>Bearer Token</Label>
+                  <Label>{currentUser?.isAdmin ? "Admin Bearer Token" : "Your Bearer Token"}</Label>
                   <div className="flex items-center gap-2">
                     <Input
                       value={mcpToken}
@@ -816,7 +1059,7 @@ export default function SettingsPage() {
                     <Button
                       variant="secondary"
                       size="icon"
-                      onClick={regenerateMcpToken}
+                      onClick={currentUser?.isAdmin ? regenerateMcpToken : regenerateOwnMcpToken}
                       disabled={mcpTokenLoading}
                     >
                       {mcpTokenLoading ? <Spinner size={14} /> : <RefreshCw size={14} />}
@@ -827,30 +1070,64 @@ export default function SettingsPage() {
                   </p>
                 </div>
 
-                <div className="space-y-2">
-                  <Label>Registered Tools</Label>
-                  <div className="grid grid-cols-2 gap-2 text-sm">
-                    {[
-                      { name: "Plex", tools: ["search_library", "get_watch_history", "get_on_deck", "check_availability"] },
-                      { name: "Sonarr", tools: ["search_series", "get_calendar", "get_queue", "list_series", "monitor_series"] },
-                      { name: "Radarr", tools: ["search_movie", "list_movies", "get_queue", "monitor_movie"] },
-                      { name: "Overseerr", tools: ["search", "request_movie", "request_tv", "list_requests"] },
-                    ].map((svc) => (
-                      <div key={svc.name} className="rounded-lg border p-3">
-                        <p className="font-medium text-foreground mb-1">{svc.name}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {svc.tools.length} tool{svc.tools.length !== 1 ? "s" : ""}
-                        </p>
-                      </div>
-                    ))}
+                {currentUser?.isAdmin && (
+                  <div className="space-y-2">
+                    <Label>Registered Tools</Label>
+                    <div className="grid grid-cols-2 gap-2 text-sm">
+                      {[
+                        { name: "Plex", tools: ["search_library", "get_watch_history", "get_on_deck", "check_availability"] },
+                        { name: "Sonarr", tools: ["search_series", "get_calendar", "get_queue", "list_series", "monitor_series"] },
+                        { name: "Radarr", tools: ["search_movie", "list_movies", "get_queue", "monitor_movie"] },
+                        { name: "Overseerr", tools: ["search", "request_movie", "request_tv", "list_requests"] },
+                      ].map((svc) => (
+                        <div key={svc.name} className="rounded-lg border p-3">
+                          <p className="font-medium text-foreground mb-1">{svc.name}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {svc.tools.length} tool{svc.tools.length !== 1 ? "s" : ""}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
 
           {/* ===== TAB 4: User Settings ===== */}
           <TabsContent value="users" className="mt-4 space-y-4">
+            {/* Non-admin: read-only view of own account */}
+            {!currentUser?.isAdmin && currentUser && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg">Your Account</CardTitle>
+                  <CardDescription>Your account details.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex items-start gap-3 rounded-lg border p-3">
+                    <Avatar
+                      src={currentUser.plexAvatarUrl}
+                      fallback={currentUser.plexUsername}
+                      size="sm"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium truncate">{currentUser.plexUsername}</p>
+                      {currentUser.plexEmail && (
+                        <p className="text-xs text-muted-foreground truncate">{currentUser.plexEmail}</p>
+                      )}
+                      <div className="mt-2 flex flex-wrap gap-3">
+                        <span className="text-sm text-muted-foreground">
+                          Role: <span className="text-foreground">User</span>
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Admin: full user management */}
+            {currentUser?.isAdmin && (
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg">User Management</CardTitle>
@@ -977,6 +1254,13 @@ export default function SettingsPage() {
                             </label>
                           </div>
 
+                          {/* Message stats */}
+                          <div className="mt-2 flex flex-wrap gap-3 text-xs text-muted-foreground">
+                            <span>Messages: <span className="font-medium text-foreground">{user.msgCount24h}</span> / 24h</span>
+                            <span><span className="font-medium text-foreground">{user.msgCount7d}</span> / 7d</span>
+                            <span><span className="font-medium text-foreground">{user.msgCount30d}</span> / 30d</span>
+                          </div>
+
                           {/* Per-user MCP token */}
                           <div className="mt-2">
                             {user.mcpToken ? (
@@ -1022,9 +1306,10 @@ export default function SettingsPage() {
                 )}
               </CardContent>
             </Card>
+            )} {/* end admin user management */}
           </TabsContent>
 
-          {/* ===== TAB 5: Logs ===== */}
+          {/* ===== TAB 5: Logs (admin only) ===== */}
           <TabsContent value="logs" className="mt-4">
             <Card>
               <CardHeader>
@@ -1119,18 +1404,20 @@ export default function SettingsPage() {
           </TabsContent>
         </Tabs>
 
-        {/* Save button (global) */}
-        <div className="mt-6 flex items-center gap-3">
-          <Button onClick={handleSave} disabled={saving}>
-            {saving && <Spinner className="mr-2" size={14} />}
-            Save Changes
-          </Button>
-          {saved && (
-            <CardDescription className="text-green-500">
-              Settings saved successfully.
-            </CardDescription>
-          )}
-        </div>
+        {/* Save button (admin only) */}
+        {currentUser?.isAdmin && (
+          <div className="mt-6 flex items-center gap-3">
+            <Button onClick={handleSave} disabled={saving}>
+              {saving && <Spinner className="mr-2" size={14} />}
+              Save Changes
+            </Button>
+            {saved && (
+              <CardDescription className="text-green-500">
+                Settings saved successfully.
+              </CardDescription>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
