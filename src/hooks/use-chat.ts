@@ -58,6 +58,7 @@ export function useChat(conversationId: string | null, options?: UseChatOptions)
         toolCalls: null,
         toolCallId: null,
         toolName: null,
+        durationMs: null,
         createdAt: new Date(),
       };
       setMessages((prev) => [...prev, userMsg]);
@@ -72,6 +73,7 @@ export function useChat(conversationId: string | null, options?: UseChatOptions)
         toolCalls: null,
         toolCallId: null,
         toolName: null,
+        durationMs: null,
         createdAt: new Date(),
       };
       setMessages((prev) => [...prev, assistantMsg]);

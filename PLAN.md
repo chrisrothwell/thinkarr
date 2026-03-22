@@ -716,3 +716,28 @@ All Plex and Overseerr tools now return the same field names as the `display_tit
 | `src/lib/services/plex.ts` | New `findShowPlexKey(title, year?)` — scans all hubs, returns show-level plexKey for TV series (#117) |
 | `src/lib/tools/display-titles-tool.ts` | TV/season entries use `findShowPlexKey`; movie entries retain `searchLibrary` match (#117) |
 | `src/__tests__/lib/display-titles-tool.test.ts` | 2 new TV series tests: show buried behind episode/season hubs; season parentKey fallback (#117) |
+
+### Phase 30: Second-pass fixes for Issues #117, #126, #128
+
+Logs revealed the Phase 29 fixes were incomplete. Specific root causes were confirmed from application logs.
+
+- [x] **#117 — Watch Now still missing for Slow Horses (and any show whose seasons have decorated titles)** — Root cause confirmed by logs: `findShowPlexKey` was being called with the season-decorated display title (e.g. `"Slow Horses — Season 2"`) rather than the bare show name. Plex returned zero results for all four season-titled searches. Fix: in `display-titles-tool.ts`, prefer `t.showTitle` when provided; if absent, strip ` — Season N` decoration from `t.title` using a regex before calling `findShowPlexKey`, so Plex is always queried with the series root title. — `src/lib/tools/display-titles-tool.ts`
+
+- [x] **#126 — Tool call durations disappear from chat history** — Root cause: `durationMs` was only stored in the live `toolCalls` React state Map, which was cleared on the post-stream message reload. Historical reconstruction in `buildHistoricalToolCalls` had no source for timing data. Fix (Option B): added `duration_ms` integer column to the `messages` table; orchestrator now persists `durationMs` when saving tool result messages; `buildHistoricalToolCalls` reads `resultMsg.durationMs` and includes it in `ToolCallDisplay`. Durations now survive page reload and appear on all past messages. — `src/lib/db/schema.ts`, `drizzle/0001_add_message_duration.sql`, `src/lib/llm/orchestrator.ts`, `src/types/index.ts`, `src/components/chat/message-list.tsx`
+
+- [x] **#128 — URL encoding not robustly implemented; no test** — Root cause: `URLSearchParams.toString()` encodes spaces as `+` (application/x-www-form-urlencoded), not `%20` (RFC 3986). Some servers do not decode `+` as space in query strings, causing queries like "Slow Horses" to be misinterpreted. Fix: replaced `URLSearchParams` with explicit `encodeURIComponent()` per parameter, which produces standard `%20` encoding. Also added two regression tests verifying spaces encode as `%20` and reserved characters (`:`) encode correctly. — `src/lib/services/overseerr.ts`, `src/__tests__/lib/overseerr.test.ts`
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/tools/display-titles-tool.ts` | Use `t.showTitle ?? stripSeasonSuffix(t.title)` when calling `findShowPlexKey` (#117) |
+| `src/lib/db/schema.ts` | Added `durationMs: integer("duration_ms")` to messages table (#126) |
+| `drizzle/0001_add_message_duration.sql` | Migration: `ALTER TABLE messages ADD duration_ms integer` (#126) |
+| `drizzle/meta/0001_snapshot.json` | Drizzle snapshot for migration 0001 (#126) |
+| `drizzle/meta/_journal.json` | Added migration 0001 entry (#126) |
+| `src/lib/llm/orchestrator.ts` | `saveMessage` accepts `durationMs`; tool result saves include it (#126) |
+| `src/types/index.ts` | `Message` interface gains `durationMs: number \| null` (#126) |
+| `src/components/chat/message-list.tsx` | `buildHistoricalToolCalls` includes `durationMs` from DB (#126) |
+| `src/lib/services/overseerr.ts` | `search()` uses `encodeURIComponent` instead of `URLSearchParams` (#128) |
+| `src/__tests__/lib/overseerr.test.ts` | 2 new tests: spaces encode as `%20`, reserved chars encode correctly (#128) |

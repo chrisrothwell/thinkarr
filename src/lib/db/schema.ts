@@ -59,6 +59,7 @@ export const messages = sqliteTable("messages", {
   toolCalls: text("tool_calls"),
   toolCallId: text("tool_call_id"),
   toolName: text("tool_name"),
+  durationMs: integer("duration_ms"),
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .$defaultFn(() => new Date()),

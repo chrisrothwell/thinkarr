@@ -264,6 +264,46 @@ describe("search — issue #101: includes rating and cast from detail endpoint",
   });
 });
 
+describe("search — issue #128: query URL encoding", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("percent-encodes spaces in the query as %20, not as raw spaces or +", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ results: [], totalPages: 1 }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { search } = await import("@/lib/services/overseerr");
+    await search("Slow Horses");
+
+    const calledUrl = fetchMock.mock.calls[0][0] as string;
+    // Must not contain a raw space or a + (URLSearchParams encodes spaces as +
+    // which some servers do not decode as space).
+    expect(calledUrl).not.toContain("Slow Horses");
+    expect(calledUrl).not.toContain("Slow+Horses");
+    expect(calledUrl).toContain("Slow%20Horses");
+  });
+
+  it("percent-encodes reserved characters in the query", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ results: [], totalPages: 1 }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { search } = await import("@/lib/services/overseerr");
+    await search("Top Gun: Maverick");
+
+    const calledUrl = fetchMock.mock.calls[0][0] as string;
+    // Colon must be percent-encoded
+    expect(calledUrl).not.toContain("Top Gun: Maverick");
+    expect(calledUrl).toContain("Top%20Gun%3A%20Maverick");
+  });
+});
+
 describe("search — issue #109: pagination and hasMore", () => {
   beforeEach(() => {
     vi.resetModules();

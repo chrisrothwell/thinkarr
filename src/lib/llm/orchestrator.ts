@@ -79,7 +79,7 @@ function saveMessage(
   conversationId: string,
   role: "user" | "assistant" | "tool",
   content: string | null,
-  extra?: { toolCalls?: string; toolCallId?: string; toolName?: string },
+  extra?: { toolCalls?: string; toolCallId?: string; toolName?: string; durationMs?: number },
 ): string {
   const db = getDb();
   const id = uuidv4();
@@ -92,6 +92,7 @@ function saveMessage(
       toolCalls: extra?.toolCalls ?? null,
       toolCallId: extra?.toolCallId ?? null,
       toolName: extra?.toolName ?? null,
+      durationMs: extra?.durationMs ?? null,
     })
     .run();
 
@@ -297,6 +298,7 @@ export async function* orchestrate(
       saveMessage(conversationId, "tool", result, {
         toolCallId: tc.id,
         toolName: tc.function.name,
+        durationMs,
       });
 
       // Add to conversation for next round — the LLM needs a tool message for every tool_calls entry

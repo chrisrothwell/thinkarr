@@ -8,6 +8,13 @@
       "when": 1770653593589,
       "tag": "0000_short_gressill",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1742651582000,
+      "tag": "0001_add_message_duration",
+      "breakpoints": true
     }
   ]
 }
