@@ -93,6 +93,50 @@ jobs:
       - name: Build Docker image
         run: docker build -t thinkarr:ci-test .
 
+      - name: Schema smoke test — dirty migration state
+        # Reproduces the exact production failure from issue #134:
+        #   • All migrations are tracked in __drizzle_migrations (correct hashes)
+        #   • duration_ms is dropped from messages (simulates backup-restore)
+        #   • Container must recover via the defensive fallback in getDb()
+        #   • GET /api/health must return 200 (schema probe passes)
+        # This is the only test that exercises the full stack: real Docker image,
+        # real DB file, real startup path, real HTTP health check.
+        run: |
+          DIRTY_DIR=$(mktemp -d)
+          # Ensure cleanup even if the step fails or times out
+          trap 'docker rm -f thinkarr-dirty-test 2>/dev/null || true; rm -rf "${DIRTY_DIR}"' EXIT
+
+          # Create dirty DB using the project's own drizzle setup
+          node scripts/create-dirty-db.cjs "${DIRTY_DIR}"
+
+          # Start container with dirty DB mounted as /config
+          docker run -d \
+            --name thinkarr-dirty-test \
+            --network host \
+            -e SECURE_COOKIES=false \
+            -e NEXT_TELEMETRY_DISABLED=1 \
+            -v "${DIRTY_DIR}:/config" \
+            thinkarr:ci-test
+
+          # Poll /api/health — 200 = fallback fired and schema is intact
+          # 503 = fallback did not run and schema is still broken
+          OK=false
+          for i in $(seq 1 30); do
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/api/health 2>/dev/null || echo "000")
+            echo "Attempt ${i}/30: HTTP ${CODE}"
+            if [ "${CODE}" = "200" ]; then OK=true; break; fi
+            sleep 3
+          done
+
+          echo "--- Container logs (last 30 lines) ---"
+          docker logs thinkarr-dirty-test 2>&1 | tail -30
+
+          if [ "${OK}" != "true" ]; then
+            echo "FAIL: Container did not recover from dirty migration state within 90s"
+            exit 1
+          fi
+          echo "PASS: /api/health returned 200 — defensive fallback correctly restored duration_ms"
+
       - name: E2E tests against Docker container
         run: npm run test:e2e:docker
         env:
