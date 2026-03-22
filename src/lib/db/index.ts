@@ -28,6 +28,9 @@ let _db: ReturnType<typeof drizzle<typeof schema>> | null = null;
  * (e.g. DB restored from a backup taken before that migration ran, or a
  * crash/rollback mid-migration).
  *
+ * Emits one log line per table so startup logs give a complete schema snapshot
+ * that can be used to diagnose drift without needing shell access to the container.
+ *
  * Exported for unit testing.
  */
 export function ensureSchemaIntegrity(sqlite: Database.Database): void {
@@ -39,25 +42,34 @@ export function ensureSchemaIntegrity(sqlite: Database.Database): void {
 
   for (const table of tables) {
     const tableName = getTableName(table);
-    const actual = new Set(
+    const expectedCols = Object.values(getTableColumns(table));
+    const actualNames = new Set(
       (sqlite.prepare(`PRAGMA table_info(${tableName})`).all() as ColRow[]).map(
         (r) => r.name,
       ),
     );
 
-    for (const col of Object.values(getTableColumns(table))) {
-      if (actual.has(col.name)) continue;
+    const repaired: string[] = [];
+
+    for (const col of expectedCols) {
+      if (actualNames.has(col.name)) continue;
 
       if (col.notNull) {
         // Cannot safely synthesise a backfill value for NOT NULL columns.
         // Crash loudly — the operator must restore the missing migration or
         // manually run the ALTER TABLE SQL before restarting.
-        const msg =
+        logger.error("Schema integrity failure — NOT NULL column missing", {
+          tableName,
+          column: col.name,
+          expectedColumns: expectedCols.map((c) => c.name),
+          actualColumns: [...actualNames],
+          hint: "The migration may not have applied cleanly. Verify __drizzle_migrations and run the migration SQL manually, then restart.",
+        });
+        throw new Error(
           `Schema integrity failure: "${tableName}"."${col.name}" is NOT NULL ` +
-          `and cannot be auto-repaired. Check __drizzle_migrations, ensure ` +
-          `the migration ran successfully, then restart.`;
-        logger.error(msg);
-        throw new Error(msg);
+            `and cannot be auto-repaired. Check __drizzle_migrations, ensure ` +
+            `the migration ran successfully, then restart.`,
+        );
       }
 
       // Nullable column — safe to add; existing rows receive NULL.
@@ -65,10 +77,26 @@ export function ensureSchemaIntegrity(sqlite: Database.Database): void {
       sqlite.exec(
         `ALTER TABLE \`${tableName}\` ADD COLUMN \`${col.name}\` ${typeSql}`,
       );
-      logger.warn(
-        `Schema drift corrected: added missing nullable column "${col.name}" to "${tableName}"`,
-        { tableName, column: col.name, type: typeSql },
-      );
+      repaired.push(col.name);
+      logger.warn("Schema drift corrected: added missing nullable column", {
+        tableName,
+        column: col.name,
+        type: typeSql,
+      });
+    }
+
+    // One log line per table — gives a full schema snapshot at startup.
+    if (repaired.length === 0) {
+      logger.info(`Schema integrity — ${tableName}`, {
+        columns: expectedCols.length,
+        status: "OK",
+      });
+    } else {
+      logger.info(`Schema integrity — ${tableName}`, {
+        columns: expectedCols.length,
+        repaired,
+        status: "repaired",
+      });
     }
   }
 }
@@ -80,19 +108,74 @@ export function getDb() {
     sqlite.pragma("journal_mode = WAL");
     sqlite.pragma("foreign_keys = ON");
     _db = drizzle(sqlite, { schema });
-    logger.info("Database initialized", { path: DB_PATH });
 
-    // Auto-run migrations on first connection
+    // ── 1. File metadata ─────────────────────────────────────────────────────
+    // Logged first so it appears in output even if a later step crashes.
+    // mtime and size reveal whether the DB file was recently replaced (e.g.
+    // restored from a backup), which is the root cause of dirty-migration states.
+    const { sqliteVersion } = sqlite
+      .prepare("SELECT sqlite_version() AS sqliteVersion")
+      .get() as { sqliteVersion: string };
+    const dbStat = fs.existsSync(DB_PATH) ? fs.statSync(DB_PATH) : null;
+    logger.info("Database initializing", {
+      path: DB_PATH,
+      sqliteVersion,
+      sizeBytes: dbStat?.size ?? 0,
+      mtime: dbStat?.mtime?.toISOString() ?? "n/a",
+    });
+
+    // ── 2. Migration state BEFORE migrate() ──────────────────────────────────
+    // Knowing which migrations were already tracked lets you spot the dirty state:
+    // "migration 0001 was applied 3 days ago but the column is missing today."
+    type MigRow = { hash: string };
     const migrationsPath = path.join(process.cwd(), "drizzle");
-    if (fs.existsSync(migrationsPath)) {
-      migrate(drizzle(sqlite), { migrationsFolder: migrationsPath });
-      logger.info("Database migrations applied", { migrationsPath });
+    const hasMigrationsTable = !!sqlite
+      .prepare(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='__drizzle_migrations'",
+      )
+      .get();
+
+    let beforeHashes = new Set<string>();
+    if (hasMigrationsTable) {
+      const before = sqlite
+        .prepare("SELECT hash FROM __drizzle_migrations ORDER BY created_at")
+        .all() as MigRow[];
+      beforeHashes = new Set(before.map((m) => m.hash));
+      logger.info("Migration tracking: previously applied", {
+        count: before.length,
+        hashes: before.map((m) => m.hash),
+      });
+    } else {
+      logger.info("Migration tracking: fresh database (no __drizzle_migrations table yet)");
     }
 
-    // Verify every column in schema.ts exists in the live database.
-    // Catches dirty-migration states where __drizzle_migrations records a
-    // migration as applied but the ALTER TABLE SQL never ran.
+    // ── 3. Run migrations ────────────────────────────────────────────────────
+    if (fs.existsSync(migrationsPath)) {
+      migrate(drizzle(sqlite), { migrationsFolder: migrationsPath });
+
+      // Log exactly which migrations ran so the distinction between
+      // "already applied" and "newly applied" is unambiguous in the output.
+      const after = sqlite
+        .prepare("SELECT hash FROM __drizzle_migrations ORDER BY created_at")
+        .all() as MigRow[];
+      const newlyApplied = after.filter((m) => !beforeHashes.has(m.hash));
+
+      if (newlyApplied.length > 0) {
+        logger.info("Migrations applied", {
+          count: newlyApplied.length,
+          hashes: newlyApplied.map((m) => m.hash),
+        });
+      } else {
+        logger.info("Migrations: schema already up to date", {
+          totalApplied: after.length,
+        });
+      }
+    }
+
+    // ── 4. Schema integrity check ────────────────────────────────────────────
+    // Logs one line per table (OK / repaired / throws on NOT NULL drift).
     ensureSchemaIntegrity(sqlite);
+    logger.info("Database ready");
   }
   return _db;
 }

@@ -934,3 +934,75 @@ column is somehow missing, crashing loudly is the correct and safe behaviour.
 | `src/lib/db/index.ts` | Generic `ensureSchemaIntegrity`: introspects all schema tables; auto-fixes nullable, throws for NOT NULL; exported for tests |
 | `src/app/api/health/route.ts` | Probes all 5 schema tables (not just messages.duration_ms); add new tables here as schema grows |
 | `src/__tests__/db/migrations.test.ts` | Replaced 2 hardcoded duration_ms tests with 4 generic ensureSchemaIntegrity tests |
+
+### Phase 35: Structured startup diagnostics for DB troubleshooting
+
+Without startup logs, diagnosing a production schema corruption requires shell access to the
+container to manually run PRAGMA queries. This phase adds a structured diagnostic log sequence
+to `getDb()` so that the information needed to understand any DB state is captured in the
+application logs the moment the container starts.
+
+The log sequence emits four sections in order:
+
+**1. File metadata** (always first — appears in logs even if a later step crashes):
+- `path`, `sqliteVersion`, `sizeBytes`, `mtime`
+- `mtime` is the key field: a file modification time from hours or days before the migration
+  was added is the clearest signal that the DB file was restored from a backup, which is
+  the root cause of dirty-migration states.
+
+**2. Migration state before `migrate()` runs**:
+- If `__drizzle_migrations` exists: logs `count` and `hashes` of all already-applied migrations.
+- If fresh DB: logs "no `__drizzle_migrations` table yet".
+- This makes the dirty state immediately visible: "migration 0001 applied 3 days ago but
+  `duration_ms` is missing today" — the migration was tracked before the backup was restored.
+
+**3. What `migrate()` actually did**:
+- Distinguishes "newly applied" (lists hashes) from "already up to date" (no change).
+- Previously both cases emitted the same `"Database migrations applied"` message, making it
+  impossible to tell from logs whether any SQL actually ran.
+
+**4. Per-table schema integrity result** (one line per table from `ensureSchemaIntegrity`):
+- `{ columns: N, status: "OK" }` — table is healthy.
+- `{ columns: N, repaired: ["col"], status: "repaired" }` — drift corrected.
+- For NOT NULL drift: logs `error` with `expectedColumns`, `actualColumns`, and a `hint`
+  before throwing, giving the full context needed to write the repair SQL manually.
+
+Final `"Database ready"` line confirms all checks passed and the app is serving correctly.
+
+#### Sample log output — healthy startup after migration
+
+```
+[info] Database initializing { path: "/config/thinkarr.db", sqliteVersion: "3.46.1", sizeBytes: 245760, mtime: "2026-03-22T14:00:00.000Z" }
+[info] Migration tracking: previously applied { count: 1, hashes: ["<hash-0000>"] }
+[info] Migrations applied { count: 1, hashes: ["<hash-0001>"] }
+[info] Schema integrity — app_config { columns: 4, status: "OK" }
+[info] Schema integrity — users { columns: 8, status: "OK" }
+[info] Schema integrity — sessions { columns: 4, status: "OK" }
+[info] Schema integrity — conversations { columns: 5, status: "OK" }
+[info] Schema integrity — messages { columns: 9, status: "OK" }
+[info] Database ready
+```
+
+#### Sample log output — dirty migration state (backup-restore scenario)
+
+```
+[info] Database initializing { path: "/config/thinkarr.db", sqliteVersion: "3.46.1", sizeBytes: 122880, mtime: "2026-03-19T09:00:00.000Z" }
+[info] Migration tracking: previously applied { count: 2, hashes: ["<hash-0000>", "<hash-0001>"] }
+[info] Migrations: schema already up to date { totalApplied: 2 }
+[warn] Schema drift corrected: added missing nullable column { tableName: "messages", column: "duration_ms", type: "integer" }
+[info] Schema integrity — messages { columns: 9, repaired: ["duration_ms"], status: "repaired" }
+[info] Database ready
+```
+
+#### Sample log output — NOT NULL column missing (requires operator intervention)
+
+```
+[error] Schema integrity failure — NOT NULL column missing { tableName: "messages", column: "role", expectedColumns: [...], actualColumns: [...], hint: "..." }
+// process crashes — container restarts, operator alerted via HEALTHCHECK failure
+```
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/db/index.ts` | Added 4-section startup diagnostic log sequence; `ensureSchemaIntegrity` logs per-table result; NOT NULL error includes structured context |
