@@ -782,3 +782,227 @@ query ever attempted to reference `duration_ms` and the mismatch was invisible.
 |------|--------|
 | `src/__tests__/db/migrations.test.ts` | Added `duration_ms` to column check; added 2 Drizzle round-trip parity tests (#134) |
 | `src/app/api/conversations/[id]/route.ts` | Wrapped GET and DELETE DB ops in try/catch with `logger.error()` (#134) |
+
+### Phase 32: Fix issue #134 — defensive column fallback in getDb()
+
+Issue #134 persisted after Phase 31 because existing production databases already had the
+`__drizzle_migrations` record for `0001_add_message_duration` registered from an earlier
+failed or partial deployment. Drizzle's migrator skips already-registered migrations, so
+the `ALTER TABLE` SQL never ran again and `duration_ms` remained absent.
+
+- [x] **Defensive column check in `getDb()`** — After `migrate()` runs, `getDb()` now reads
+  `PRAGMA table_info(messages)` and, if `duration_ms` is absent, runs
+  `ALTER TABLE messages ADD COLUMN duration_ms INTEGER` directly. This is idempotent and
+  bypasses the migration tracking system, ensuring the column always exists on startup
+  regardless of the state of `__drizzle_migrations`. A `logger.warn` is emitted when the
+  fallback fires so the condition is observable in logs. —
+  `src/lib/db/index.ts`
+
+- [x] **Defensive fallback unit test** — New describe block
+  "migrations — duration_ms defensive fallback" in `migrations.test.ts` simulates the exact
+  failure scenario: baseline schema applied without `duration_ms`, then the fallback SQL
+  executed, verified that the column is present afterwards. —
+  `src/__tests__/db/migrations.test.ts`
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/db/index.ts` | Added post-migration PRAGMA check; runs `ALTER TABLE` if `duration_ms` is absent (#134) |
+| `src/__tests__/db/migrations.test.ts` | Added defensive fallback test covering the dirty-migration scenario (#134) |
+
+### Phase 33: Harden CI to catch faulty schema before beta ships
+
+The Phase 32 defensive fallback prevents the production outage but doesn't prevent a broken
+build from passing CI. Three gaps remained:
+
+1. **`/api/health` was schema-blind** — it returned `{status:"ok"}` unconditionally. The
+   Docker `HEALTHCHECK` and the docker-e2e `waitForServer()` check would both pass even if
+   `duration_ms` was missing, meaning a broken container could complete the CI Docker E2E
+   suite and ship as `:beta`.
+
+2. **No test exercised the full production failure chain** — the Phase 32 unit test proved
+   the fallback SQL works in isolation. It never verified that `migrate()` actually skips 0001
+   when the migration hash is in `__drizzle_migrations`, meaning the test didn't confirm the
+   fallback is *necessary*. The new test uses `ALTER TABLE DROP COLUMN` (SQLite ≥ 3.35.0) to
+   reproduce the exact state: correct hashes in tracking table, column absent from schema,
+   `migrate()` skips, fallback restores, health probe succeeds.
+
+3. **No journal ↔ SQL file consistency check** — a column could be added to schema.ts, an
+   SQL file created, but the `_journal.json` entry omitted. Drizzle silently ignores SQL files
+   not referenced in the journal. The safety linter never caught this gap.
+
+- [x] **Schema-aware health endpoint** — `GET /api/health` now calls `getDb()` and runs a
+  zero-row `SELECT id, duration_ms FROM messages LIMIT 0`. Any column absent from the live
+  schema causes a 503 instead of 200. The Docker `HEALTHCHECK` and the docker-e2e
+  `waitForServer()` (which loops until `status < 500`) will both fail, blocking the CI
+  pipeline before the image is promoted. — `src/app/api/health/route.ts`
+
+- [x] **Journal ↔ SQL file consistency checks** — Three new tests added to
+  `migration-safety.test.ts`:
+  - `_journal.json` is valid JSON with an entries array.
+  - Every journal entry has a corresponding `.sql` file (missing file = migration silently
+    skipped by drizzle).
+  - Every `.sql` file has a journal entry (file without entry = migration silently skipped).
+  — `src/__tests__/db/migration-safety.test.ts`
+
+- [x] **Exact production dirty-migration scenario test** — New describe block
+  "migrations — exact production dirty-migration scenario" in `migrations.test.ts`. The test:
+  1. Applies all migrations via drizzle (correct hashes in `__drizzle_migrations`).
+  2. Drops `duration_ms` with `ALTER TABLE DROP COLUMN` to simulate a backup-restore dirty state.
+  3. Re-runs `migrate()` and **asserts** it does NOT restore the column (proves the dirty state
+     requires the fallback — not just that the fallback works).
+  4. Applies the defensive fallback.
+  5. Runs the health-probe SELECT to confirm it succeeds.
+  — `src/__tests__/db/migrations.test.ts`
+
+- [x] **Docker dirty-DB smoke test in CI** — New step "Schema smoke test — dirty migration
+  state" added to the `docker-e2e` job in `docker-publish.yml`, between "Build Docker image"
+  and "E2E tests against Docker container". The step:
+  1. Runs `scripts/create-dirty-db.cjs` to produce a real on-disk DB file in dirty state.
+  2. Starts the freshly-built Docker image with that DB mounted as `/config`.
+  3. Polls `GET /api/health` for up to 90 s.
+  4. Fails the job if it never returns 200.
+  5. Cleans up via a shell `trap` (container + temp dir removed even on failure).
+  A `trap EXIT` guarantees port 3000 is free before the full E2E tests run in the next step.
+  — `.github/workflows/docker-publish.yml`, `scripts/create-dirty-db.cjs`
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/app/api/health/route.ts` | Schema-aware: probes `messages.duration_ms`; returns 503 on failure |
+| `src/__tests__/db/migration-safety.test.ts` | 3 new journal ↔ SQL file consistency checks |
+| `src/__tests__/db/migrations.test.ts` | New test: exact production dirty-migration chain including `migrate()` skip assertion |
+| `scripts/create-dirty-db.cjs` | New helper: creates on-disk dirty-state DB for Docker smoke test |
+| `.github/workflows/docker-publish.yml` | New step: Docker dirty-DB smoke test in docker-e2e job |
+
+### Phase 34: Make schema drift correction generic across all columns and tables
+
+Phase 33 fixed the immediate outage and hardened CI, but the defensive fallback in `getDb()`
+and the health probe in `/api/health` were still hardcoded to `messages.duration_ms`. Any new
+column added to schema.ts in a future migration would not be covered automatically.
+
+The root question: **how do we ensure all future schema changes are correctly applied?**
+
+The answer is a generic schema-integrity function that introspects the Drizzle schema at
+runtime using drizzle-orm's public API (`getTableColumns`, `getTableName`, `is`, `SQLiteTable`)
+and compares it against the live SQLite database via `PRAGMA table_info`. It handles two cases:
+
+**Safe to auto-repair (nullable columns):** The vast majority of `ALTER TABLE ADD COLUMN`
+migrations add nullable columns (no `NOT NULL` constraint). These are safe to add to existing
+tables because SQLite sets `NULL` for all existing rows. `ensureSchemaIntegrity` does this
+automatically for any nullable column in any table.
+
+**Crash loudly (NOT NULL columns):** `NOT NULL` columns cannot be auto-repaired because the
+correct backfill value for existing rows cannot be determined at runtime without the original
+migration SQL. Attempting to guess would risk data corruption. Instead the process throws
+immediately so the operator knows to intervene. The migration safety linter already enforces
+"ADD COLUMN NOT NULL must have DEFAULT", so correctly authored migrations will always be
+either nullable or carry a SQL-level DEFAULT — but that DEFAULT cannot be synthesised from
+Drizzle's `$defaultFn()` (JS-side function defaults that SQLite never sees). If a NOT NULL
+column is somehow missing, crashing loudly is the correct and safe behaviour.
+
+- [x] **Generic `ensureSchemaIntegrity(sqlite)` in `getDb()`** — Replaces the hardcoded
+  `duration_ms` PRAGMA check. After `migrate()` runs, `ensureSchemaIntegrity` iterates over
+  every table exported from `schema.ts` using `is(v, SQLiteTable)` to filter, calls
+  `getTableColumns(table)` to get the expected column set, and cross-references it against
+  `PRAGMA table_info`. Missing nullable columns are added with `ALTER TABLE ADD COLUMN
+  \`name\` TYPE`. Missing NOT NULL columns throw an error and crash the process. The function
+  is exported for direct unit testing. — `src/lib/db/index.ts`
+
+- [x] **Generic health probe in `/api/health`** — Replaces the single `messages.durationMs`
+  SELECT with explicit `SELECT * LIMIT 0` probes against every table in schema.ts. Any
+  column present in Drizzle's schema but absent from the live database surfaces as an
+  immediate SQLite error, returning 503 instead of 200 and failing the Docker HEALTHCHECK.
+  New tables must be added to the probe list when introduced. — `src/app/api/health/route.ts`
+
+- [x] **Generic `ensureSchemaIntegrity` unit tests** — Replaces the two hardcoded `duration_ms`
+  test blocks (Phase 32 "defensive fallback" and Phase 33 "exact production dirty-migration
+  scenario") with three focused tests against the exported function:
+  1. No-op when schema matches live database.
+  2. Auto-fixes any missing nullable column (drops `duration_ms`, verifies it is re-added).
+  3. Throws for a missing NOT NULL column (drops `messages.role`, verifies error message).
+  Plus one full-chain integration test: apply all migrations, drop column, re-run
+  `migrate()` (confirms skip), call `ensureSchemaIntegrity`, verify health-probe SELECT
+  succeeds. — `src/__tests__/db/migrations.test.ts`
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/db/index.ts` | Generic `ensureSchemaIntegrity`: introspects all schema tables; auto-fixes nullable, throws for NOT NULL; exported for tests |
+| `src/app/api/health/route.ts` | Probes all 5 schema tables (not just messages.duration_ms); add new tables here as schema grows |
+| `src/__tests__/db/migrations.test.ts` | Replaced 2 hardcoded duration_ms tests with 4 generic ensureSchemaIntegrity tests |
+
+### Phase 35: Structured startup diagnostics for DB troubleshooting
+
+Without startup logs, diagnosing a production schema corruption requires shell access to the
+container to manually run PRAGMA queries. This phase adds a structured diagnostic log sequence
+to `getDb()` so that the information needed to understand any DB state is captured in the
+application logs the moment the container starts.
+
+The log sequence emits four sections in order:
+
+**1. File metadata** (always first — appears in logs even if a later step crashes):
+- `path`, `sqliteVersion`, `sizeBytes`, `mtime`
+- `mtime` is the key field: a file modification time from hours or days before the migration
+  was added is the clearest signal that the DB file was restored from a backup, which is
+  the root cause of dirty-migration states.
+
+**2. Migration state before `migrate()` runs**:
+- If `__drizzle_migrations` exists: logs `count` and `hashes` of all already-applied migrations.
+- If fresh DB: logs "no `__drizzle_migrations` table yet".
+- This makes the dirty state immediately visible: "migration 0001 applied 3 days ago but
+  `duration_ms` is missing today" — the migration was tracked before the backup was restored.
+
+**3. What `migrate()` actually did**:
+- Distinguishes "newly applied" (lists hashes) from "already up to date" (no change).
+- Previously both cases emitted the same `"Database migrations applied"` message, making it
+  impossible to tell from logs whether any SQL actually ran.
+
+**4. Per-table schema integrity result** (one line per table from `ensureSchemaIntegrity`):
+- `{ columns: N, status: "OK" }` — table is healthy.
+- `{ columns: N, repaired: ["col"], status: "repaired" }` — drift corrected.
+- For NOT NULL drift: logs `error` with `expectedColumns`, `actualColumns`, and a `hint`
+  before throwing, giving the full context needed to write the repair SQL manually.
+
+Final `"Database ready"` line confirms all checks passed and the app is serving correctly.
+
+#### Sample log output — healthy startup after migration
+
+```
+[info] Database initializing { path: "/config/thinkarr.db", sqliteVersion: "3.46.1", sizeBytes: 245760, mtime: "2026-03-22T14:00:00.000Z" }
+[info] Migration tracking: previously applied { count: 1, hashes: ["<hash-0000>"] }
+[info] Migrations applied { count: 1, hashes: ["<hash-0001>"] }
+[info] Schema integrity — app_config { columns: 4, status: "OK" }
+[info] Schema integrity — users { columns: 8, status: "OK" }
+[info] Schema integrity — sessions { columns: 4, status: "OK" }
+[info] Schema integrity — conversations { columns: 5, status: "OK" }
+[info] Schema integrity — messages { columns: 9, status: "OK" }
+[info] Database ready
+```
+
+#### Sample log output — dirty migration state (backup-restore scenario)
+
+```
+[info] Database initializing { path: "/config/thinkarr.db", sqliteVersion: "3.46.1", sizeBytes: 122880, mtime: "2026-03-19T09:00:00.000Z" }
+[info] Migration tracking: previously applied { count: 2, hashes: ["<hash-0000>", "<hash-0001>"] }
+[info] Migrations: schema already up to date { totalApplied: 2 }
+[warn] Schema drift corrected: added missing nullable column { tableName: "messages", column: "duration_ms", type: "integer" }
+[info] Schema integrity — messages { columns: 9, repaired: ["duration_ms"], status: "repaired" }
+[info] Database ready
+```
+
+#### Sample log output — NOT NULL column missing (requires operator intervention)
+
+```
+[error] Schema integrity failure — NOT NULL column missing { tableName: "messages", column: "role", expectedColumns: [...], actualColumns: [...], hint: "..." }
+// process crashes — container restarts, operator alerted via HEALTHCHECK failure
+```
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/db/index.ts` | Added 4-section startup diagnostic log sequence; `ensureSchemaIntegrity` logs per-table result; NOT NULL error includes structured context |
