@@ -55,11 +55,8 @@ export async function executeTool(
   try {
     const args = JSON.parse(argsString);
     const parsed = tool.schema.parse(args);
-    logger.info("Tool call", { toolName: name, args: parsed });
     const result = await tool.handler(parsed);
-    const resultStr = JSON.stringify(result);
-    logger.info("Tool result", { toolName: name, result: resultStr.slice(0, 2000) });
-    return resultStr;
+    return JSON.stringify(result);
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : "Tool execution failed";
     logger.error("Tool execution error", { toolName: name, error: msg });
