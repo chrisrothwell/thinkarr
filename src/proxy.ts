@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-const PUBLIC_PATHS = ["/setup", "/login", "/api/setup", "/api/auth", "/api/mcp"];
+const PUBLIC_PATHS = ["/setup", "/login", "/api/setup", "/api/auth", "/api/mcp", "/api/health"];
 const SESSION_COOKIE = "thinkarr_session";
 
 export function proxy(request: NextRequest) {
