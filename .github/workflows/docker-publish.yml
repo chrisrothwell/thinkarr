@@ -118,24 +118,38 @@ jobs:
             -v "${DIRTY_DIR}:/config" \
             thinkarr:ci-test
 
-          # Poll /api/health — 200 = fallback fired and schema is intact
-          # 503 = fallback did not run and schema is still broken
+          # Poll /api/health — must ultimately return JSON {"status":"ok"}.
+          # -L follows any routing redirect (e.g. trailing-slash normalisation in
+          # the standalone production server) so we check the final response, not
+          # the first hop.  We also validate the body so that an accidental HTML
+          # redirect to /setup can't produce a false pass.
+          # 200 + body contains "ok" = ensureSchemaIntegrity ran and repaired the schema.
+          # 307 without -L / 503 = fallback did not run or schema is still broken.
           OK=false
           for i in $(seq 1 30); do
-            CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/api/health 2>/dev/null || echo "000")
-            echo "Attempt ${i}/30: HTTP ${CODE}"
-            if [ "${CODE}" = "200" ]; then OK=true; break; fi
+            BODY=$(curl -sL --max-redirs 5 -w "\n%{http_code}" \
+              http://localhost:3000/api/health 2>/dev/null || true)
+            CODE=$(printf '%s' "$BODY" | tail -1)
+            PAYLOAD=$(printf '%s' "$BODY" | head -n -1)
+            # Also capture the redirect target for diagnostics when not following
+            REDIR=$(curl -s -o /dev/null -w "%{redirect_url}" \
+              http://localhost:3000/api/health 2>/dev/null || true)
+            echo "Attempt ${i}/30: HTTP ${CODE} | redirect_url=${REDIR:-none} | body=${PAYLOAD}"
+            if [ "${CODE}" = "200" ] && printf '%s' "$PAYLOAD" | grep -q '"status":"ok"'; then
+              OK=true
+              break
+            fi
             sleep 3
           done
 
-          echo "--- Container logs (last 30 lines) ---"
-          docker logs thinkarr-dirty-test 2>&1 | tail -30
+          echo "--- Container logs (last 50 lines) ---"
+          docker logs thinkarr-dirty-test 2>&1 | tail -50
 
           if [ "${OK}" != "true" ]; then
             echo "FAIL: Container did not recover from dirty migration state within 90s"
             exit 1
           fi
-          echo "PASS: /api/health returned 200 — defensive fallback correctly restored duration_ms"
+          echo "PASS: /api/health returned 200 with status:ok — ensureSchemaIntegrity correctly restored duration_ms"
 
       - name: E2E tests against Docker container
         run: npm run test:e2e:docker
