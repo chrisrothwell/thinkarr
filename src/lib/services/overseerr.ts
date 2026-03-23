@@ -33,7 +33,7 @@ async function overseerrFetch(path: string, options?: RequestInit) {
     throw new Error(`Overseerr API error: HTTP ${res.status}${detail ? ` — ${detail}` : ""}`);
   }
   const data = await res.json();
-  logger.info("Overseerr API response", { method, url: fullUrl, status: res.status, body: JSON.stringify(data).slice(0, 5000) });
+  logger.info("Overseerr API response", { method, url: fullUrl, status: res.status });
   return data;
 }
 
@@ -57,7 +57,6 @@ export interface OverseerrSearchResult {
   title: string;
   year?: string;
   summary?: string;             // Synopsis — pass directly as summary to display_titles
-  releaseDate?: string;
   rating?: number;              // TMDB audience rating (0–10) — pass directly as rating to display_titles
   cast?: string[];              // Top cast members (up to 5) — pass directly as cast to display_titles
   mediaStatus: string;
@@ -166,7 +165,6 @@ export async function search(query: string, page = 1): Promise<{ results: Overse
       title: (r.title || r.name) as string,
       year: ((r.releaseDate || r.firstAirDate) as string | undefined)?.substring(0, 4),
       summary: r.overview as string | undefined,
-      releaseDate: (r.releaseDate || r.firstAirDate) as string | undefined,
       rating: r.voteAverage as number | undefined,
       cast: detail?.cast,
       mediaStatus: mediaStatusLabel(mediaInfo),
