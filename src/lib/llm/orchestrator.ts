@@ -299,7 +299,7 @@ export async function* orchestrate(
     // 4. Execute each tool call
     const TOOL_TIMEOUT_MS = 30_000;
     for (const tc of toolCalls) {
-      logger.info("Tool call", { conversationId, toolName: tc.function.name });
+      logger.info("Tool call", { conversationId, toolName: tc.function.name, toolCallId: tc.id });
       const startedAt = Date.now();
       yield {
         type: "tool_call_start",
@@ -321,18 +321,30 @@ export async function* orchestrate(
         ]);
       } catch (e: unknown) {
         isError = true;
+        const timedOut = e instanceof Error && e.message.startsWith("Tool call timed out");
         result = JSON.stringify({ error: e instanceof Error ? e.message : "Tool execution failed" });
-        logger.warn("Tool call error", { conversationId, toolName: tc.function.name, error: result });
+        logger.warn("Tool call error", { conversationId, toolName: tc.function.name, toolCallId: tc.id, error: result, timedOut, durationMs: Date.now() - startedAt });
       }
 
       const durationMs = Date.now() - startedAt;
 
       // Save tool result to DB (even on error — ensures the API message sequence stays valid)
-      saveMessage(conversationId, "tool", result, {
-        toolCallId: tc.id,
-        toolName: tc.function.name,
-        durationMs,
-      });
+      logger.info("Saving tool result", { conversationId, toolCallId: tc.id, toolName: tc.function.name, durationMs, isError });
+      try {
+        saveMessage(conversationId, "tool", result, {
+          toolCallId: tc.id,
+          toolName: tc.function.name,
+          durationMs,
+        });
+        logger.info("Tool result saved", { conversationId, toolCallId: tc.id, toolName: tc.function.name });
+      } catch (e: unknown) {
+        logger.error("Failed to save tool result — conversation will be broken", {
+          conversationId,
+          toolCallId: tc.id,
+          toolName: tc.function.name,
+          error: e instanceof Error ? e.message : "Unknown error",
+        });
+      }
 
       // Add to conversation for next round — the LLM needs a tool message for every tool_calls entry
       apiMessages.push({
