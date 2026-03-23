@@ -71,7 +71,40 @@ function loadHistory(conversationId: string): ChatMessage[] {
     }
   }
 
-  return messages;
+  // Repair orphaned tool calls: if the server crashed between saving the
+  // assistant message (with tool_calls) and saving the tool results, the
+  // conversation will have an unmatched tool_call_id. Every subsequent LLM
+  // request fails with HTTP 400. Inject a synthetic error result for each
+  // orphaned call so the sequence is valid and the LLM can recover.
+  const seenToolResultIds = new Set<string>(
+    messages
+      .filter((m): m is OpenAI.ChatCompletionToolMessageParam => m.role === "tool")
+      .map((m) => m.tool_call_id),
+  );
+
+  const repaired: ChatMessage[] = [];
+  for (const msg of messages) {
+    repaired.push(msg);
+    if (msg.role === "assistant" && "tool_calls" in msg && msg.tool_calls) {
+      for (const tc of msg.tool_calls) {
+        if (!seenToolResultIds.has(tc.id)) {
+          repaired.push({
+            role: "tool",
+            tool_call_id: tc.id,
+            content: JSON.stringify({ error: "Tool call did not complete. Please try again." }),
+          });
+          seenToolResultIds.add(tc.id);
+          logger.warn("Repaired orphaned tool call in conversation history", {
+            conversationId,
+            toolCallId: tc.id,
+            toolName: tc.function?.name,
+          });
+        }
+      }
+    }
+  }
+
+  return repaired;
 }
 
 /** Save a message to the DB. */
