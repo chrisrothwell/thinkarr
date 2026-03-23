@@ -1006,3 +1006,12 @@ Final `"Database ready"` line confirms all checks passed and the app is serving 
 | File | Change |
 |------|--------|
 | `src/lib/db/index.ts` | Added 4-section startup diagnostic log sequence; `ensureSchemaIntegrity` logs per-table result; NOT NULL error includes structured context |
+
+
+### Phase 36: Version Bump to 1.1.1
+
+Bumped `package.json` version from `1.1.1-beta.5` to `1.1.1` (stable release).
+
+| File | Change |
+|------|--------|
+| `package.json` | Version `1.1.1-beta.5` → `1.1.1` |
