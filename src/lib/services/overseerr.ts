@@ -101,14 +101,20 @@ export async function search(query: string, page = 1): Promise<{ results: Overse
     `/search?query=${encodeURIComponent(query)}&page=${encodeURIComponent(String(page))}&language=en`,
   );
   const raw = (data?.results || []) as Record<string, unknown>[];
+  const totalPages = (data?.totalPages as number | undefined) ?? 1;
+  // Determine hasMore before slicing so we don't lose the count
+  const hasMore = raw.length > 10 || page < totalPages;
+  // Slice to the 10 items we'll return before fetching details — avoids
+  // firing N detail calls for results that will be discarded (#151).
+  const page10 = raw.slice(0, 10);
 
-  // Fetch details for all results in parallel:
+  // Fetch details for the returned results in parallel:
   //   - movies: get cast (credits not in search results)
   //   - TV: get numberOfSeasons + cast
   interface DetailInfo { seasonCount?: number; cast?: string[] }
   const detailMap = new Map<number, DetailInfo>();
   await Promise.all(
-    raw.map(async (r) => {
+    page10.map(async (r) => {
       const isTV = r.mediaType === "tv";
       try {
         const detail = await overseerrFetch(isTV ? `/tv/${r.id as number}` : `/movie/${r.id as number}`);
@@ -128,7 +134,7 @@ export async function search(query: string, page = 1): Promise<{ results: Overse
     }),
   );
 
-  const results = raw.map((r) => {
+  const results = page10.map((r) => {
     const mediaInfo = r.mediaInfo as Record<string, unknown> | undefined;
     const isTV = r.mediaType === "tv";
     const rawSeasons = (mediaInfo?.seasons as Record<string, unknown>[]) || [];
@@ -183,10 +189,7 @@ export async function search(query: string, page = 1): Promise<{ results: Overse
     };
   });
 
-  const totalPages = (data?.totalPages as number | undefined) ?? 1;
-  // Return 10 items to the LLM; hasMore if this API page had more or there are further pages.
-  const hasMore = results.length > 10 || page < totalPages;
-  return { results: results.slice(0, 10), hasMore };
+  return { results, hasMore };
 }
 
 export interface OverseerrRequest {
