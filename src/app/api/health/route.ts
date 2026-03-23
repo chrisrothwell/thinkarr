@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 
+// Never cache or pre-render this route — every request must hit the live DB
+// so that ensureSchemaIntegrity runs and the probe reflects the real schema state.
+export const dynamic = "force-dynamic";
+
 export async function GET() {
   try {
     const db = getDb();
