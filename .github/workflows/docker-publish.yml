@@ -104,7 +104,7 @@ jobs:
         run: |
           DIRTY_DIR=$(mktemp -d)
           # Ensure cleanup even if the step fails or times out
-          trap 'docker rm -f thinkarr-dirty-test 2>/dev/null || true; rm -rf "${DIRTY_DIR}"' EXIT
+          trap 'docker rm -f thinkarr-dirty-test 2>/dev/null || true; docker run --rm -v "${DIRTY_DIR}:/cleanup" alpine sh -c "rm -rf /cleanup/*" 2>/dev/null || true; rm -rf "${DIRTY_DIR}" 2>/dev/null || true' EXIT
 
           # Create dirty DB using the project's own drizzle setup
           node scripts/create-dirty-db.mjs "${DIRTY_DIR}"
