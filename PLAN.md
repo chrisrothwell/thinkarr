@@ -163,12 +163,80 @@ Build an LLM-powered chat frontend for media management (*arr stack). Users log 
 - [x] **Plex recently added wrong titles (#14) + missing parent context (#16)** — `mapMetadata()` now handles `type: "season"`: title becomes "Show Name — Season N" (using `parentTitle`), `showTitle` and `seasonNumber` populated. `getRecentlyAdded()` fetches 20 items then deduplicates TV entries by show title, returning at most 10 unique results. Tool description updated to document `type` field and deduplication behaviour. — `src/lib/services/plex.ts`, `src/lib/tools/plex-tools.ts`
 - [x] **Wrong avatar when admin views another user's conversation (#13)** — `ownerAvatarUrl` added to `Conversation` type and returned in the admin conversations query and `POST /api/conversations` response. `chat/page.tsx` detects when the active conversation belongs to a different user and passes that user's avatar/name to `MessageList`. — `src/types/index.ts`, `src/app/api/conversations/route.ts`, `src/app/chat/page.tsx`
 - [x] **Flaky E2E test (#23)** — Added `data-testid="empty-chat-state"` to the empty chat placeholder in `MessageList`. E2E test updated to wait for this element to appear (positive assertion) instead of waiting for messages to disappear (negative, timing-sensitive). — `src/components/chat/message-list.tsx`, `tests/e2e/chat.spec.ts`
-- [x] **Carousel arrows unreliable (#6)** — Changed from `hidden group-hover:flex` to `flex opacity-0 group-hover:opacity-100` (opacity transition is more reliable than display toggling under variable load). — `src/components/chat/title-carousel.tsx`
+- [x] **Carousel arrows unreliable (#6)** — Changed from `hidden group-hover:flex` to `flex opacity-0 group-hover:opacity-100` (opacity transition is more reliable than display toggling under variable load). On mobile, hover events never fire so arrows were invisible; fixed by using `opacity-100 md:opacity-0 md:group-hover:opacity-100` so arrows are always visible below the `md` breakpoint. Buttons slightly enlarged (w-7→w-8) for prominence on touch screens. — `src/components/chat/title-carousel.tsx`
 - [x] **Thumbnails unreliable on tab return (#17)** — Extended Plex thumb proxy `Cache-Control` from `max-age=3600` to `max-age=86400, stale-while-revalidate=86400` so cached images serve immediately when returning to a tab. — `src/app/api/plex/thumb/route.ts`
 
 #### Features
-- [x] **Reset to Default system prompt (#7)** — "Reset to Default" button appears next to the System Prompt label in LLM Settings when the field is non-empty; clicking it clears the field so the system falls back to `DEFAULT_SYSTEM_PROMPT`. — `src/app/settings/page.tsx`
+- [x] **System prompt mode selector (#7)** — Replaced the "Reset to Default" button (which left the default text unviewable/uneditable) with a radio button pair: "Use Default Prompt" / "Use Custom Prompt". When "Use Default Prompt" is selected the textarea is populated with `DEFAULT_SYSTEM_PROMPT` so the user can read and start from it; editing the text automatically switches the radio to "Use Custom Prompt". Switching back to "Use Default Prompt" reverts the textarea to the default text. `promptMode` is UI-only state — saving strips it and sends `systemPrompt: ""` for default mode so future app-default updates are still picked up. — `src/app/settings/page.tsx`
 - [x] **Version number in UI (#4)** — `NEXT_PUBLIC_APP_VERSION` exposed from `package.json` via `next.config.ts` env. Version displayed as `v{version}` in the bottom-left corner of the chat page (muted, non-interactive). — `next.config.ts`, `src/app/chat/page.tsx`
+
+### Phase 15: Features & Security Hardening (#8, #15, #71)
+
+#### Features
+- [x] **User message stats in admin (#8)** — `GET /api/settings/users` now includes `msgCount24h`, `msgCount7d`, `msgCount30d` per user (using existing `countUserMessagesSince` helper). Settings > Users tab shows counts inline under the rate limit row as "Messages: N / 24h · N / 7d · N / 30d". — `src/app/api/settings/users/route.ts`, `src/app/settings/page.tsx`
+- [x] **Plex collection search (#15)** — New `plex_search_collection` MCP tool. Queries all library sections for a matching collection by name then returns the items within it. Underlying `searchCollections(name)` function iterates sections via `/library/sections`, finds a match via `/library/sections/{key}/collections?title=`, then fetches children via `/library/collections/{id}/children`. — `src/lib/services/plex.ts`, `src/lib/tools/plex-tools.ts`
+- [x] **Plex tag search (#15)** — New `plex_search_by_tag` MCP tool. Queries all movie and TV show sections for items tagged with a genre/mood/custom tag using `/library/sections/{key}/all?genre=`. — `src/lib/services/plex.ts`, `src/lib/tools/plex-tools.ts`
+
+#### Security
+- [x] **Title length validation (#71)** — `POST /api/conversations` and `PATCH /api/conversations/[id]/title` now reject titles longer than 200 characters with HTTP 400. — `src/app/api/conversations/route.ts`, `src/app/api/conversations/[id]/title/route.ts`
+- [x] **Per-user API rate limiting (#71)** — New `checkUserApiRateLimit(userId)` utility (in-memory, 60 req/min per user, 1-minute sliding window). Applied to all `/api/conversations/*` and `/api/settings/*` routes; returns HTTP 429 when exceeded. Follows same pattern as existing auth IP rate limiter. — `src/lib/security/api-rate-limit.ts` (new), `src/app/api/conversations/route.ts`, `src/app/api/conversations/[id]/route.ts`, `src/app/api/conversations/[id]/title/route.ts`, `src/app/api/settings/route.ts`, `src/app/api/settings/users/route.ts`
+
+### Phase 16: PWA Support (issue #76)
+
+#### Features
+- [x] **PWA installability (#76)** — Added `public/manifest.json` (standalone display, dark theme color) and `public/sw.js` (minimal network-first service worker). Updated `layout.tsx` with `manifest` metadata and `appleWebApp` properties. New `PwaInstallBanner` component shows a dismissible banner at the top of the chat window on mobile only (`pointer: coarse` detection); on Android/Chrome it uses `beforeinstallprompt` to trigger native install, on iOS it shows manual Share → Add to Home Screen instructions (iOS 16.4+ required). New "General" settings tab has platform-aware install UI: desktop users see a redirect message, iOS users see manual steps, Android users get a direct Install button. A module-level singleton in `pwa.ts` (`storeDeferredPrompt`, `triggerPwaInstall`, `isPwaInstallAvailable`, `onPwaAvailabilityChange`) shares the deferred prompt across SPA page navigations; `isMobileDevice()` and `isIos()` helpers cover platform detection. `usePwaInstall` hook provides reactive access and registers the SW. Settings defaults to LLM Setup during initial setup, General otherwise. — `public/manifest.json` (new), `public/sw.js` (new), `src/lib/pwa.ts` (new), `src/hooks/use-pwa-install.ts` (new), `src/components/chat/pwa-install-banner.tsx` (new), `src/app/layout.tsx`, `src/app/chat/page.tsx`, `src/app/settings/page.tsx`, `src/__tests__/lib/pwa.test.ts` (new)
+
+### Phase 18: Bug Fixes & Enhancements (#15, #87, #88, #89, #90)
+
+#### Features
+- [x] **Plex multi-category tag search (#15)** — `searchByTag(tag, tagType)` extended to support `genre`, `director`, `actor`, `country`, `studio`, `contentRating`, `label`, and `mood` tag types. `TAG_TYPE_PARAM` map resolves the correct Plex API query parameter. Tool description updated with examples. — `src/lib/services/plex.ts`, `src/lib/tools/plex-tools.ts`
+- [x] **Plex get title tags (#15)** — New `getTagsForTitle(metadataKey)` function fetches all tag categories (genres, directors, actors, countries, studio, contentRating, labels) for a specific title. New `plex_get_title_tags` MCP tool registered. — `src/lib/services/plex.ts`, `src/lib/tools/plex-tools.ts`
+- [x] **Settings access for non-admin users (#90)** — Settings gear icon now visible for all users. Settings page conditionally renders admin-only tabs (LLM Setup, Plex & Arrs, Logs) and Save button. Non-admins see General, MCP (own token), and User (own account read-only) tabs. `/api/settings/mcp-token/user/[userId]` allows self-access. — `src/components/chat/sidebar.tsx`, `src/app/settings/page.tsx`, `src/app/api/settings/mcp-token/user/[userId]/route.ts`
+
+#### Bug Fixes
+- [x] **Version floating on mobile (#87)** — Fixed bottom-left version badge in chat page hidden on mobile (`hidden md:block`); version still visible in sidebar when opened. — `src/app/chat/page.tsx`
+- [x] **Default system prompt: "leaving soon" (#88)** — Added guideline: use `plex_search_collection` with `'leaving soon'` when users ask what's expiring/leaving the library. — `src/lib/llm/default-prompt.ts`
+- [x] **Overseerr titles returning Unknown (#89)** — `listRequests()` batch-fetches titles in parallel via `/movie/{tmdbId}` and `/tv/{tmdbId}` since the `/request` endpoint's media object lacks titles. Falls back gracefully on error. — `src/lib/services/overseerr.ts`
+
+#### Tests
+- [x] **`src/__tests__/lib/plex.test.ts`** — Added tests for `searchByTag` with `tagType` (country, director, default genre) and `getTagsForTitle` (full extraction, empty fields)
+- [x] **`src/__tests__/lib/overseerr.test.ts`** — New: `listRequests` title resolution (movie, TV), seasons list, graceful fallback on fetch failure
+
+### Phase 17: Realtime OpenAI-Only Guard (issue #80)
+
+#### Bug Fix
+- [x] **Realtime restricted to api.openai.com only (#80)** — ChatGPT-compatible providers (Gemini, Anthropic, local proxies) expose an OpenAI-compatible REST surface but do not implement the WebRTC-based Realtime API. Previously, `probeRealtimeSupport` would scan any endpoint's `/models` list for model IDs containing "realtime", which could falsely flag non-OpenAI endpoints as realtime-capable. Two guards added: (1) `isOpenAIEndpoint(url)` helper (exported from `test-connection.ts`) returns `true` only when the URL hostname is `api.openai.com`; `probeRealtimeSupport` returns `null` immediately for any other host. (2) `POST /api/realtime/session` checks `isOpenAIEndpoint(ep.baseUrl)` after the existing `supportsRealtime` check and returns HTTP 400 for non-OpenAI endpoints as a defence-in-depth measure. — `src/lib/services/test-connection.ts`, `src/app/api/realtime/session/route.ts`
+
+#### Tests
+- [x] **`src/__tests__/lib/services/is-openai-endpoint.test.ts`** — Unit tests for `isOpenAIEndpoint`: true for `api.openai.com`, false for Gemini/Anthropic/localhost/invalid URLs
+- [x] **`src/__tests__/api/realtime-session.test.ts`** — Two new cases: Gemini-compatible endpoint (non-openai.com host) and Anthropic endpoint both return HTTP 400 even when `supportsRealtime: true`
+
+### Phase 14: Coordinated Dependency Upgrades (issue #68)
+
+#### Dependency Upgrades
+- [x] **Vitest 3 → 4 + coverage-v8 upgrade (#64/#67)** — Bumped `vitest` from `^3.2.4` to `^4.1.0` and `@vitest/coverage-v8` from `^3.2.4` to `^4.1.0` (coupled package pair, must stay on same major). Added `vite@^6.0.0` as a direct dev dep to satisfy Vitest 4's peer dependency. All 152 unit tests pass. — `package.json`, `package-lock.json`
+- [x] **Drop redundant `eslint-plugin-jsx-a11y` direct dep** — `eslint-config-next` already bundles `eslint-plugin-jsx-a11y`; the direct entry was redundant. Removed to avoid future peer-dep conflicts. — `package.json`
+- [ ] **ESLint 9 → 10 deferred (#62)** — `eslint-plugin-react` (bundled inside `eslint-config-next@16.1.6`) uses the removed `context.getFilename()` API and is incompatible with ESLint 10. Upgrade deferred until `eslint-config-next` ships ESLint 10 support.
+
+### Phase 14: Voice & Realtime Modes (Issue #75)
+
+#### Features
+- [x] **Endpoint capability auto-detection** — `testLlm()` in `test-connection.ts` now probes `POST /audio/transcriptions` (voice) and `GET /models` (realtime model scan) after a successful connection test. `TestConnectionResponse` extended with `capabilities: { supportsVoice, realtimeModel }`. Settings UI writes detected flags back to the endpoint config on test success. — `src/lib/services/test-connection.ts`, `src/types/api.ts`, `src/app/settings/page.tsx`
+- [x] **Endpoint voice/realtime config fields** — `LlmEndpoint` extended with `supportsVoice`, `supportsRealtime`, `realtimeModel` (optional, empty = disabled), `realtimeSystemPrompt` (empty = use default). Settings UI shows auto-detected capability badges and a `realtimeModel` override input; when set, a realtime system prompt editor appears with Default/Custom mode (same pattern as text system prompt). — `src/app/api/settings/route.ts`, `src/lib/llm/client.ts`, `src/app/api/models/route.ts`, `src/app/settings/page.tsx`
+- [x] **Mode toggle in chat** — `chat/page.tsx` tracks `chatMode` ("text" | "voice" | "realtime") and `endpointCaps`. `ChatInput` shows a mode toggle pill bar when the selected endpoint supports voice or realtime; resets to "text" on model switch if the new endpoint lacks the current mode. — `src/app/chat/page.tsx`, `src/components/chat/chat-input.tsx`
+- [x] **Voice mode (Whisper STT)** — `POST /api/voice/transcribe` accepts audio file + modelId, calls `client.audio.transcriptions.create({ file, model: "whisper-1" })`, returns `{ transcript }`. `useVoiceInput` hook uses `MediaRecorder` API; `VoiceInput` component shows mic button with click-to-record-toggle, spinner while transcribing, inline error. On transcript: sends as chat message and reverts to text mode. — `src/app/api/voice/transcribe/route.ts`, `src/hooks/use-voice-input.ts`, `src/components/chat/voice-input.tsx`
+- [x] **Realtime mode (WebRTC)** — `POST /api/realtime/session` creates an ephemeral OpenAI Realtime session (calls `POST /realtime/sessions` on the endpoint, passes tools excluding `display_titles`, passes realtime system prompt). Returns `clientSecret`, `realtimeModel`, `rtcBaseUrl`. Browser hook `useRealtimeChat` performs WebRTC SDP exchange directly with OpenAI, plays remote audio, shows live transcript, handles tool calls via `POST /api/realtime/tool` (server-side tool executor reusing existing registry). — `src/app/api/realtime/session/route.ts`, `src/app/api/realtime/tool/route.ts`, `src/hooks/use-realtime-chat.ts`, `src/components/chat/realtime-chat.tsx`
+- [x] **Default realtime system prompt** — `DEFAULT_REALTIME_SYSTEM_PROMPT` added (voice-adapted: no markdown/cards, natural spoken language). `buildRealtimeSystemPrompt(customPrompt?)` follows same pattern as `buildSystemPrompt()`. — `src/lib/llm/default-prompt.ts`, `src/lib/llm/system-prompt.ts`
+- [x] **`getEndpointConfig(modelId)` helper** — New export from `src/lib/llm/client.ts` to look up the full `LlmEndpointConfig` by modelId without constructing a client (used by realtime session route). — `src/lib/llm/client.ts`
+
+#### Tests
+- [x] **`src/__tests__/api/voice-transcribe.test.ts`** — Tests for 401 (unauth), 400 (missing audio), 200 (success with mocked Whisper), 500 (API error)
+- [x] **`src/__tests__/api/realtime-session.test.ts`** — Tests for 401 (unauth), 400 (no realtime support), 400 (unknown endpoint), 200 (success with mock fetch), 502 (OpenAI returns error)
+
+### Phase 13: React 19 Upgrade Fix
+
+#### Bug Fixes
+- [x] **E2E tests #15/#16 broken by React 19.2.4 upgrade (#60)** — Fixed a race condition in `use-chat.ts` where the post-stream message reload fetch in `sendMessage`'s `finally` block could resolve after the user clicked "New Chat", overwriting the cleared state and preventing the `empty-chat-state` element from appearing. Added a `conversationIdRef` that tracks the current active conversation; the reload is now skipped (at both the pre-fetch and post-fetch stages) if the active conversation has changed since the message was sent. — `src/hooks/use-chat.ts`
 
 #### Housekeeping
 - [x] **ESLint warnings resolved (#25)** — Added `eslint-disable` comments for intentional `<img>` usage in `avatar.tsx` and `title-card.tsx`; fixed unused destructuring var in `registry.ts`; moved `options` to a ref in `use-chat.ts` to satisfy `react-hooks/exhaustive-deps` without stale closures. Zero warnings. — `src/components/ui/avatar.tsx`, `src/components/chat/title-card.tsx`, `src/lib/tools/registry.ts`, `src/hooks/use-chat.ts`
@@ -180,6 +248,9 @@ Build an LLM-powered chat frontend for media management (*arr stack). Users log 
 ├── .dockerignore                    # Excludes node_modules, .next, etc.
 ├── entrypoint.sh                    # PUID/PGID user creation + server start
 ├── docker-compose.yml               # Development/example compose (with TZ)
+├── public/
+│   ├── manifest.json                # PWA web app manifest (standalone, dark theme)
+│   └── sw.js                        # Minimal service worker (network-first, required for PWA)
 ├── drizzle/
 │   └── 0000_short_gressill.sql      # Initial migration (5 tables)
 src/
@@ -207,12 +278,17 @@ src/
 │   │   │   ├── plex-connect/route.ts # POST Plex OAuth from settings
 │   │   │   ├── plex-devices/route.ts # GET discovered Plex servers via plex.tv API
 │   │   │   └── users/route.ts       # GET list / PATCH update user settings (incl. rate limits)
+│   │   ├── realtime/
+│   │   │   ├── session/route.ts     # POST create ephemeral OpenAI Realtime session (WebRTC)
+│   │   │   └── tool/route.ts        # POST execute tool server-side during realtime session
+│   │   ├── voice/
+│   │   │   └── transcribe/route.ts  # POST audio → Whisper STT → transcript
 │   │   └── setup/
 │   │       ├── route.ts             # GET status + POST save config
 │   │       └── test-connection/
-│   │           └── route.ts         # POST test service connectivity
+│   │           └── route.ts         # POST test service connectivity (+ capability probing)
 │   ├── chat/
-│   │   └── page.tsx                 # Chat page (sidebar + model picker + messages + input)
+│   │   └── page.tsx                 # Chat page (sidebar + model picker + mode toggle + messages + input)
 │   ├── login/
 │   │   └── page.tsx                 # Plex OAuth login (redirects admin to settings if needed)
 │   ├── settings/
@@ -225,15 +301,17 @@ src/
 │   └── favicon.ico
 ├── components/
 │   ├── chat/
-│   │   ├── chat-input.tsx           # Auto-resizing textarea + send/stop buttons
+│   │   ├── chat-input.tsx           # Text/Voice/Realtime mode toggle + textarea/mic/realtime UI
 │   │   ├── message-bubble.tsx       # User/assistant message styling + avatar + tool calls + TitleCarousel interception
 │   │   ├── message-content.tsx      # Markdown rendering (react-markdown + remark-gfm)
 │   │   ├── message-list.tsx         # Scrollable messages + historical tool call reconstruction
+│   │   ├── realtime-chat.tsx        # Full-duplex voice conversation UI (WebRTC, live transcript)
 │   │   ├── service-status.tsx       # Traffic light service status (green/amber/red)
 │   │   ├── sidebar.tsx              # Collapsible sidebar + grouped conversations + service status
 │   │   ├── title-card.tsx           # Rich title card (thumbnail, status, cast, Watch Now / Request / More Info buttons)
 │   │   ├── title-carousel.tsx       # Single card or horizontal snap-scroll carousel with arrow buttons
-│   │   └── tool-call.tsx            # "Running {Action} on {Service}" + expandable details
+│   │   ├── tool-call.tsx            # "Running {Action} on {Service}" + expandable details
+│   │   └── voice-input.tsx          # Mic record/transcribe UI (click-to-toggle, spinner)
 │   └── ui/
 │       ├── avatar.tsx               # Image/fallback avatar (sm/md/lg)
 │       ├── badge.tsx                # 4 variants
@@ -247,7 +325,9 @@ src/
 ├── hooks/
 │   ├── use-auto-scroll.ts           # Auto-scroll on new messages, respects manual scroll
 │   ├── use-chat.ts                  # Messages state, SSE streaming, send/stop, model override
-│   └── use-conversations.ts         # Conversation CRUD (list, create, delete, rename, viewAll)
+│   ├── use-conversations.ts         # Conversation CRUD (list, create, delete, rename, viewAll)
+│   ├── use-realtime-chat.ts         # WebRTC realtime hook (connect, SDP, data channel, tool calls)
+│   └── use-voice-input.ts           # MediaRecorder hook (record, stop, POST to transcribe)
 ├── lib/
 │   ├── auth/
 │   │   └── session.ts               # Session create/validate/destroy + cookie management
@@ -258,9 +338,10 @@ src/
 │   │   ├── migrate.ts               # runMigrations standalone utility
 │   │   └── schema.ts               # 5 tables
 │   ├── llm/
-│   │   ├── client.ts                # OpenAI client factory (default + per-endpoint resolution)
+│   │   ├── client.ts                # OpenAI client factory (default + per-endpoint + getEndpointConfig)
+│   │   ├── default-prompt.ts        # DEFAULT_SYSTEM_PROMPT + DEFAULT_REALTIME_SYSTEM_PROMPT
 │   │   ├── orchestrator.ts          # Chat streaming engine + model override + auto-title
-│   │   └── system-prompt.ts         # Dynamic system prompt builder
+│   │   └── system-prompt.ts         # buildSystemPrompt() + buildRealtimeSystemPrompt()
 │   ├── services/
 │   │   ├── overseerr.ts             # Overseerr client (search, request, list)
 │   │   ├── plex.ts                  # Plex client (search, on deck, recently added, availability)
@@ -272,11 +353,15 @@ src/
 │   │   ├── display-titles-tool.ts   # display_titles tool (builds DisplayTitle[], resolves thumbUrl + machineId)
 │   │   ├── init.ts                  # Auto-register tools based on configured services
 │   │   ├── overseerr-tools.ts       # Overseerr tool definitions (search + list_requests; request tools removed)
-│   │   ├── plex-tools.ts            # Plex tool definitions (4 tools)
+│   │   ├── plex-tools.ts            # Plex tool definitions (6 tools: search, availability, on deck, recently added, collection, tag)
 │   │   ├── radarr-tools.ts          # Radarr tool definitions (3 tools)
 │   │   ├── registry.ts              # Tool registry (defineTool, getOpenAITools, executeTool) + tool logging
 │   │   └── sonarr-tools.ts          # Sonarr tool definitions (4 tools)
 │   ├── logger.ts                    # Winston singleton (Console + DailyRotateFile to /config/logs/)
+│   ├── pwa.ts                       # PWA banner dismissal helpers (isPwaBannerDismissed, dismiss, reset)
+│   ├── security/
+│   │   ├── api-rate-limit.ts        # Per-user in-memory rate limiter (60 req/min) for API endpoints
+│   │   └── url-validation.ts        # Service URL allowlist/blocklist validation
 │   └── utils.ts                     # cn() class merge utility
 └── types/
     ├── api.ts                       # SetupStatus, TestConnection, SetupSaveRequest types
@@ -345,12 +430,16 @@ src/
 | GET | /api/settings/logs | List log files with name/size/modified (admin) |
 | GET | /api/settings/logs/[filename] | Read last 500 lines or full log; `?download=true` streams file (admin) |
 | POST | /api/request | Submit Overseerr media request (movie or TV with optional seasons array) |
+| POST | /api/voice/transcribe | Transcribe audio file via Whisper STT (auth required) |
+| POST | /api/realtime/session | Create ephemeral OpenAI Realtime session token for WebRTC (auth required) |
+| POST | /api/realtime/tool | Execute a tool server-side during a realtime voice session (auth required) |
+| GET | /api/plex/avatar/[userId] | Server-side proxy for Plex user avatar images (auth required; fetches stored Plex.tv URL with token) |
 
 ## MCP Tools
 
 | Server | Tools |
 |--------|-------|
-| Plex | plex_search_library, plex_get_on_deck, plex_get_recently_added, plex_check_availability |
+| Plex | plex_search_library, plex_get_on_deck, plex_get_recently_added, plex_check_availability, plex_search_collection, plex_search_by_tag, plex_get_title_tags |
 | Sonarr | sonarr_search_series, sonarr_get_series_status, sonarr_get_calendar, sonarr_get_queue |
 | Radarr | radarr_search_movie, radarr_get_movie_status, radarr_get_queue |
 | Overseerr | overseerr_search, overseerr_list_requests |
@@ -364,3 +453,565 @@ src/
 | User | All query/read tools | request_movie, request_tv, monitor_series, monitor_movie | Own requests only, cannot delete others' requests |
 
 External MCP access uses bearer token (from `mcp.bearerToken` config). Optional `X-User-Id` header scopes operations to a specific user's permission level.
+
+### Phase 19: Version Bump to 1.1.1-beta.2
+
+- Bumped `package.json` and `package-lock.json` version from `1.1.0-beta.1` to `1.1.1-beta.2`.
+
+### Phase 20: Fix Docker Build Flakiness (issue #26)
+
+**Problem:** Multi-arch Docker builds using QEMU emulation for `linux/arm64` intermittently failed with `qemu: uncaught target signal 4 (Illegal instruction) - core dumped` during `npm ci`. QEMU cannot reliably emulate all CPU instructions Node.js uses when compiling native modules (`better-sqlite3`).
+
+**Fix:** Replaced single QEMU-based multi-arch build job with native runners per platform:
+- `linux/amd64` builds on `ubuntu-latest` (x86_64)
+- `linux/arm64` builds on `ubuntu-24.04-arm` (native arm64)
+
+Each platform builds and pushes by digest, then a `docker-merge` job assembles the final multi-arch manifest via `docker buildx imagetools create`.
+
+**Files changed:**
+- `.github/workflows/docker-publish.yml` — split `docker` job into matrix + added `docker-merge` job
+
+### Phase 22: Consistent Title Card Schema Across All Tools
+
+All Plex and Overseerr tools now return the same field names as the `display_titles` tool's input schema, so the LLM can pass results directly to `display_titles` without translation.
+
+#### Field renames
+
+| Tool | Old field | New field |
+|------|-----------|-----------|
+| Plex | `key` | `plexKey` |
+| Plex | `thumb` | `thumbPath` |
+| Plex | `type` ("show"/"season") | `mediaType` ("tv") |
+| Overseerr search | `id` | `overseerrId` |
+| Overseerr search | `overview` | `summary` |
+| Overseerr search | `voteAverage` | `rating` |
+| Overseerr search | `posterUrl` | `thumbPath` |
+| Overseerr search | (added) | `overseerrMediaType` (= `mediaType`) |
+| Overseerr requests | `type` | `mediaType` |
+| Overseerr requests | `posterUrl` | `thumbPath` |
+| Overseerr requests | (added) | `overseerrId` (= `tmdbId`) |
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/services/plex.ts` | Normalized `PlexSearchResult` fields; `mapMetadata` maps "show"/"season" → `mediaType: "tv"` |
+| `src/lib/services/overseerr.ts` | Normalized `OverseerrSearchResult` and `OverseerrRequest` fields |
+| `src/lib/tools/display-titles-tool.ts` | Updated description to note direct field mapping |
+| `src/lib/tools/plex-tools.ts` | Updated description for `mediaType` field |
+| `src/lib/tools/overseerr-tools.ts` | Updated descriptions for normalized field names |
+| `src/__tests__/lib/plex.test.ts` | Updated assertions for `mediaType` instead of `type` |
+| `src/__tests__/lib/overseerr.test.ts` | Updated assertions for `rating`, `thumbPath`, `overseerrId` |
+
+### Phase 21: Bug Fixes for Issues #76, #87, #88, #98, #99, #100, #101, #102, #103
+
+#### Fixed
+
+- [x] **#87 — Floating version badge visible in landscape mode** — Removed the floating `fixed bottom-2 left-2` version badge from `src/app/chat/page.tsx`. The sidebar already shows the version string; the floating badge caused it to appear twice in landscape mode when the sidebar was open. — `src/app/chat/page.tsx`
+
+- [x] **#88 — System prompt: wrong collection name for "leaving soon"** — Updated `DEFAULT_SYSTEM_PROMPT` to instruct the LLM to use the precise collection names `'Movies leaving soon'` (for movie queries) and `'Series leaving soon'` (for TV queries), or both when the question is ambiguous. — `src/lib/llm/default-prompt.ts`
+
+- [x] **#98 — Sidebar forces text wrapping instead of overlaying chat** — On mobile the sidebar is now `position: fixed` (overlays the chat area) with a semi-transparent backdrop. On desktop (`md:`) it remains `relative` so the layout flows as before. A click on the backdrop dismisses the sidebar. — `src/components/chat/sidebar.tsx`
+
+- [x] **#99 — `plex_get_title_tags` returns empty tags for series** — Tags (genre, director, etc.) are stored at the show level, not on individual seasons or episodes. `getTagsForTitle` now follows `parentKey` when the fetched item is a season, and `grandparentKey` when it is an episode, automatically fetching the parent show's metadata to retrieve the correct tags. Failure to resolve the parent falls back to the original metadata gracefully. — `src/lib/services/plex.ts`
+
+- [x] **#100 — User avatar no longer displays in chat** — Root cause: Plex.tv avatar URLs stored in the DB (`plexUser.thumb` from `/api/v2/user`) now require authentication or are otherwise unavailable when fetched directly by the browser. Fix: added a server-side proxy route `/api/plex/avatar/[userId]` that fetches the stored avatar URL using the user's Plex token and streams the image to the browser. All API endpoints that return `plexAvatarUrl` to the frontend (`getSession`, `/api/auth/callback`, `/api/settings/users`, `/api/conversations`) now return the proxy URL `/api/plex/avatar/{id}` instead of the raw Plex.tv URL. The existing `onError` fallback in `Avatar` is retained as a safety net. — `src/app/api/plex/avatar/[userId]/route.ts`, `src/lib/auth/session.ts`, `src/app/api/auth/callback/route.ts`, `src/app/api/settings/users/route.ts`, `src/app/api/conversations/route.ts`
+
+- [x] **#101 — Overseerr search returns insufficient data for title cards** — `overseerr_search` now returns `voteAverage` (rating out of 10, from TMDB data already in search results), full `overview` (synopsis, no longer truncated), and `cast` (top 5 cast members). Cast requires a detail fetch per result (`/movie/{id}` or `/tv/{id}`); these are performed in parallel alongside the existing TV detail fetch for `numberOfSeasons`. The `overseerr_list_requests` additions from the previous phase (posterUrl, tmdbId, request details) are retained. — `src/lib/services/overseerr.ts`, `src/lib/tools/overseerr-tools.ts`
+
+- [x] **#102 — LLM settings tab UI runs off screen on mobile** — Refactored the endpoint `CardHeader` row to use `flex-wrap` so the name input, Enabled checkbox, Default radio, and delete button wrap gracefully on narrow viewports instead of overflowing horizontally. The name input grows to full width on mobile (`w-full sm:w-48`). — `src/app/settings/page.tsx`
+
+- [x] **#103 — No warning when leaving Settings with unsaved changes** — Added a `savedConfigRef` (via `useRef`) that snapshots the loaded config after initial fetch and after each successful save. When the user clicks the back button, the current config is serialised and compared to the snapshot; if they differ a `window.confirm` dialog asks the user to confirm discarding changes. The existing incomplete-setup warning is preserved. — `src/app/settings/page.tsx`
+
+- [x] **#76 — PWA installation not available** — Root cause: the web app manifest lacked a correctly sized icon required by browsers before they fire `beforeinstallprompt`. Fix: added `public/icon.svg` (512×512 SVG lettermark) and registered it in `manifest.json` with `purpose: "any maskable"`. PWA installation UI remains **mobile-only**: the chat banner returns `null` when `!isMobile`, and the Settings page shows a mobile-only note on desktop instead of the install controls. — `public/manifest.json`, `public/icon.svg`, `src/components/chat/pwa-install-banner.tsx`, `src/app/settings/page.tsx`
+
+#### New / changed files
+
+| File | Change |
+|------|--------|
+| `src/app/chat/page.tsx` | Removed floating version badge |
+| `src/lib/llm/default-prompt.ts` | Updated "leaving soon" collection name guidance |
+| `src/components/chat/sidebar.tsx` | Mobile overlay sidebar with backdrop |
+| `src/lib/services/plex.ts` | `getTagsForTitle` follows parentKey/grandparentKey for seasons/episodes |
+| `src/components/ui/avatar.tsx` | Client component, `onError` fallback for broken images |
+| `src/app/api/plex/avatar/[userId]/route.ts` | New server-side avatar proxy route |
+| `src/lib/auth/session.ts` | `getSession` returns proxy URL for `plexAvatarUrl` |
+| `src/app/api/auth/callback/route.ts` | Returns proxy URL in login response |
+| `src/app/api/settings/users/route.ts` | Returns proxy URLs for all users |
+| `src/app/api/conversations/route.ts` | Returns proxy URL for `ownerAvatarUrl` |
+| `src/lib/services/overseerr.ts` | Normalized field names + rating/cast; `listRequests` includes thumbPath/overseerrId |
+| `src/lib/services/plex.ts` | Normalized field names: `plexKey`, `thumbPath`, `mediaType` ("show"→"tv") |
+| `src/lib/tools/overseerr-tools.ts` | Updated tool descriptions for normalized fields |
+| `src/lib/tools/plex-tools.ts` | Updated `plex_get_recently_added` description for `mediaType` field |
+| `src/lib/tools/display-titles-tool.ts` | Updated description: fields now match directly across Plex and Overseerr |
+| `src/app/settings/page.tsx` | Mobile-friendly LLM card header; unsaved-changes warning |
+| `public/manifest.json` | Added SVG icon entry |
+| `public/icon.svg` | New Thinkarr app icon (512×512 SVG) |
+| `src/__tests__/lib/plex.test.ts` | Updated tests for normalized field names + season/episode parent tag lookup |
+| `src/__tests__/lib/overseerr.test.ts` | Updated tests for normalized field names + rating/cast |
+
+### Phase 23: Bug Fixes for Issues #76, #101, #104 (Second Pass)
+
+#### Fixed
+
+- [x] **#76 — PWA install prompt never fires (manifest missing required PNG icons)** — Root cause: browsers (Chrome/Edge) require at least 192×192 and 512×512 PNG icons in the manifest before firing `beforeinstallprompt`; the previous fix only added an SVG icon which is insufficient. Additionally the install banner and Settings General tab were mobile-only, hiding the Install button from desktop Chrome/Edge users. Fixes: (1) generated `public/icon-192.png` (192×192) and `public/icon-512.png` (512×512) dark-theme PNG icons using a Node.js zlib-based generator; (2) added both PNG icons to `manifest.json`, keeping the SVG as a third entry; (3) removed `!isMobile` early-return from `PwaInstallBanner` so the banner appears on all devices (desktop Chrome/Edge, Android) when the deferred prompt is available — iOS-specific instructions remain mobile-only; (4) updated Settings General tab to show the Install button on desktop when `pwaInstallAvailable` is true, not just on mobile. — `public/manifest.json`, `public/icon-192.png`, `public/icon-512.png`, `src/components/chat/pwa-install-banner.tsx`, `src/app/settings/page.tsx`
+
+- [x] **#101 — Overseerr list requests does not display as title cards** — Root cause: `listRequests()` did not return a `mediaStatus` field, so the LLM could not pass the correct value to `display_titles` (which requires `"available" | "partial" | "pending" | "not_requested"`). Fix: added `mediaStatus` to `OverseerrRequest` interface, derived from the request's status (status 3/Declined → `"not_requested"`, all others → `"pending"`). Updated `overseerr_list_requests` tool description to say "ALWAYS follow with display_titles". Updated system prompt to explicitly mention calling `display_titles` after `overseerr_list_requests`. — `src/lib/services/overseerr.ts`, `src/lib/tools/overseerr-tools.ts`, `src/lib/llm/default-prompt.ts`
+
+- [x] **#101 — "Watch Now" button missing for partially-available Plex content** — Root cause: `title-card.tsx` only showed "Watch Now" for `mediaStatus === "available"`; content that exists in Plex but not all seasons (`mediaStatus === "partial"`) should also be watchable. Fix: changed the Watch Now button condition to `(title.mediaStatus === "available" || title.mediaStatus === "partial") && plexWebUrl`. — `src/components/chat/title-card.tsx`
+
+- [x] **#101 — Overseerr search thumbnail field incorrectly referenced in system prompt** — Root cause: the system prompt said `"posterUrl"` when describing Overseerr thumbnail fields, but the actual field name returned by `overseerr_search` is `"thumbPath"`. The LLM was therefore looking for a non-existent field, causing missing thumbnails. Fix: corrected the system prompt to consistently use `"thumbPath"` for Overseerr results. — `src/lib/llm/default-prompt.ts`
+
+- [x] **#104 — Browser does not prompt for microphone permissions; shows unhelpful error** — Root causes: (1) if the app is served over HTTP (not HTTPS), `navigator.mediaDevices` is undefined in modern browsers (Permissions API requires a secure context); (2) if microphone permission was previously blocked, `getUserMedia` throws immediately without re-prompting; (3) error messages were generic ("Microphone access denied") with no guidance on how to fix them. Fixes: added pre-flight checks in both `useVoiceInput.startRecording()` and `useRealtimeChat.connect()`: check `window.isSecureContext` (show HTTPS error if false), check `navigator.mediaDevices?.getUserMedia` exists (show unsupported-browser error if not). Updated catch blocks to detect `NotAllowedError`/`PermissionDeniedError` (show actionable message with browser settings instructions), `NotFoundError`/`DevicesNotFoundError` (show "no microphone found" message), and other DOMExceptions. The realtime chat no longer shows the generic "Connection failed" for permission issues. — `src/hooks/use-voice-input.ts`, `src/hooks/use-realtime-chat.ts`
+
+#### New / changed files
+
+| File | Change |
+|------|--------|
+| `public/manifest.json` | Added `icon-192.png` (192×192) and `icon-512.png` (512×512) PNG icons; fixed SVG purpose to `"any"` |
+| `public/icon-192.png` | New 192×192 PNG icon (dark theme, "T" lettermark) |
+| `public/icon-512.png` | New 512×512 PNG icon (dark theme, "T" lettermark) |
+| `src/components/chat/pwa-install-banner.tsx` | Removed `!isMobile` early-return; banner now shows on desktop when deferred prompt available |
+| `src/app/settings/page.tsx` | General tab shows Install button on desktop; removed mobile-only guard |
+| `src/lib/services/overseerr.ts` | Added `mediaStatus` field to `OverseerrRequest`; derived from request status |
+| `src/lib/tools/overseerr-tools.ts` | `overseerr_list_requests` description now says "ALWAYS follow with display_titles" |
+| `src/lib/llm/default-prompt.ts` | Fixed "posterUrl" → "thumbPath"; added explicit "including overseerr_list_requests" + mediaStatus mapping guidance |
+| `src/components/chat/title-card.tsx` | Watch Now button shown for `"partial"` mediaStatus in addition to `"available"` |
+| `src/hooks/use-voice-input.ts` | Added secure-context check, mediaDevices API check, and DOMException-specific error messages |
+| `src/hooks/use-realtime-chat.ts` | Added secure-context check, mediaDevices API check, and DOMException-specific error messages |
+| `src/__tests__/lib/overseerr.test.ts` | Added tests for `mediaStatus` field: "pending" for approved/pending-approval requests, "not_requested" for declined |
+
+### Phase 24: Second-pass fixes for #76, #101, #104 (thumbnail proxy + Permissions-Policy)
+
+#### Fixed
+
+- [x] **#101 — Overseerr thumbnails not rendering in title card (root cause)** — The TMDB thumbnail URL was correct but the image loaded as a cross-origin third-party resource in the `<img>` tag. Browser extensions (e.g. ad blockers) and some browser security policies block third-party embedded images even when the URL is valid; the image loads fine when opened in a new tab because there is no cross-origin context. Fix: created `/api/tmdb/thumb` server-side proxy route that fetches TMDB images server-side and serves them as same-origin responses (identical pattern to the existing `/api/plex/thumb` Plex image proxy). Updated `display-titles-tool.ts` to route all external `https://` thumbPaths through `/api/tmdb/thumb?url=…` instead of passing them directly to the browser. Security: session-gated, URL validated to `image.tmdb.org` HTTPS-only to prevent open-proxy abuse. — `src/app/api/tmdb/thumb/route.ts`, `src/lib/tools/display-titles-tool.ts`
+
+- [x] **#104 — Browser never prompts for microphone (root cause)** — The `Permissions-Policy: camera=(), microphone=(), geolocation=()` header in `next.config.ts` explicitly denied microphone access for all origins at the HTTP header level, before any JavaScript ran. The browser silently blocked `getUserMedia` with `NotAllowedError` without showing a permission prompt, because the feature was policy-denied by the server. Fix: removed `microphone=()` from the Permissions-Policy header. `camera=()` and `geolocation=()` are retained as those features are genuinely unused. — `next.config.ts`
+
+#### New / changed files
+
+| File | Change |
+|------|--------|
+| `next.config.ts` | Removed `microphone=()` from Permissions-Policy header |
+| `src/app/api/tmdb/thumb/route.ts` | New server-side proxy for TMDB thumbnail images |
+| `src/lib/tools/display-titles-tool.ts` | External `https://` thumbPaths routed through `/api/tmdb/thumb` proxy |
+| `src/__tests__/api/tmdb-thumb.test.ts` | 8 unit tests for the TMDB proxy route (auth, URL validation, upstream error handling, successful proxy) |
+
+### Phase 25: E2E Tests for Title Cards and Chat Experience (Issue #110)
+
+#### Added
+
+- [x] **#110 — E2E tests for title card rendering** — Added `tests/e2e/title-cards.spec.ts` covering the full `display_titles` tool-call flow end-to-end: the LLM mock returns a `display_titles` tool call, the orchestrator executes it server-side, and the resulting title cards are verified in the browser. Tests cover: "Available" card with Watch Now button, "Not Requested" card with Request button, successful request submission (Overseerr mock), and multiple titles rendered as a scrollable carousel with correct per-card status badges.
+
+- [x] **Mock server enhancements** — Extended `tests/e2e/helpers/mock-servers.ts`: (1) Plex mock now handles `GET /` returning `machineIdentifier` so the `display_titles` tool can build Plex web URLs; (2) Added Overseerr mock server handling `POST /api/v1/request` so the Request button flow is fully exercisable; (3) LLM mock extended to return streaming tool call responses (`display_titles`) when the user message matches E2E trigger phrases, and returns normal text on the second pass (after tool results arrive).
+
+- [x] **Global setup — Overseerr configured** — `tests/e2e/global-setup.ts` now includes Overseerr in the initial `POST /api/setup` call so title card request tests work without manual configuration.
+
+- [x] **`data-testid` attributes added** — Added `data-testid` to `TitleCard` (root div, status badge, Watch Now link, Request button, Requested badge) and `TitleCarousel` (scrollable container) to enable stable Playwright locators.
+
+- [x] **Playwright config** — Added `title-cards` project to `playwright.config.ts` targeting `title-cards.spec.ts` with admin session state.
+
+#### New / changed files
+
+| File | Change |
+|------|--------|
+| `tests/e2e/title-cards.spec.ts` | New — 7 E2E tests covering title card rendering, buttons, request flow, carousel |
+| `tests/e2e/helpers/mock-servers.ts` | Plex GET / for machineId; Overseerr mock server; LLM tool call simulation |
+| `tests/e2e/global-setup.ts` | Added Overseerr to initial setup call |
+| `playwright.config.ts` | Added `title-cards` project |
+| `src/components/chat/title-card.tsx` | Added data-testid to card, status badge, Watch Now, Request button, Requested badge |
+| `src/components/chat/title-carousel.tsx` | Added data-testid to scrollable container |
+
+
+### Phase 26: Version bump to 1.1.1-beta.4
+
+- Bumped `package.json` version from `1.1.1-beta.3` to `1.1.1-beta.4`
+
+### Phase 28: Plex Watch Now button for Overseerr results + Pagination (Issues #117, #109)
+
+#### Fixed
+
+- [x] **#117 — Watch Now button not shown after Overseerr search returns "Available"** — Root cause: `overseerr_search` returns results with `mediaStatus: "available"` but no `plexKey`. The Watch Now button in `title-card.tsx` requires `plexKey` + `plexMachineId` to build the `app.plex.tv` deep-link URL; without `plexKey` the button was never rendered. Fix: in `display-titles-tool.ts`, for any title that is `"available"` or `"partial"` and has no `plexKey`, run a parallel side-query to `plex.searchLibrary(title)` and match by title (case-insensitive) + year. If a match is found, inject the `plexKey` before building the `DisplayTitle` objects. The side-query is non-fatal; if Plex is unconfigured or returns no match, the button simply doesn't render (acceptable). — `src/lib/tools/display-titles-tool.ts`
+
+- [x] **#109 — Search result caps raised to 50 with pagination on all tools** — All Overseerr and Plex search functions now return up to 50 results per page (up from the previous 10–20 per-function limits) along with a `hasMore: boolean` flag so the LLM knows whether to offer "show more". A `page` parameter (1-based, optional, defaults to 1) is exposed on all relevant tools. The `display_titles` tool's `max` input cap is raised from 10 to 50 to match. Changes per function:
+  - `overseerr.search(query, page)` — passes `page=N` to the Overseerr API; caps at 50 items; derives `hasMore` from `totalPages`.
+  - `overseerr.listRequests(page)` — uses `take=50&skip=(page-1)*50`; derives `hasMore` from `pageInfo.results`.
+  - `plex.searchLibrary(query, page)` — fetches with `limit=(offset+51)` to detect overflow; returns slice + `hasMore`.
+  - `plex.getOnDeck(page)` — uses `X-Plex-Container-Start` / `X-Plex-Container-Size=51`; returns 50 items + `hasMore`.
+  - `plex.getRecentlyAdded(page)` — fetches 200 raw items, deduplicates by show title, then slices to the requested page window; returns 50 deduplicated items + `hasMore`.
+  - `plex.searchCollections(name, page)` — fetches all collection children, slices by page offset; returns 50 items + `hasMore`.
+  - `plex.searchByTag(tag, tagType, page)` — accumulates results stopping at `offset+51`; slices to page; returns 50 items + `hasMore`.
+  — `src/lib/services/overseerr.ts`, `src/lib/services/plex.ts`, `src/lib/tools/overseerr-tools.ts`, `src/lib/tools/plex-tools.ts`, `src/lib/tools/display-titles-tool.ts`
+
+#### New / changed files
+
+| File | Change |
+|------|--------|
+| `src/lib/tools/display-titles-tool.ts` | Plex side-query for available/partial titles missing plexKey; max titles raised to 50 |
+| `src/lib/services/overseerr.ts` | `search` and `listRequests` accept `page` param; return `{ results, hasMore }` |
+| `src/lib/services/plex.ts` | All search functions accept `page` param; return `{ results, hasMore }`; cap raised to 50 |
+| `src/lib/tools/overseerr-tools.ts` | `overseerr_search` and `overseerr_list_requests` expose `page` param |
+| `src/lib/tools/plex-tools.ts` | All search tools expose `page` param; descriptions updated to note 50-item pages |
+| `src/__tests__/lib/overseerr.test.ts` | Updated all tests for new `{ results, hasMore }` return shape; added pagination tests |
+| `src/__tests__/lib/plex.test.ts` | Updated all tests for new `{ results, hasMore }` return shape; added pagination tests |
+| `src/__tests__/lib/display-titles-tool.test.ts` | New — 4 unit tests for the Plex side-query (plexKey injection, no-overwrite, no-match, skip for non-available) |
+
+### Phase 27: Fix CodeQL SSRF findings (Critical)
+
+#### Fixed
+
+- **`src/app/api/tmdb/thumb/route.ts`** — Replaced `fetch(imageUrl, ...)` with `fetch(parsed.toString(), ...)`. The URL was already validated (hostname pinned to `image.tmdb.org`, protocol must be `https:`), but the raw user-supplied string was still passed to `fetch`. Using the serialised validated `URL` object breaks CodeQL's taint propagation path.
+
+- **`src/lib/services/test-connection.ts` — `probeVoiceSupport`** — Added `validateServiceUrl` guard (early return `false` on invalid URL) and reconstructed the base URL from `parsed.origin + parsed.pathname` instead of the raw user string, eliminating the SSRF taint path.
+
+- **`src/lib/services/test-connection.ts` — `probeRealtimeSupport`** — Added `validateServiceUrl` guard (early return `null` on invalid URL) and reconstructed base URL from `parsed.origin + parsed.pathname`. The existing `isOpenAIEndpoint` hostname check is preserved; the new guard and URL reconstruction satisfy CodeQL's sanitizer requirements.
+
+#### Changed files
+
+| File | Change |
+|------|--------|
+| `src/app/api/tmdb/thumb/route.ts` | Use `parsed.toString()` in `fetch` instead of raw `imageUrl` |
+| `src/lib/services/test-connection.ts` | Add `validateServiceUrl` + URL reconstruction in `probeVoiceSupport` and `probeRealtimeSupport` |
+
+### Phase 29: Bug Fixes for Issues #117, #122, #126, #127, #128
+
+#### Fixed
+
+- [x] **#117 — Watch Now button missing for TV series from Overseerr** — Phase 28 fixed movies but TV series were still broken. Root cause: `searchLibrary` (used in the original side-query) only returns the first 10 results across all hubs combined; for TV series, Plex returns episode and season hubs before the show hub, so the show-level result was missed. Season items also have modified titles ("Show — Season N") that broke the exact-match check. Fix: new `findShowPlexKey(title, year?)` in `plex.ts` scans ALL hubs without pagination, preferring show-level items (type "show") first, then falling back to a season's `parentKey` or episode's `grandparentKey`. `display-titles-tool.ts` now calls `findShowPlexKey` for TV and per-season entries; the existing `searchLibrary` match is retained for movies only. — `src/lib/services/plex.ts`, `src/lib/tools/display-titles-tool.ts`
+
+- [x] **#128 — Overseerr search fails for queries with special characters** — Root cause: the Overseerr `/search` API rejects queries whose reserved characters are not percent-encoded. While `encodeURIComponent` was previously used, `URLSearchParams` provides a more robust and idiomatic encoding approach. Fix: replaced template-literal URL construction with `new URLSearchParams({ query, page, language })` in `overseerr.search()`. — `src/lib/services/overseerr.ts`
+
+- [x] **#127 — Tool calls can get stuck (error handling + timeout + recovery)** — Three improvements:
+  1. **Timeout**: each tool execution is now race-d against a 30-second `AbortSignal.timeout` promise. If the tool exceeds 30 s the call resolves with an error JSON result instead of hanging indefinitely.
+  2. **Error recovery**: tool execution errors (thrown exceptions or timeouts) are now caught inside the orchestrator's tool call loop. A JSON error result is saved to the DB and added to `apiMessages` so the API message sequence stays valid — the LLM receives the tool error and can still reply, preventing the conversation from being permanently blocked.
+  3. **Error in card**: the `ToolResultEvent` now carries `error: boolean` and `durationMs`. The `tool_result` handler in `useChat` populates the `ToolCallDisplay` with `status: "error"` and `error: string`. `tool-call.tsx` shows a red border, red label, and inline error text (both collapsed and expanded), replacing the previous global error banner. Historical tool call errors are reconstructed from the saved JSON result. — `src/lib/llm/orchestrator.ts`, `src/types/chat.ts`, `src/hooks/use-chat.ts`, `src/components/chat/tool-call.tsx`, `src/components/chat/message-list.tsx`
+
+- [x] **#126 — Display response times and token usage per call** — Added timing and token metrics throughout the LLM pipeline:
+  - **Tool call duration**: orchestrator captures `Date.now()` before/after each tool execution and sends `durationMs` in `ToolResultEvent`. `tool-call.tsx` displays this as `Xs` or `Nms` in the card header.
+  - **LLM response duration**: orchestrator timestamps the start of each `client.chat.completions.create` call and calculates `llmDurationMs` after the stream completes.
+  - **Token usage**: requests include `stream_options: { include_usage: true }`; usage figures from the final streaming chunk are captured (`promptTokens`, `completionTokens`, `totalTokens`).
+  - **Logging**: both round completions (tool-calling) and final responses log `llmDurationMs`, `promptTokens`, `completionTokens`, `totalTokens` at `info` level.
+  - **SSE**: `DoneEvent` includes `llmDurationMs`, `promptTokens`, `completionTokens`, `totalTokens` (available to the client for future display).
+  — `src/lib/llm/orchestrator.ts`, `src/types/chat.ts`, `src/components/chat/tool-call.tsx`
+
+- [x] **#122 — Tests for non-admin user** — New unit test file covering admin vs non-admin access control:
+  - `GET /api/settings` returns 403 for unauthenticated and non-admin users, 200 for admins.
+  - `PATCH /api/settings` returns 403 for non-admin users.
+  - `GET /api/settings/users` returns 403 for non-admin users, 200 for admins.
+  - `GET /api/conversations` with and without `?all=true` confirms non-admin users only see their own conversations; `?all=true` is silently ignored for non-admins.
+  — `src/__tests__/api/non-admin-user.test.ts` (new)
+
+#### New / changed files
+
+| File | Change |
+|------|--------|
+| `src/lib/services/overseerr.ts` | `search()` uses `URLSearchParams` for query string construction (#128) |
+| `src/lib/llm/orchestrator.ts` | Tool call timeout (30 s), error capture, `durationMs` tracking, `llmDurationMs` + token usage from stream (#127, #126) |
+| `src/types/chat.ts` | `ToolCallStartEvent` gains `startedAt`; `ToolResultEvent` gains `durationMs` and `error`; `DoneEvent` gains `llmDurationMs`, `promptTokens`, `completionTokens`, `totalTokens`; `ToolCallDisplay` gains `durationMs` and `error` (#127, #126) |
+| `src/hooks/use-chat.ts` | `tool_result` handler uses `event.error` flag; populates `durationMs` and `error` on `ToolCallDisplay` (#127, #126) |
+| `src/components/chat/tool-call.tsx` | Shows duration label in card header; red border + inline error for failed tool calls (#127, #126) |
+| `src/components/chat/message-list.tsx` | Historical tool call reconstruction extracts error message from JSON result for `ToolCallDisplay.error` (#127) |
+| `src/__tests__/api/non-admin-user.test.ts` | New — 9 unit tests for non-admin access control on settings and conversations endpoints (#122) |
+| `src/lib/services/plex.ts` | New `findShowPlexKey(title, year?)` — scans all hubs, returns show-level plexKey for TV series (#117) |
+| `src/lib/tools/display-titles-tool.ts` | TV/season entries use `findShowPlexKey`; movie entries retain `searchLibrary` match (#117) |
+| `src/__tests__/lib/display-titles-tool.test.ts` | 2 new TV series tests: show buried behind episode/season hubs; season parentKey fallback (#117) |
+
+### Phase 30: Second-pass fixes for Issues #117, #126, #128
+
+Logs revealed the Phase 29 fixes were incomplete. Specific root causes were confirmed from application logs.
+
+- [x] **#117 — Watch Now still missing for Slow Horses (and any show whose seasons have decorated titles)** — Root cause confirmed by logs: `findShowPlexKey` was being called with the season-decorated display title (e.g. `"Slow Horses — Season 2"`) rather than the bare show name. Plex returned zero results for all four season-titled searches. Fix: in `display-titles-tool.ts`, prefer `t.showTitle` when provided; if absent, strip ` — Season N` decoration from `t.title` using a regex before calling `findShowPlexKey`, so Plex is always queried with the series root title. — `src/lib/tools/display-titles-tool.ts`
+
+- [x] **#126 — Tool call durations disappear from chat history** — Root cause: `durationMs` was only stored in the live `toolCalls` React state Map, which was cleared on the post-stream message reload. Historical reconstruction in `buildHistoricalToolCalls` had no source for timing data. Fix (Option B): added `duration_ms` integer column to the `messages` table; orchestrator now persists `durationMs` when saving tool result messages; `buildHistoricalToolCalls` reads `resultMsg.durationMs` and includes it in `ToolCallDisplay`. Durations now survive page reload and appear on all past messages. — `src/lib/db/schema.ts`, `drizzle/0001_add_message_duration.sql`, `src/lib/llm/orchestrator.ts`, `src/types/index.ts`, `src/components/chat/message-list.tsx`
+
+- [x] **#128 — URL encoding not robustly implemented; no test** — Root cause: `URLSearchParams.toString()` encodes spaces as `+` (application/x-www-form-urlencoded), not `%20` (RFC 3986). Some servers do not decode `+` as space in query strings, causing queries like "Slow Horses" to be misinterpreted. Fix: replaced `URLSearchParams` with explicit `encodeURIComponent()` per parameter, which produces standard `%20` encoding. Also added two regression tests verifying spaces encode as `%20` and reserved characters (`:`) encode correctly. — `src/lib/services/overseerr.ts`, `src/__tests__/lib/overseerr.test.ts`
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/tools/display-titles-tool.ts` | Use `t.showTitle ?? stripSeasonSuffix(t.title)` when calling `findShowPlexKey` (#117) |
+| `src/lib/db/schema.ts` | Added `durationMs: integer("duration_ms")` to messages table (#126) |
+| `drizzle/0001_add_message_duration.sql` | Migration: `ALTER TABLE messages ADD duration_ms integer` (#126) |
+| `drizzle/meta/0001_snapshot.json` | Drizzle snapshot for migration 0001 (#126) |
+| `drizzle/meta/_journal.json` | Added migration 0001 entry (#126) |
+| `src/lib/llm/orchestrator.ts` | `saveMessage` accepts `durationMs`; tool result saves include it (#126) |
+| `src/types/index.ts` | `Message` interface gains `durationMs: number \| null` (#126) |
+| `src/components/chat/message-list.tsx` | `buildHistoricalToolCalls` includes `durationMs` from DB (#126) |
+| `src/lib/services/overseerr.ts` | `search()` uses `encodeURIComponent` instead of `URLSearchParams` (#128) |
+| `src/__tests__/lib/overseerr.test.ts` | 2 new tests: spaces encode as `%20`, reserved chars encode correctly (#128) |
+
+### Phase 31: Fix issue #134 — schema-migration parity test gap
+
+Issue #134 ("table messages has no column named duration_ms / Failed to load messages") was
+caused by the `duration_ms` column being added to `schema.ts` in Phase 29 without a migration
+file, meaning existing databases did not receive the new column. The Phase 30 second-pass added
+the migration (`drizzle/0001_add_message_duration.sql`), fixing the immediate runtime error.
+
+This phase addresses **why the tests did not catch it**:
+
+The `migrations.test.ts` "messages has correct columns" test only asserted the presence of
+specific *known* columns (id, conversation_id, role, content, etc.). It never checked for
+`duration_ms`, so the test passed even when the migration was absent. Additionally, all
+existing test fixtures inserted rows via raw SQL (not the Drizzle ORM schema), so no Drizzle
+query ever attempted to reference `duration_ms` and the mismatch was invisible.
+
+- [x] **Add `duration_ms` to column assertion** — `messages has correct columns` now includes
+  `expect(c).toHaveProperty("duration_ms")` so a missing migration is immediately detected. —
+  `src/__tests__/db/migrations.test.ts`
+
+- [x] **Add Drizzle ORM round-trip tests** — New describe block "schema-migration parity —
+  Drizzle round-trip" performs `db.insert(schema.messages).values({...durationMs: 1234...})`
+  and `db.select()...get()` using the live Drizzle schema against a migration-initialised
+  in-memory DB. Any column present in `schema.ts` but absent from the migrations will cause
+  the insert to throw "table messages has no column named X", catching the class of bug that
+  caused #134. A second test verifies `duration_ms` defaults to `null`. —
+  `src/__tests__/db/migrations.test.ts`
+
+- [x] **No error logging in conversation message loader** — `GET /api/conversations/[id]` had
+  no try/catch around its DB queries. When SQLite threw the column error, the exception
+  propagated unhandled and Next.js absorbed it silently — nothing ever reached `logger.error()`.
+  Fix: wrapped both GET and DELETE DB paths in try/catch blocks that call `logger.error()` with
+  `conversationId`, `userId`, and the error message before returning a structured 500. —
+  `src/app/api/conversations/[id]/route.ts`
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/__tests__/db/migrations.test.ts` | Added `duration_ms` to column check; added 2 Drizzle round-trip parity tests (#134) |
+| `src/app/api/conversations/[id]/route.ts` | Wrapped GET and DELETE DB ops in try/catch with `logger.error()` (#134) |
+
+### Phase 32: Fix issue #134 — defensive column fallback in getDb()
+
+Issue #134 persisted after Phase 31 because existing production databases already had the
+`__drizzle_migrations` record for `0001_add_message_duration` registered from an earlier
+failed or partial deployment. Drizzle's migrator skips already-registered migrations, so
+the `ALTER TABLE` SQL never ran again and `duration_ms` remained absent.
+
+- [x] **Defensive column check in `getDb()`** — After `migrate()` runs, `getDb()` now reads
+  `PRAGMA table_info(messages)` and, if `duration_ms` is absent, runs
+  `ALTER TABLE messages ADD COLUMN duration_ms INTEGER` directly. This is idempotent and
+  bypasses the migration tracking system, ensuring the column always exists on startup
+  regardless of the state of `__drizzle_migrations`. A `logger.warn` is emitted when the
+  fallback fires so the condition is observable in logs. —
+  `src/lib/db/index.ts`
+
+- [x] **Defensive fallback unit test** — New describe block
+  "migrations — duration_ms defensive fallback" in `migrations.test.ts` simulates the exact
+  failure scenario: baseline schema applied without `duration_ms`, then the fallback SQL
+  executed, verified that the column is present afterwards. —
+  `src/__tests__/db/migrations.test.ts`
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/db/index.ts` | Added post-migration PRAGMA check; runs `ALTER TABLE` if `duration_ms` is absent (#134) |
+| `src/__tests__/db/migrations.test.ts` | Added defensive fallback test covering the dirty-migration scenario (#134) |
+
+### Phase 33: Harden CI to catch faulty schema before beta ships
+
+The Phase 32 defensive fallback prevents the production outage but doesn't prevent a broken
+build from passing CI. Three gaps remained:
+
+1. **`/api/health` was schema-blind** — it returned `{status:"ok"}` unconditionally. The
+   Docker `HEALTHCHECK` and the docker-e2e `waitForServer()` check would both pass even if
+   `duration_ms` was missing, meaning a broken container could complete the CI Docker E2E
+   suite and ship as `:beta`.
+
+2. **No test exercised the full production failure chain** — the Phase 32 unit test proved
+   the fallback SQL works in isolation. It never verified that `migrate()` actually skips 0001
+   when the migration hash is in `__drizzle_migrations`, meaning the test didn't confirm the
+   fallback is *necessary*. The new test uses `ALTER TABLE DROP COLUMN` (SQLite ≥ 3.35.0) to
+   reproduce the exact state: correct hashes in tracking table, column absent from schema,
+   `migrate()` skips, fallback restores, health probe succeeds.
+
+3. **No journal ↔ SQL file consistency check** — a column could be added to schema.ts, an
+   SQL file created, but the `_journal.json` entry omitted. Drizzle silently ignores SQL files
+   not referenced in the journal. The safety linter never caught this gap.
+
+- [x] **Schema-aware health endpoint** — `GET /api/health` now calls `getDb()` and runs a
+  zero-row `SELECT id, duration_ms FROM messages LIMIT 0`. Any column absent from the live
+  schema causes a 503 instead of 200. The Docker `HEALTHCHECK` and the docker-e2e
+  `waitForServer()` (which loops until `status < 500`) will both fail, blocking the CI
+  pipeline before the image is promoted. — `src/app/api/health/route.ts`
+
+- [x] **Journal ↔ SQL file consistency checks** — Three new tests added to
+  `migration-safety.test.ts`:
+  - `_journal.json` is valid JSON with an entries array.
+  - Every journal entry has a corresponding `.sql` file (missing file = migration silently
+    skipped by drizzle).
+  - Every `.sql` file has a journal entry (file without entry = migration silently skipped).
+  — `src/__tests__/db/migration-safety.test.ts`
+
+- [x] **Exact production dirty-migration scenario test** — New describe block
+  "migrations — exact production dirty-migration scenario" in `migrations.test.ts`. The test:
+  1. Applies all migrations via drizzle (correct hashes in `__drizzle_migrations`).
+  2. Drops `duration_ms` with `ALTER TABLE DROP COLUMN` to simulate a backup-restore dirty state.
+  3. Re-runs `migrate()` and **asserts** it does NOT restore the column (proves the dirty state
+     requires the fallback — not just that the fallback works).
+  4. Applies the defensive fallback.
+  5. Runs the health-probe SELECT to confirm it succeeds.
+  — `src/__tests__/db/migrations.test.ts`
+
+- [x] **Docker dirty-DB smoke test in CI** — New step "Schema smoke test — dirty migration
+  state" added to the `docker-e2e` job in `docker-publish.yml`, between "Build Docker image"
+  and "E2E tests against Docker container". The step:
+  1. Runs `scripts/create-dirty-db.cjs` to produce a real on-disk DB file in dirty state.
+  2. Starts the freshly-built Docker image with that DB mounted as `/config`.
+  3. Polls `GET /api/health` for up to 90 s.
+  4. Fails the job if it never returns 200.
+  5. Cleans up via a shell `trap` (container + temp dir removed even on failure).
+  A `trap EXIT` guarantees port 3000 is free before the full E2E tests run in the next step.
+  — `.github/workflows/docker-publish.yml`, `scripts/create-dirty-db.cjs`
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/app/api/health/route.ts` | Schema-aware: probes `messages.duration_ms`; returns 503 on failure |
+| `src/__tests__/db/migration-safety.test.ts` | 3 new journal ↔ SQL file consistency checks |
+| `src/__tests__/db/migrations.test.ts` | New test: exact production dirty-migration chain including `migrate()` skip assertion |
+| `scripts/create-dirty-db.cjs` | New helper: creates on-disk dirty-state DB for Docker smoke test |
+| `.github/workflows/docker-publish.yml` | New step: Docker dirty-DB smoke test in docker-e2e job |
+
+### Phase 34: Make schema drift correction generic across all columns and tables
+
+Phase 33 fixed the immediate outage and hardened CI, but the defensive fallback in `getDb()`
+and the health probe in `/api/health` were still hardcoded to `messages.duration_ms`. Any new
+column added to schema.ts in a future migration would not be covered automatically.
+
+The root question: **how do we ensure all future schema changes are correctly applied?**
+
+The answer is a generic schema-integrity function that introspects the Drizzle schema at
+runtime using drizzle-orm's public API (`getTableColumns`, `getTableName`, `is`, `SQLiteTable`)
+and compares it against the live SQLite database via `PRAGMA table_info`. It handles two cases:
+
+**Safe to auto-repair (nullable columns):** The vast majority of `ALTER TABLE ADD COLUMN`
+migrations add nullable columns (no `NOT NULL` constraint). These are safe to add to existing
+tables because SQLite sets `NULL` for all existing rows. `ensureSchemaIntegrity` does this
+automatically for any nullable column in any table.
+
+**Crash loudly (NOT NULL columns):** `NOT NULL` columns cannot be auto-repaired because the
+correct backfill value for existing rows cannot be determined at runtime without the original
+migration SQL. Attempting to guess would risk data corruption. Instead the process throws
+immediately so the operator knows to intervene. The migration safety linter already enforces
+"ADD COLUMN NOT NULL must have DEFAULT", so correctly authored migrations will always be
+either nullable or carry a SQL-level DEFAULT — but that DEFAULT cannot be synthesised from
+Drizzle's `$defaultFn()` (JS-side function defaults that SQLite never sees). If a NOT NULL
+column is somehow missing, crashing loudly is the correct and safe behaviour.
+
+- [x] **Generic `ensureSchemaIntegrity(sqlite)` in `getDb()`** — Replaces the hardcoded
+  `duration_ms` PRAGMA check. After `migrate()` runs, `ensureSchemaIntegrity` iterates over
+  every table exported from `schema.ts` using `is(v, SQLiteTable)` to filter, calls
+  `getTableColumns(table)` to get the expected column set, and cross-references it against
+  `PRAGMA table_info`. Missing nullable columns are added with `ALTER TABLE ADD COLUMN
+  \`name\` TYPE`. Missing NOT NULL columns throw an error and crash the process. The function
+  is exported for direct unit testing. — `src/lib/db/index.ts`
+
+- [x] **Generic health probe in `/api/health`** — Replaces the single `messages.durationMs`
+  SELECT with explicit `SELECT * LIMIT 0` probes against every table in schema.ts. Any
+  column present in Drizzle's schema but absent from the live database surfaces as an
+  immediate SQLite error, returning 503 instead of 200 and failing the Docker HEALTHCHECK.
+  New tables must be added to the probe list when introduced. — `src/app/api/health/route.ts`
+
+- [x] **Generic `ensureSchemaIntegrity` unit tests** — Replaces the two hardcoded `duration_ms`
+  test blocks (Phase 32 "defensive fallback" and Phase 33 "exact production dirty-migration
+  scenario") with three focused tests against the exported function:
+  1. No-op when schema matches live database.
+  2. Auto-fixes any missing nullable column (drops `duration_ms`, verifies it is re-added).
+  3. Throws for a missing NOT NULL column (drops `messages.role`, verifies error message).
+  Plus one full-chain integration test: apply all migrations, drop column, re-run
+  `migrate()` (confirms skip), call `ensureSchemaIntegrity`, verify health-probe SELECT
+  succeeds. — `src/__tests__/db/migrations.test.ts`
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/db/index.ts` | Generic `ensureSchemaIntegrity`: introspects all schema tables; auto-fixes nullable, throws for NOT NULL; exported for tests |
+| `src/app/api/health/route.ts` | Probes all 5 schema tables (not just messages.duration_ms); add new tables here as schema grows |
+| `src/__tests__/db/migrations.test.ts` | Replaced 2 hardcoded duration_ms tests with 4 generic ensureSchemaIntegrity tests |
+
+### Phase 35: Structured startup diagnostics for DB troubleshooting
+
+Without startup logs, diagnosing a production schema corruption requires shell access to the
+container to manually run PRAGMA queries. This phase adds a structured diagnostic log sequence
+to `getDb()` so that the information needed to understand any DB state is captured in the
+application logs the moment the container starts.
+
+The log sequence emits four sections in order:
+
+**1. File metadata** (always first — appears in logs even if a later step crashes):
+- `path`, `sqliteVersion`, `sizeBytes`, `mtime`
+- `mtime` is the key field: a file modification time from hours or days before the migration
+  was added is the clearest signal that the DB file was restored from a backup, which is
+  the root cause of dirty-migration states.
+
+**2. Migration state before `migrate()` runs**:
+- If `__drizzle_migrations` exists: logs `count` and `hashes` of all already-applied migrations.
+- If fresh DB: logs "no `__drizzle_migrations` table yet".
+- This makes the dirty state immediately visible: "migration 0001 applied 3 days ago but
+  `duration_ms` is missing today" — the migration was tracked before the backup was restored.
+
+**3. What `migrate()` actually did**:
+- Distinguishes "newly applied" (lists hashes) from "already up to date" (no change).
+- Previously both cases emitted the same `"Database migrations applied"` message, making it
+  impossible to tell from logs whether any SQL actually ran.
+
+**4. Per-table schema integrity result** (one line per table from `ensureSchemaIntegrity`):
+- `{ columns: N, status: "OK" }` — table is healthy.
+- `{ columns: N, repaired: ["col"], status: "repaired" }` — drift corrected.
+- For NOT NULL drift: logs `error` with `expectedColumns`, `actualColumns`, and a `hint`
+  before throwing, giving the full context needed to write the repair SQL manually.
+
+Final `"Database ready"` line confirms all checks passed and the app is serving correctly.
+
+#### Sample log output — healthy startup after migration
+
+```
+[info] Database initializing { path: "/config/thinkarr.db", sqliteVersion: "3.46.1", sizeBytes: 245760, mtime: "2026-03-22T14:00:00.000Z" }
+[info] Migration tracking: previously applied { count: 1, hashes: ["<hash-0000>"] }
+[info] Migrations applied { count: 1, hashes: ["<hash-0001>"] }
+[info] Schema integrity — app_config { columns: 4, status: "OK" }
+[info] Schema integrity — users { columns: 8, status: "OK" }
+[info] Schema integrity — sessions { columns: 4, status: "OK" }
+[info] Schema integrity — conversations { columns: 5, status: "OK" }
+[info] Schema integrity — messages { columns: 9, status: "OK" }
+[info] Database ready
+```
+
+#### Sample log output — dirty migration state (backup-restore scenario)
+
+```
+[info] Database initializing { path: "/config/thinkarr.db", sqliteVersion: "3.46.1", sizeBytes: 122880, mtime: "2026-03-19T09:00:00.000Z" }
+[info] Migration tracking: previously applied { count: 2, hashes: ["<hash-0000>", "<hash-0001>"] }
+[info] Migrations: schema already up to date { totalApplied: 2 }
+[warn] Schema drift corrected: added missing nullable column { tableName: "messages", column: "duration_ms", type: "integer" }
+[info] Schema integrity — messages { columns: 9, repaired: ["duration_ms"], status: "repaired" }
+[info] Database ready
+```
+
+#### Sample log output — NOT NULL column missing (requires operator intervention)
+
+```
+[error] Schema integrity failure — NOT NULL column missing { tableName: "messages", column: "role", expectedColumns: [...], actualColumns: [...], hint: "..." }
+// process crashes — container restarts, operator alerted via HEALTHCHECK failure
+```
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/db/index.ts` | Added 4-section startup diagnostic log sequence; `ensureSchemaIntegrity` logs per-table result; NOT NULL error includes structured context |
+
+
+### Phase 36: Version Bump to 1.1.1
+
+Bumped `package.json` version from `1.1.1-beta.5` to `1.1.1` (stable release).
+
+| File | Change |
+|------|--------|
+| `package.json` | Version `1.1.1-beta.5` → `1.1.1` |

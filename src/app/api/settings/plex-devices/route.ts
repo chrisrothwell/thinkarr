@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { getDb, schema } from "@/lib/db";
 import { eq } from "drizzle-orm";
+import { logger } from "@/lib/logger";
 import type { ApiResponse } from "@/types/api";
 
 export interface PlexConnection {
@@ -31,11 +32,21 @@ export async function GET(): Promise<NextResponse> {
 
   // Fetch the full user row to get the stored plexToken
   const db = getDb();
-  const user = db
-    .select({ plexToken: schema.users.plexToken })
-    .from(schema.users)
-    .where(eq(schema.users.id, session.user.id))
-    .get();
+  let user: { plexToken: string | null } | undefined;
+  try {
+    user = db
+      .select({ plexToken: schema.users.plexToken })
+      .from(schema.users)
+      .where(eq(schema.users.id, session.user.id))
+      .get();
+  } catch (e: unknown) {
+    const error = e instanceof Error ? e.message : "Database error";
+    logger.error("Failed to fetch user for plex-devices", { userId: session.user.id, error });
+    return NextResponse.json<ApiResponse>(
+      { success: false, error: "Failed to retrieve user data" },
+      { status: 500 },
+    );
+  }
 
   if (!user?.plexToken) {
     return NextResponse.json<ApiResponse>(

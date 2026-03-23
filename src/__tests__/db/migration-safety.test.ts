@@ -16,6 +16,7 @@ import fs from "fs";
 import path from "path";
 
 const DRIZZLE_DIR = path.join(process.cwd(), "drizzle");
+const JOURNAL_PATH = path.join(DRIZZLE_DIR, "meta/_journal.json");
 
 /** Tables that are intentionally dropped without recreation. Add names here to allow. */
 const ALLOWED_DROPS: string[] = [];
@@ -80,6 +81,49 @@ describe("Migration safety linter", () => {
           "Fix: add a DEFAULT value or make the column nullable.",
           "",
           ...violations,
+        ].join("\n"),
+      );
+    }
+  });
+
+  it("_journal.json is valid JSON and has an entries array", () => {
+    const raw = fs.readFileSync(JOURNAL_PATH, "utf-8");
+    const journal = JSON.parse(raw) as { entries?: unknown };
+    expect(Array.isArray(journal.entries), "_journal.json must have an entries array").toBe(true);
+  });
+
+  it("every _journal.json entry has a corresponding .sql file (missing file = migration never runs)", () => {
+    const journal = JSON.parse(fs.readFileSync(JOURNAL_PATH, "utf-8")) as {
+      entries: { tag: string }[];
+    };
+    const missing = journal.entries
+      .filter((e) => !fs.existsSync(path.join(DRIZZLE_DIR, `${e.tag}.sql`)))
+      .map((e) => `  ${e.tag}.sql`);
+    if (missing.length > 0) {
+      throw new Error(
+        [
+          "Journal entries with no matching .sql file — drizzle will skip these silently:",
+          ...missing,
+          "Fix: run `npx drizzle-kit generate` or add the missing .sql file.",
+        ].join("\n"),
+      );
+    }
+  });
+
+  it("every .sql migration file has a corresponding _journal.json entry (missing entry = migration never runs)", () => {
+    const journal = JSON.parse(fs.readFileSync(JOURNAL_PATH, "utf-8")) as {
+      entries: { tag: string }[];
+    };
+    const journalTags = new Set(journal.entries.map((e) => e.tag));
+    const missing = getSqlFiles()
+      .filter((f) => !journalTags.has(f.replace(/\.sql$/, "")))
+      .map((f) => `  ${f}`);
+    if (missing.length > 0) {
+      throw new Error(
+        [
+          "SQL files not referenced in drizzle/meta/_journal.json — drizzle will never run these:",
+          ...missing,
+          "Fix: run `npx drizzle-kit generate` to regenerate the journal, or add the entry manually.",
         ].join("\n"),
       );
     }

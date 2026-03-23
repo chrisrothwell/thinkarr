@@ -67,5 +67,13 @@ export default defineConfig({
         storageState: ADMIN_AUTH_FILE,
       },
     },
+    {
+      name: "title-cards",
+      testMatch: /title-cards\.spec\.ts/,
+      use: {
+        ...devices["Desktop Chrome"],
+        storageState: ADMIN_AUTH_FILE,
+      },
+    },
   ],
 });

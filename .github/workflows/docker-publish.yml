@@ -17,14 +17,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # Strip leading 'v' from tag names so APP_VERSION is always a bare
       # version string (e.g. '1.1.0' not 'v1.1.0', 'beta' stays 'beta').
       - name: Set version
         run: echo "APP_VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '22'
           cache: 'npm'
@@ -64,7 +64,7 @@ jobs:
           NEXT_TELEMETRY_DISABLED: "1"
 
       - name: Upload Playwright report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: playwright-report
@@ -77,9 +77,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '22'
           cache: 'npm'
@@ -92,6 +92,64 @@ jobs:
 
       - name: Build Docker image
         run: docker build -t thinkarr:ci-test .
+
+      - name: Schema smoke test — dirty migration state
+        # Reproduces the exact production failure from issue #134:
+        #   • All migrations are tracked in __drizzle_migrations (correct hashes)
+        #   • duration_ms is dropped from messages (simulates backup-restore)
+        #   • Container must recover via the defensive fallback in getDb()
+        #   • GET /api/health must return 200 (schema probe passes)
+        # This is the only test that exercises the full stack: real Docker image,
+        # real DB file, real startup path, real HTTP health check.
+        run: |
+          DIRTY_DIR=$(mktemp -d)
+          # Ensure cleanup even if the step fails or times out
+          trap 'docker rm -f thinkarr-dirty-test 2>/dev/null || true; docker run --rm -v "${DIRTY_DIR}:/cleanup" alpine sh -c "rm -rf /cleanup/*" 2>/dev/null || true; rm -rf "${DIRTY_DIR}" 2>/dev/null || true' EXIT
+
+          # Create dirty DB using the project's own drizzle setup
+          node scripts/create-dirty-db.mjs "${DIRTY_DIR}"
+
+          # Start container with dirty DB mounted as /config
+          docker run -d \
+            --name thinkarr-dirty-test \
+            --network host \
+            -e SECURE_COOKIES=false \
+            -e NEXT_TELEMETRY_DISABLED=1 \
+            -v "${DIRTY_DIR}:/config" \
+            thinkarr:ci-test
+
+          # Poll /api/health — must ultimately return JSON {"status":"ok"}.
+          # -L follows any routing redirect (e.g. trailing-slash normalisation in
+          # the standalone production server) so we check the final response, not
+          # the first hop.  We also validate the body so that an accidental HTML
+          # redirect to /setup can't produce a false pass.
+          # 200 + body contains "ok" = ensureSchemaIntegrity ran and repaired the schema.
+          # 307 without -L / 503 = fallback did not run or schema is still broken.
+          OK=false
+          for i in $(seq 1 30); do
+            BODY=$(curl -sL --max-redirs 5 -w "\n%{http_code}" \
+              http://localhost:3000/api/health 2>/dev/null || true)
+            CODE=$(printf '%s' "$BODY" | tail -1)
+            PAYLOAD=$(printf '%s' "$BODY" | head -n -1)
+            # Also capture the redirect target for diagnostics when not following
+            REDIR=$(curl -s -o /dev/null -w "%{redirect_url}" \
+              http://localhost:3000/api/health 2>/dev/null || true)
+            echo "Attempt ${i}/30: HTTP ${CODE} | redirect_url=${REDIR:-none} | body=${PAYLOAD}"
+            if [ "${CODE}" = "200" ] && printf '%s' "$PAYLOAD" | grep -q '"status":"ok"'; then
+              OK=true
+              break
+            fi
+            sleep 3
+          done
+
+          echo "--- Container logs (last 50 lines) ---"
+          docker logs thinkarr-dirty-test 2>&1 | tail -50
+
+          if [ "${OK}" != "true" ]; then
+            echo "FAIL: Container did not recover from dirty migration state within 90s"
+            exit 1
+          fi
+          echo "PASS: /api/health returned 200 with status:ok — ensureSchemaIntegrity correctly restored duration_ms"
 
       - name: E2E tests against Docker container
         run: npm run test:e2e:docker
@@ -111,7 +169,7 @@ jobs:
           trivyignores: .trivyignore
 
       - name: Upload Playwright report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: playwright-report-docker
@@ -119,33 +177,98 @@ jobs:
           retention-days: 7
 
   docker:
-    name: Build & Push Docker Image
+    name: Build Docker Image (${{ matrix.platform }})
     needs: docker-e2e
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write  # required for anchore/sbom-action to attach SBOM to release
+    # Use native runners per platform to avoid QEMU emulation failures
+    # (SIGILL / "Illegal instruction" when compiling native modules under QEMU).
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set version
         run: echo "APP_VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Extract Docker metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
+        with:
+          images: chrisrothwell/thinkarr
+
+      - name: Build and push by digest
+        id: push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            APP_VERSION=${{ env.APP_VERSION }}
+          outputs: type=image,name=chrisrothwell/thinkarr,push-by-digest=true,name-canonical=true,push=true
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.push.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v7
+        with:
+          name: digests-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  docker-merge:
+    name: Merge Multi-Arch Manifests & Push
+    needs: docker
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # required for anchore/sbom-action to attach SBOM to release
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set version
+        run: echo "APP_VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v6
         with:
           images: chrisrothwell/thinkarr
           tags: |
@@ -155,27 +278,25 @@ jobs:
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-') }}
             type=raw,value=beta,enable=${{ startsWith(github.ref, 'refs/tags/') && contains(github.ref_name, '-') }}
 
-      - name: Build and push Docker image
-        id: push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            APP_VERSION=${{ env.APP_VERSION }}
+      - name: Create and push multi-arch manifest
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf 'chrisrothwell/thinkarr@sha256:%s ' *)
+
+      - name: Inspect manifest
+        run: docker buildx imagetools inspect chrisrothwell/thinkarr:${{ steps.meta.outputs.version }}
 
       - name: Generate SBOM
         uses: anchore/sbom-action@v0
         with:
-          image: chrisrothwell/thinkarr@${{ steps.push.outputs.digest }}
+          image: chrisrothwell/thinkarr:${{ steps.meta.outputs.version }}
           artifact-name: sbom-${{ env.APP_VERSION }}.spdx.json
           output-file: sbom-${{ env.APP_VERSION }}.spdx.json
 
       - name: Upload SBOM as release asset
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sbom-${{ env.APP_VERSION }}
           path: sbom-${{ env.APP_VERSION }}.spdx.json

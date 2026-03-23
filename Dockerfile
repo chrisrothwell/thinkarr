@@ -2,7 +2,7 @@
 # tag mutation. Dependabot will open PRs to keep this current automatically.
 # To refresh manually: docker pull node:22-alpine && docker inspect node:22-alpine --format '{{index .RepoDigests 0}}'
 # Stage 1: Install dependencies
-FROM node:22-alpine AS deps
+FROM node:25-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
@@ -10,7 +10,7 @@ RUN npm ci --ignore-scripts
 RUN npm rebuild better-sqlite3
 
 # Stage 2: Build the application
-FROM node:22-alpine AS builder
+FROM node:25-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
@@ -19,7 +19,7 @@ ENV NEXT_PUBLIC_APP_VERSION=$APP_VERSION
 RUN npm run build
 
 # Stage 3: Production runner
-FROM node:22-alpine AS runner
+FROM node:25-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
@@ -47,6 +47,6 @@ EXPOSE 3000
 VOLUME /config
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-  CMD wget -qO- http://localhost:3000/api/health || exit 1
+  CMD wget -qO- http://localhost:3000/api/health | grep -q '"status":"ok"' || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]

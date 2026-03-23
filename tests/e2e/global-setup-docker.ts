@@ -43,7 +43,7 @@ async function waitForServer(url: string, timeoutMs = 60_000): Promise<void> {
   throw new Error(`Server at ${url} did not become ready within ${timeoutMs}ms`);
 }
 
-export default async function globalSetup(_config: FullConfig) {
+export default async function globalSetup(_: FullConfig) {
   // 1. Start mock servers — they bind to 127.0.0.1 which is reachable from
   //    the container because we use --network=host
   const mocks = await startMockServers();

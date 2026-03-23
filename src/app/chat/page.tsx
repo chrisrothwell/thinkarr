@@ -4,14 +4,19 @@ import { useState, useEffect, useCallback } from "react";
 import { Sidebar, SidebarToggle } from "@/components/chat/sidebar";
 import { MessageList } from "@/components/chat/message-list";
 import { ChatInput } from "@/components/chat/chat-input";
+import { PwaInstallBanner } from "@/components/chat/pwa-install-banner";
 import { Spinner } from "@/components/ui/spinner";
 import { useConversations } from "@/hooks/use-conversations";
 import { useChat } from "@/hooks/use-chat";
 import type { User } from "@/types";
 
+export type ChatMode = "text" | "voice" | "realtime";
+
 interface ModelOption {
   id: string;
   label: string;
+  supportsVoice?: boolean;
+  supportsRealtime?: boolean;
 }
 
 export default function ChatPage() {
@@ -27,6 +32,10 @@ export default function ChatPage() {
   const [models, setModels] = useState<ModelOption[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>("");
   const [canChangeModel, setCanChangeModel] = useState(true);
+
+  // Chat mode (text / voice / realtime)
+  const [chatMode, setChatMode] = useState<ChatMode>("text");
+  const [endpointCaps, setEndpointCaps] = useState({ supportsVoice: false, supportsRealtime: false });
 
   const {
     conversations,
@@ -65,9 +74,19 @@ export default function ChatPage() {
       .then((r) => r.json())
       .then((data) => {
         if (data.success) {
-          setModels(data.data.models || []);
+          const loadedModels: ModelOption[] = data.data.models || [];
+          setModels(loadedModels);
           setCanChangeModel(data.data.canChangeModel);
-          setSelectedModel(data.data.defaultModel || "");
+          const defaultModel = data.data.defaultModel || "";
+          setSelectedModel(defaultModel);
+          // Set initial capabilities from the default model
+          const defaultOpt = loadedModels.find((m) => m.id === defaultModel);
+          if (defaultOpt) {
+            setEndpointCaps({
+              supportsVoice: defaultOpt.supportsVoice ?? false,
+              supportsRealtime: defaultOpt.supportsRealtime ?? false,
+            });
+          }
         }
       })
       .catch(() => {});
@@ -137,8 +156,6 @@ export default function ChatPage() {
     );
   }
 
-  const appVersion = process.env.NEXT_PUBLIC_APP_VERSION;
-
   return (
     <div className="flex h-[100dvh]">
       <Sidebar
@@ -155,6 +172,8 @@ export default function ChatPage() {
       {sidebarCollapsed && <SidebarToggle onClick={() => setSidebarCollapsed(false)} />}
 
       <main className="flex flex-1 flex-col min-w-0">
+        <PwaInstallBanner />
+
         {/* Model selector bar */}
         {canChangeModel && models.length > 1 && (
           <div className="flex items-center justify-end border-b px-4 py-1.5">
@@ -162,7 +181,22 @@ export default function ChatPage() {
               Model:
               <select
                 value={selectedModel}
-                onChange={(e) => setSelectedModel(e.target.value)}
+                onChange={(e) => {
+                  const newModel = e.target.value;
+                  setSelectedModel(newModel);
+                  const opt = models.find((m) => m.id === newModel);
+                  const caps = {
+                    supportsVoice: opt?.supportsVoice ?? false,
+                    supportsRealtime: opt?.supportsRealtime ?? false,
+                  };
+                  setEndpointCaps(caps);
+                  // Reset to text mode if the new endpoint doesn't support current mode
+                  setChatMode((prev) => {
+                    if (prev === "voice" && !caps.supportsVoice) return "text";
+                    if (prev === "realtime" && !caps.supportsRealtime) return "text";
+                    return prev;
+                  });
+                }}
                 className="rounded border bg-background px-2 py-1 text-xs"
                 disabled={streaming}
               >
@@ -209,15 +243,13 @@ export default function ChatPage() {
           onStop={stopStreaming}
           streaming={streaming}
           disabled={streaming}
+          chatMode={chatMode}
+          onModeChange={setChatMode}
+          supportsVoice={endpointCaps.supportsVoice}
+          supportsRealtime={endpointCaps.supportsRealtime}
+          selectedModel={selectedModel}
         />
       </main>
-      {appVersion && (
-        <div className="fixed bottom-2 left-2 z-10 pointer-events-none">
-          <span className="text-[10px] text-muted-foreground/40 font-mono select-none">
-            {/^\d/.test(appVersion) ? `v${appVersion}` : appVersion}
-          </span>
-        </div>
-      )}
     </div>
   );
 }

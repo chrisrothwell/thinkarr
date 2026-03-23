@@ -12,8 +12,6 @@
 
 import { test, expect } from "@playwright/test";
 
-// The mock LLM always responds: "Here is the answer."
-const MOCK_RESPONSE = "Here is the answer.";
 
 test.describe("Chat interface", () => {
   test("chat page renders the textarea and sidebar", async ({ page }) => {

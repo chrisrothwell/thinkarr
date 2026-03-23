@@ -124,7 +124,7 @@ export async function POST(request: Request) {
         user: {
           id: userId,
           plexUsername: plexUser.username,
-          plexAvatarUrl: plexUser.thumb,
+          plexAvatarUrl: plexUser.thumb ? `/api/plex/avatar/${userId}` : null,
           isAdmin: user?.isAdmin ?? false,
         },
       },

@@ -31,5 +31,6 @@ export interface Message {
   toolCalls: string | null;
   toolCallId: string | null;
   toolName: string | null;
+  durationMs: number | null;
   createdAt: Date;
 }
