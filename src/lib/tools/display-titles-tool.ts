@@ -68,37 +68,49 @@ If an Overseerr TV result has seasonCount > 1, you MUST call this tool with one 
           );
 
         if (needsLookup.length > 0) {
+          // Deduplicate Plex searches: multiple per-season entries for the same show
+          // all resolve to the same search query. Group by (searchTitle, year) so we
+          // fire one request per unique show rather than one per season card (#151).
+          type LookupGroup = { indices: number[]; isTv: boolean; searchTitle: string; year?: number };
+          const groups = new Map<string, LookupGroup>();
+
+          for (const { t, i } of needsLookup) {
+            const isTv = t.mediaType === "tv" || t.seasonNumber != null;
+            let searchTitle: string;
+            if (isTv) {
+              const stripped = t.title.replace(/\s*[—–-]\s*Season\s+\d+\s*$/i, "").trim();
+              searchTitle = t.showTitle ?? (stripped || t.title);
+            } else {
+              searchTitle = t.title;
+            }
+            const key = `${searchTitle}::${t.year ?? ""}::${isTv}`;
+            const existing = groups.get(key);
+            if (existing) {
+              existing.indices.push(i);
+            } else {
+              groups.set(key, { indices: [i], isTv, searchTitle, year: t.year ?? undefined });
+            }
+          }
+
           await Promise.all(
-            needsLookup.map(async ({ t, i }) => {
+            Array.from(groups.values()).map(async ({ indices, isTv, searchTitle, year }) => {
               try {
                 let plexKey: string | undefined;
-
-                if (t.mediaType === "tv" || t.seasonNumber != null) {
-                  // For TV series (including per-season entries), use findShowPlexKey which
-                  // searches ALL hubs and returns the show-level key. The paginated
-                  // searchLibrary only returns the first 10 items, which may miss the
-                  // show-level result when episode/season hubs come first (#117).
-                  //
-                  // The LLM may set `title` to "Show — Season N" for per-season display
-                  // cards. Plex knows the series as "Show", so we prefer showTitle when
-                  // provided, or strip the " — Season N" decoration as a fallback so
-                  // the Plex search finds the series root (#117).
-                  const stripped = t.title.replace(/\s*[—–-]\s*Season\s+\d+\s*$/i, "").trim();
-                  const plexSearchTitle = t.showTitle ?? (stripped || t.title);
-                  plexKey = await findShowPlexKey(plexSearchTitle, t.year ?? undefined);
+                if (isTv) {
+                  plexKey = await findShowPlexKey(searchTitle, year);
                 } else {
-                  // Movies: use standard hub search (show-level results are at the top)
-                  const { results } = await searchLibrary(t.title);
-                  const titleLower = t.title.toLowerCase();
+                  const { results } = await searchLibrary(searchTitle);
+                  const titleLower = searchTitle.toLowerCase();
                   const match = results.find((r) => {
                     if (r.title.toLowerCase() !== titleLower) return false;
-                    if (t.year && r.year) return r.year === t.year;
+                    if (year && r.year) return r.year === year;
                     return true;
                   });
                   plexKey = match?.plexKey;
                 }
-
-                if (plexKey) plexKeyOverrides.set(i, plexKey);
+                if (plexKey) {
+                  for (const i of indices) plexKeyOverrides.set(i, plexKey);
+                }
               } catch { /* non-fatal */ }
             }),
           );
