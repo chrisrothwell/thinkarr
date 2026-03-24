@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import type { Message } from "@/types";
 import type { ToolCallDisplay } from "@/types/chat";
 import { generateId } from "@/lib/utils";
@@ -210,6 +210,20 @@ export function useChat(conversationId: string | null, options?: UseChatOptions)
     setToolCalls(new Map());
     setError(null);
   }, []);
+
+  // When the user returns to the page (e.g. after backgrounding Chrome on
+  // mobile), reload messages so any tool results that completed server-side
+  // while the SSE connection was down are immediately visible.
+  // Only fires when not actively streaming — avoids racing with a live stream.
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible" && !streamingRef.current && conversationIdRef.current) {
+        void loadMessages(conversationIdRef.current);
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [loadMessages]);
 
   return {
     messages,

@@ -97,8 +97,13 @@ export async function search(query: string, page = 1): Promise<{ results: Overse
   // Use encodeURIComponent to produce RFC 3986-compliant %20 encoding for spaces
   // and other reserved characters (#128). URLSearchParams uses + for spaces which
   // some servers do not decode as a space character.
+  //
+  // Overseerr validates the decoded query value server-side and rejects RFC 3986
+  // reserved characters such as '(' and ')' with HTTP 400. Strip them before
+  // encoding so queries like "Star Trek (2009)" succeed (#overseerr-paren-fix).
+  const sanitized = query.replace(/[()[\]{}!$&'*+,;=?#@/\\]/g, " ").replace(/\s+/g, " ").trim();
   const data = await overseerrFetch(
-    `/search?query=${encodeURIComponent(query)}&page=${encodeURIComponent(String(page))}&language=en`,
+    `/search?query=${encodeURIComponent(sanitized)}&page=${encodeURIComponent(String(page))}&language=en`,
   );
   const raw = (data?.results || []) as Record<string, unknown>[];
   const totalPages = (data?.totalPages as number | undefined) ?? 1;

@@ -14,7 +14,7 @@ interface MessageListProps {
 }
 
 /** Build tool call displays from historical messages stored in DB. */
-function buildHistoricalToolCalls(messages: Message[]): Map<string, ToolCallDisplay[]> {
+export function buildHistoricalToolCalls(messages: Message[]): Map<string, ToolCallDisplay[]> {
   const result = new Map<string, ToolCallDisplay[]>();
 
   // Index tool result messages by their toolCallId
@@ -45,9 +45,9 @@ function buildHistoricalToolCalls(messages: Message[]): Map<string, ToolCallDisp
             name: call.function.name,
             arguments: call.function.arguments || "{}",
             result: resultMsg?.content || undefined,
-            status: resultMsg ? (hasError ? "error" : "done") : "calling",
+            status: resultMsg ? (hasError ? "error" : "done") : "error",
             durationMs: resultMsg?.durationMs ?? undefined,
-            error: errorMessage,
+            error: errorMessage ?? (resultMsg ? undefined : "Connection was lost"),
           });
         }
         if (displays.length > 0) {
