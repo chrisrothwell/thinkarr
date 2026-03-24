@@ -1119,3 +1119,9 @@ running container without needing a Plex session or shell access.
 | `github_repo` | false | GitHub repository name (default: `thinkarr`) |
 
 Admin can now configure GitHub issue reporting credentials directly in **Settings → Logs** without needing environment variables. Token stored encrypted; owner/repo stored plain. Env vars (`GITHUB_TOKEN`, `GITHUB_OWNER`, `GITHUB_REPO`) still take precedence when set.
+
+
+### Phase: Version 1.1.2-beta.1
+
+#### Version bump
+- [x] Bumped `package.json` version from `1.1.1` to `1.1.2-beta.1`
