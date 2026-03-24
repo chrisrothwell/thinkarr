@@ -302,6 +302,25 @@ describe("search — issue #128: query URL encoding", () => {
     expect(calledUrl).not.toContain("Top Gun: Maverick");
     expect(calledUrl).toContain("Top%20Gun%3A%20Maverick");
   });
+
+  it("strips parentheses from query so Overseerr does not return HTTP 400", async () => {
+    // Overseerr validates the decoded query value and rejects RFC 3986 reserved
+    // characters such as '(' and ')' with HTTP 400. Queries like "Star Trek (2009)"
+    // must have parentheses removed before being sent to the API.
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ results: [], totalPages: 1 }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { search } = await import("@/lib/services/overseerr");
+    await search("Star Trek (2009)");
+
+    const calledUrl = fetchMock.mock.calls[0][0] as string;
+    expect(calledUrl).not.toContain("(");
+    expect(calledUrl).not.toContain(")");
+    expect(calledUrl).toContain("Star%20Trek%202009");
+  });
 });
 
 describe("search — issue #109: pagination and hasMore", () => {

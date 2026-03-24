@@ -1158,3 +1158,21 @@ Admin can now configure GitHub issue reporting credentials directly in **Setting
 |------|--------|
 | `src/lib/auth/session.ts` | Import `logger`; add `logger.warn("Session expired or not found", { sessionId })` before the existing `return null` at line 75 |
 | `src/__tests__/api/session.test.ts` | Add `logWarnSpy`; new test case: expired session cookie returns 401 and logs the warning with the sessionId |
+
+### Phase 41: Fix Overseerr search — parentheses in query cause HTTP 400
+
+#### Bug
+Log analysis of conversation `81f6c0cd` revealed `overseerr_search` returning HTTP 400 when the user searched for titles like `"Star Trek (2009)"`. Overseerr validates the decoded query value server-side and rejects RFC 3986 reserved characters including `(` and `)`. The existing `encodeURIComponent` encoding is insufficient because Overseerr decodes the value before validation.
+
+#### Fix
+- Strip RFC 3986 reserved characters (`( ) [ ] { } ! $ & ' * + , ; = ? # @ / \`) from the query string before encoding, collapsing extra whitespace. The movie/show is still found correctly — e.g. `"Star Trek (2009)"` → `"Star Trek 2009"`.
+
+#### Test
+- Added regression test: `"Star Trek (2009)"` must call `fetch` with a URL containing no `(` or `)` and must contain `Star%20Trek%202009`.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/services/overseerr.ts` | Strip reserved characters from query before `encodeURIComponent` in `search()` |
+| `src/__tests__/lib/overseerr.test.ts` | New test: parentheses stripped from query |
