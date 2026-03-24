@@ -37,7 +37,9 @@ export function useChat(conversationId: string | null, options?: UseChatOptions)
       if (data.success && data.data.messages) {
         setMessages(data.data.messages);
       }
-    } catch {
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Failed to load messages";
+      clientLog.error("Failed to load messages", { message: msg, conversationId: convId });
       setError("Failed to load messages");
     }
   }, []);
