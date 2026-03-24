@@ -33,7 +33,7 @@ async function overseerrFetch(path: string, options?: RequestInit) {
     throw new Error(`Overseerr API error: HTTP ${res.status}${detail ? ` — ${detail}` : ""}`);
   }
   const data = await res.json();
-  logger.info("Overseerr API response", { method, url: fullUrl, status: res.status, body: JSON.stringify(data).slice(0, 5000) });
+  logger.info("Overseerr API response", { method, url: fullUrl, status: res.status });
   return data;
 }
 
@@ -57,7 +57,6 @@ export interface OverseerrSearchResult {
   title: string;
   year?: string;
   summary?: string;             // Synopsis — pass directly as summary to display_titles
-  releaseDate?: string;
   rating?: number;              // TMDB audience rating (0–10) — pass directly as rating to display_titles
   cast?: string[];              // Top cast members (up to 5) — pass directly as cast to display_titles
   mediaStatus: string;
@@ -102,14 +101,20 @@ export async function search(query: string, page = 1): Promise<{ results: Overse
     `/search?query=${encodeURIComponent(query)}&page=${encodeURIComponent(String(page))}&language=en`,
   );
   const raw = (data?.results || []) as Record<string, unknown>[];
+  const totalPages = (data?.totalPages as number | undefined) ?? 1;
+  // Determine hasMore before slicing so we don't lose the count
+  const hasMore = raw.length > 10 || page < totalPages;
+  // Slice to the 10 items we'll return before fetching details — avoids
+  // firing N detail calls for results that will be discarded (#151).
+  const page10 = raw.slice(0, 10);
 
-  // Fetch details for all results in parallel:
+  // Fetch details for the returned results in parallel:
   //   - movies: get cast (credits not in search results)
   //   - TV: get numberOfSeasons + cast
   interface DetailInfo { seasonCount?: number; cast?: string[] }
   const detailMap = new Map<number, DetailInfo>();
   await Promise.all(
-    raw.map(async (r) => {
+    page10.map(async (r) => {
       const isTV = r.mediaType === "tv";
       try {
         const detail = await overseerrFetch(isTV ? `/tv/${r.id as number}` : `/movie/${r.id as number}`);
@@ -129,7 +134,7 @@ export async function search(query: string, page = 1): Promise<{ results: Overse
     }),
   );
 
-  const results = raw.map((r) => {
+  const results = page10.map((r) => {
     const mediaInfo = r.mediaInfo as Record<string, unknown> | undefined;
     const isTV = r.mediaType === "tv";
     const rawSeasons = (mediaInfo?.seasons as Record<string, unknown>[]) || [];
@@ -166,7 +171,6 @@ export async function search(query: string, page = 1): Promise<{ results: Overse
       title: (r.title || r.name) as string,
       year: ((r.releaseDate || r.firstAirDate) as string | undefined)?.substring(0, 4),
       summary: r.overview as string | undefined,
-      releaseDate: (r.releaseDate || r.firstAirDate) as string | undefined,
       rating: r.voteAverage as number | undefined,
       cast: detail?.cast,
       mediaStatus: mediaStatusLabel(mediaInfo),
@@ -185,10 +189,7 @@ export async function search(query: string, page = 1): Promise<{ results: Overse
     };
   });
 
-  const totalPages = (data?.totalPages as number | undefined) ?? 1;
-  // Return 10 items to the LLM; hasMore if this API page had more or there are further pages.
-  const hasMore = results.length > 10 || page < totalPages;
-  return { results: results.slice(0, 10), hasMore };
+  return { results, hasMore };
 }
 
 export interface OverseerrRequest {

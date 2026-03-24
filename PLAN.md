@@ -202,6 +202,18 @@ Build an LLM-powered chat frontend for media management (*arr stack). Users log 
 - [x] **`src/__tests__/lib/plex.test.ts`** — Added tests for `searchByTag` with `tagType` (country, director, default genre) and `getTagsForTitle` (full extraction, empty fields)
 - [x] **`src/__tests__/lib/overseerr.test.ts`** — New: `listRequests` title resolution (movie, TV), seasons list, graceful fallback on fetch failure
 
+### Phase 19: Orphaned Tool Call Repair (issue #151)
+
+#### Bug Fix
+- [x] **Conversations permanently stuck after server crash mid-tool-call (#151)** — When the server crashed (or the SSE connection dropped) between saving the assistant message with `tool_calls` to the DB and saving the corresponding tool result messages, the conversation was left with an orphaned `tool_call_id`. Every subsequent user message caused the LLM API to return HTTP 400: `"An assistant message with 'tool_calls' must be followed by tool messages responding to each 'tool_call_id'."` — making the conversation permanently unrecoverable without manual DB intervention.
+
+  The fix is in `loadHistory()` in `src/lib/llm/orchestrator.ts`: after building the ordered message array from the DB, the function now scans for any assistant message whose `tool_calls` contain a `tool_call_id` that has no matching tool result message. For each such orphan it injects a synthetic error tool message (`{ error: "Tool call did not complete. Please try again." }`) immediately after the assistant message, restoring a valid OpenAI message sequence and allowing the LLM to recover gracefully. A `logger.warn` is emitted for each repair so the issue is visible in logs.
+
+  This covers three crash scenarios: (1) all tool results missing, (2) a partial crash where only some tool results were saved, and (3) the healthy case where nothing is missing (no-op). — `src/lib/llm/orchestrator.ts`
+
+#### Tests
+- [x] **`src/__tests__/lib/orchestrator.test.ts`** — New test file with 3 cases: (1) full orphan — assistant with one unmatched tool call; verifies synthetic error result is injected at the right position and the LLM call succeeds; (2) healthy history — all tool calls have results; verifies no extra tool messages are injected; (3) partial orphan — two tool calls but only the first result saved; verifies exactly one synthetic result is injected for the missing ID.
+
 ### Phase 17: Realtime OpenAI-Only Guard (issue #80)
 
 #### Bug Fix

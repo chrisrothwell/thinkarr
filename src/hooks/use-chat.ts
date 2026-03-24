@@ -4,6 +4,7 @@ import { useState, useCallback, useRef } from "react";
 import type { Message } from "@/types";
 import type { ToolCallDisplay } from "@/types/chat";
 import { generateId } from "@/lib/utils";
+import { clientLog } from "@/lib/client-logger";
 
 interface UseChatOptions {
   onTitleUpdate?: (conversationId: string, title: string) => void;
@@ -158,6 +159,7 @@ export function useChat(conversationId: string | null, options?: UseChatOptions)
                   return next;
                 });
               } else if (event.type === "error") {
+                clientLog.error("Server error event", { message: event.message, conversationId: convId });
                 setError(event.message);
               }
             } catch {
@@ -168,6 +170,7 @@ export function useChat(conversationId: string | null, options?: UseChatOptions)
       } catch (e: unknown) {
         if (e instanceof DOMException && e.name === "AbortError") return;
         const msg = e instanceof Error ? e.message : "Failed to send message";
+        clientLog.error("SSE stream failure", { message: msg, conversationId: convId });
         setError(msg);
         setMessages((prev) => prev.filter((m) => m.id !== assistantId || (m.content && m.content.length > 0)));
       } finally {
