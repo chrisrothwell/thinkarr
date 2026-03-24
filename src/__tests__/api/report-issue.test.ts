@@ -93,7 +93,7 @@ beforeEach(() => {
   mockFetch.mockReset();
   // Default: GITHUB_TOKEN unset so we test the no-token path by default
   delete process.env.GITHUB_TOKEN;
-  logInfoSpy = vi.spyOn(loggerModule.logger, "info");
+  logInfoSpy = vi.spyOn(loggerModule.logger, "info").mockClear();
 });
 
 afterEach(() => {
