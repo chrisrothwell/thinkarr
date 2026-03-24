@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef } from "react";
 import type { Message } from "@/types";
 import type { ToolCallDisplay } from "@/types/chat";
 import { generateId } from "@/lib/utils";
@@ -27,28 +27,6 @@ export function useChat(conversationId: string | null, options?: UseChatOptions)
   // (which would cause a new function on every render).
   const optionsRef = useRef(options);
   optionsRef.current = options;
-
-  // On mobile, backgrounding the browser can silently kill the SSE stream.
-  // When the page becomes visible again, abort any stale stream (hidden for
-  // more than 3 s while streaming) so the finally block fires, reloads
-  // messages, and clears any stuck spinners.
-  const hiddenAtRef = useRef(0);
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === "hidden") {
-        hiddenAtRef.current = Date.now();
-      } else if (
-        document.visibilityState === "visible" &&
-        hiddenAtRef.current > 0 &&
-        Date.now() - hiddenAtRef.current > 3000 &&
-        streamingRef.current
-      ) {
-        abortRef.current?.abort();
-      }
-    };
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
-  }, []);
 
   const loadMessages = useCallback(async (convId: string) => {
     if (streamingRef.current) return;
