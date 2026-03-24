@@ -41,6 +41,8 @@ export async function POST(request: Request) {
     );
   }
 
+  logger.info("Chat request received", { userId: session.user.id, conversationId: body.conversationId });
+
   // 3. Verify conversation ownership
   const db = getDb();
   const conversation = db
