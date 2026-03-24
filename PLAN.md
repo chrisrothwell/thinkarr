@@ -1117,3 +1117,5 @@ running container without needing a Plex session or shell access.
 | `github_token` | true | PAT with `repo` scope for creating issues |
 | `github_owner` | false | GitHub repository owner (default: `chrisrothwell`) |
 | `github_repo` | false | GitHub repository name (default: `thinkarr`) |
+
+Admin can now configure GitHub issue reporting credentials directly in **Settings → Logs** without needing environment variables. Token stored encrypted; owner/repo stored plain. Env vars (`GITHUB_TOKEN`, `GITHUB_OWNER`, `GITHUB_REPO`) still take precedence when set.

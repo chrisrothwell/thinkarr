@@ -3,13 +3,15 @@ import { getSession } from "@/lib/auth/session";
 import { getDb, schema } from "@/lib/db";
 import { eq, and, asc } from "drizzle-orm";
 import { checkUserApiRateLimit } from "@/lib/security/api-rate-limit";
+import { getConfig } from "@/lib/config";
 import { logger } from "@/lib/logger";
 import type { ApiResponse } from "@/types/api";
 
 function getGitHubConfig(): { token: string; owner: string; repo: string } | null {
-  const token = process.env.GITHUB_TOKEN;
-  const owner = process.env.GITHUB_OWNER ?? "chrisrothwell";
-  const repo = process.env.GITHUB_REPO ?? "thinkarr";
+  // Environment variables take precedence over stored config
+  const token = process.env.GITHUB_TOKEN || getConfig("github.token");
+  const owner = process.env.GITHUB_OWNER || getConfig("github.owner") || "chrisrothwell";
+  const repo = process.env.GITHUB_REPO || getConfig("github.repo") || "thinkarr";
   if (!token) return null;
   return { token, owner, repo };
 }
