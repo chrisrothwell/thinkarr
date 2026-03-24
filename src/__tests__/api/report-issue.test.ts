@@ -2,7 +2,7 @@
  * Unit tests for POST /api/report-issue
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from "vitest";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
@@ -38,6 +38,12 @@ vi.mock("next/headers", () => ({
 // ---------------------------------------------------------------------------
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
+
+// ---------------------------------------------------------------------------
+// Logger mock
+// ---------------------------------------------------------------------------
+import * as loggerModule from "@/lib/logger";
+let logInfoSpy: MockInstance;
 
 // ---------------------------------------------------------------------------
 // Route handler (imported after mocks)
@@ -87,6 +93,7 @@ beforeEach(() => {
   mockFetch.mockReset();
   // Default: GITHUB_TOKEN unset so we test the no-token path by default
   delete process.env.GITHUB_TOKEN;
+  logInfoSpy = vi.spyOn(loggerModule.logger, "info").mockClear();
 });
 
 afterEach(() => {
@@ -293,5 +300,32 @@ describe("POST /api/report-issue — GitHub integration", () => {
 
     const res = await POST(makeRequest({ conversationId: convId, description: "broken" }));
     expect(res.status).toBe(502);
+  });
+
+  it("logs full issue details before attempting GitHub even when GitHub fails", async () => {
+    const uid = seedUser(testDb, { plexUsername: "alice" });
+    mockState.sessionCookie = seedSession(testDb, uid);
+    const convId = seedConversation(testDb, uid, "Broken chat");
+    seedMessage(testDb, convId, { role: "user", content: "What is 2+2?" });
+
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 403,
+      text: async () => "Forbidden",
+    });
+
+    const res = await POST(makeRequest({ conversationId: convId, description: "Wrong answer given" }));
+    expect(res.status).toBe(502);
+
+    // Full report must have been logged before the GitHub call
+    const submittedCall = logInfoSpy.mock.calls.find(
+      (args) => typeof args[0] === "string" && args[0].includes("report-issue: issue submitted"),
+    );
+    expect(submittedCall).toBeDefined();
+    const meta = submittedCall![1] as Record<string, unknown>;
+    expect(meta.description).toBe("Wrong answer given");
+    expect(typeof meta.issueBody).toBe("string");
+    expect((meta.issueBody as string)).toContain("What is 2+2?");
+    expect((meta.issueBody as string)).toContain(convId);
   });
 });
