@@ -43,11 +43,10 @@ const localTimestamp = winston.format.timestamp({
 // Serialize log entries with timestamp always first, then level, message, then
 // remaining fields. Winston's built-in format.json() does not guarantee key
 // order, which makes log files hard to scan. Using printf gives us control.
+// JSON.stringify silently drops Symbol-keyed properties (e.g. Winston's
+// internal Symbol(level)), so no manual stripping is needed.
 const jsonWithTimestampFirst = winston.format.printf((info) => {
-  const { timestamp, level, message, ...rest } = info;
-  // strip the [Symbol(level)] that winston injects — not useful in file logs
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { [Symbol.for("level") as any]: _sym, ...meta } = rest as any;
+  const { timestamp, level, message, ...meta } = info;
   return JSON.stringify({ timestamp, level, message, ...meta });
 });
 
@@ -63,9 +62,7 @@ const logger = winston.createLogger({
       format: winston.format.combine(
         winston.format.colorize(),
         winston.format.printf(({ timestamp, level, message, ...meta }) => {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const { [Symbol.for("level") as any]: _sym, ...rest } = meta as any;
-          const metaStr = Object.keys(rest).length ? "\n" + JSON.stringify(rest, null, 2) : "";
+          const metaStr = Object.keys(meta).length ? "\n" + JSON.stringify(meta, null, 2) : "";
           return `${timestamp} [${level}] ${message}${metaStr}`;
         })
       ),

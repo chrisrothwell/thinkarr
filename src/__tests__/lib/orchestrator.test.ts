@@ -287,7 +287,7 @@ describe("orchestrator — orphaned tool call repair (issue #151)", () => {
 
     expect(savedMsg).toBeDefined();
     expect(syntheticMsg).toBeDefined();
-    const parsed = JSON.parse((syntheticMsg as { content: string }).content) as { error: string };
+    const parsed = JSON.parse((syntheticMsg as unknown as { content: string }).content) as { error: string };
     expect(parsed.error).toMatch(/did not complete/);
   });
 });

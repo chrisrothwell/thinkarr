@@ -25,6 +25,7 @@ export function defineTool<T extends z.ZodType>(def: {
   description: string;
   schema: T;
   handler: (args: z.infer<T>) => Promise<unknown>;
+  llmSummary?: (result: unknown) => unknown;
 }): void {
   tools.set(def.name, def as ToolDefinition);
 }

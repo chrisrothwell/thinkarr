@@ -35,7 +35,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ success: false, error: "Not authenticated" }, { status: 401 });
   }
 
-  if (isRateLimited(session.userId)) {
+  if (isRateLimited(String(session.user.id))) {
     return NextResponse.json({ success: false, error: "Rate limit exceeded" }, { status: 429 });
   }
 
@@ -50,7 +50,7 @@ export async function POST(request: Request) {
   const message = typeof body.message === "string" ? body.message.slice(0, 500) : "client log";
   const context = body.context && typeof body.context === "object" ? body.context : {};
 
-  logger[level](`[client] ${message}`, { userId: session.userId, ...context });
+  logger[level](`[client] ${message}`, { userId: session.user.id, ...context });
 
   return NextResponse.json({ success: true });
 }

@@ -101,7 +101,7 @@ function loadHistory(conversationId: string): ChatMessage[] {
           logger.warn("Repaired orphaned tool call in conversation history", {
             conversationId,
             toolCallId: tc.id,
-            toolName: tc.function?.name,
+            toolName: "function" in tc ? (tc as { function?: { name?: string } }).function?.name : undefined,
           });
         }
       }
