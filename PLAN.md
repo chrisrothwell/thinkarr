@@ -1207,3 +1207,29 @@ When mobile Chrome backgrounds the app, the client TCP connection drops. This ca
 #### Fix
 - `src/app/api/chat/route.ts`: Introduced `enqueue()` helper that catches `controller.enqueue()` errors and sets `clientConnected = false`. The `for await` loop continues iterating the orchestrator generator regardless — tool calls execute to completion and results are saved to DB. `controller.close()` in the `finally` block is also wrapped since it may also throw on an already-cancelled stream.
 - `src/hooks/use-chat.ts`: Added `visibilitychange` listener (after all `useCallback` hooks so `loadMessages` is in scope). When the page becomes visible and no stream is active, reloads messages from DB so server-side results that completed while the page was backgrounded are immediately shown.
+
+### Phase 43: Lean overseerr_search — eliminate per-result detail fetches
+
+#### Problem
+Log analysis of conversation `81f6c0cd` showed that each `overseerr_search` tool call was firing up to 10 parallel `/movie|tv/{id}` requests (one per result) to retrieve `cast` and `imdbId`. With the LLM making 15 parallel search calls in a single turn, this produced ~150 supplementary Overseerr HTTP requests and caused the prompt token count to balloon from ~6k to ~16k (search result JSON accumulated in conversation history).
+
+#### Fix
+- Removed the `Promise.all` detail-fetch block from `search()` entirely.
+- All fields needed for title cards (`mediaStatus`, `summary`, `rating`, `thumbPath`, `seasonCount`) are already present in the TMDB search payload — no extra fetches required.
+- `cast`, `imdbId`, `genres`, `runtime`, per-season availability, and request history are now exclusively returned by `overseerr_get_details`, called on demand when the user asks for more information about a specific title.
+- Updated `OverseerrSearchResult` interface: removed `cast` and `imdbId`.
+- Updated tool descriptions to clearly document the search vs. get_details split.
+- Tests: replaced cast/imdbId-in-search tests with a "no extra fetches" assertion suite and new `getDetails` coverage.
+
+#### API call reduction
+| Before | After |
+|--------|-------|
+| 1 search + up to 10 detail fetches per tool call | 1 search fetch per tool call |
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/services/overseerr.ts` | Remove detail fetch loop from `search()`; drop `cast`/`imdbId` from `OverseerrSearchResult`; read `seasonCount` directly from `r.numberOfSeasons` |
+| `src/lib/tools/overseerr-tools.ts` | Update `overseerr_search` and `overseerr_get_details` descriptions |
+| `src/__tests__/lib/overseerr.test.ts` | Replace cast/request search tests with no-extra-fetch and `getDetails` test suites |
