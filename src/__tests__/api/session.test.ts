@@ -54,6 +54,7 @@ beforeEach(() => {
   testDb = drizzle(sqlite, { schema });
   migrate(testDb, { migrationsFolder: path.join(process.cwd(), "drizzle") });
   mockState.sessionCookie = undefined;
+  vi.clearAllMocks();
   logInfoSpy = vi.spyOn(loggerModule.logger, "info");
   logWarnSpy = vi.spyOn(loggerModule.logger, "warn");
 });
