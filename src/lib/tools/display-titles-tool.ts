@@ -146,5 +146,15 @@ If an Overseerr TV result has seasonCount > 1, you MUST call this tool with one 
 
       return { displayTitles };
     },
+    llmSummary: (result: unknown) => {
+      const { displayTitles } = result as { displayTitles: { title: string; mediaType: string; seasonNumber?: number }[] };
+      return {
+        ok: true,
+        count: displayTitles.length,
+        titles: displayTitles.map((t) =>
+          t.seasonNumber != null ? `${t.title} S${t.seasonNumber}` : t.title,
+        ),
+      };
+    },
   });
 }

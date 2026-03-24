@@ -36,6 +36,7 @@ vi.mock("@/lib/tools/registry", () => ({
   hasTools: () => false,
   getOpenAITools: () => [],
   executeTool: vi.fn(),
+  getToolLlmContent: (_name: string, result: string) => result,
 }));
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },

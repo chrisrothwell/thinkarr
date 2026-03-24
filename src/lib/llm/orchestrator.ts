@@ -4,7 +4,7 @@ import { buildSystemPrompt } from "./system-prompt";
 import { getDb, schema } from "@/lib/db";
 import { eq, asc } from "drizzle-orm";
 import { initializeTools } from "@/lib/tools/init";
-import { getOpenAITools, executeTool, hasTools } from "@/lib/tools/registry";
+import { getOpenAITools, executeTool, hasTools, getToolLlmContent } from "@/lib/tools/registry";
 import { logger } from "@/lib/logger";
 import type {
   TextDeltaEvent,
@@ -65,7 +65,11 @@ function loadHistory(conversationId: string): ChatMessage[] {
         messages.push({
           role: "tool",
           tool_call_id: row.toolCallId,
-          content: row.content,
+          // Use the compact LLM summary if the tool defines one, so large
+          // tool results (e.g. display_titles) don't bloat the context window.
+          content: row.toolName
+            ? getToolLlmContent(row.toolName, row.content)
+            : row.content,
         });
       }
     }
@@ -346,11 +350,12 @@ export async function* orchestrate(
         });
       }
 
-      // Add to conversation for next round — the LLM needs a tool message for every tool_calls entry
+      // Add to conversation for next round — the LLM needs a tool message for every tool_calls entry.
+      // Use the compact LLM summary so large tool results don't bloat the context window.
       apiMessages.push({
         role: "tool",
         tool_call_id: tc.id,
-        content: result,
+        content: getToolLlmContent(tc.function.name, result),
       });
 
       yield {

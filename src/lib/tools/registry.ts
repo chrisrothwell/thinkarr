@@ -10,6 +10,11 @@ export interface ToolDefinition {
   description: string;
   schema: z.ZodType;
   handler: ToolHandler;
+  /** Optional: produce a compact summary of the result for the LLM context.
+   *  When provided, the orchestrator sends this to the LLM instead of the full
+   *  result (which may be large). The full result is still saved to DB and
+   *  streamed to the frontend. */
+  llmSummary?: (result: unknown) => unknown;
 }
 
 const tools: Map<string, ToolDefinition> = new Map();
@@ -61,6 +66,22 @@ export async function executeTool(
     const msg = e instanceof Error ? e.message : "Tool execution failed";
     logger.error("Tool execution error", { toolName: name, error: msg });
     return JSON.stringify({ error: msg });
+  }
+}
+
+/**
+ * Return the content string that should be fed back to the LLM for a given
+ * tool result. If the tool defines an llmSummary, that compact form is used;
+ * otherwise the full result JSON is returned unchanged.
+ */
+export function getToolLlmContent(name: string, fullResultJson: string): string {
+  const tool = tools.get(name);
+  if (!tool?.llmSummary) return fullResultJson;
+  try {
+    const full = JSON.parse(fullResultJson);
+    return JSON.stringify(tool.llmSummary(full));
+  } catch {
+    return fullResultJson;
   }
 }
 
