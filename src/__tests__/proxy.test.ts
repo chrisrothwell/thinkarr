@@ -32,7 +32,7 @@ describe("proxy middleware", () => {
     expect(res.headers.get("location")).toBeNull();
   });
 
-  it.each(["/setup", "/login", "/api/setup", "/api/auth/callback", "/api/mcp"])(
+  it.each(["/setup", "/login", "/api/setup", "/api/auth/callback", "/api/mcp", "/api/internal/logs"])(
     "allows public path %s without a session cookie",
     (path) => {
       const res = proxy(makeRequest(path));
