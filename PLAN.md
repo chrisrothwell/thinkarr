@@ -1233,3 +1233,23 @@ Log analysis of conversation `81f6c0cd` showed that each `overseerr_search` tool
 | `src/lib/services/overseerr.ts` | Remove detail fetch loop from `search()`; drop `cast`/`imdbId` from `OverseerrSearchResult`; read `seasonCount` directly from `r.numberOfSeasons` |
 | `src/lib/tools/overseerr-tools.ts` | Update `overseerr_search` and `overseerr_get_details` descriptions |
 | `src/__tests__/lib/overseerr.test.ts` | Replace cast/request search tests with no-extra-fetch and `getDetails` test suites |
+
+### Phase 44: Fix repeated orphaned tool call repair on every request
+
+#### Root cause
+When the SSE stream dropped mid-tool-execution (mobile backgrounding / network flap), the tool call was saved to the `messages` table (as part of the assistant row's `toolCalls` JSON) but no corresponding tool result row was ever written. `loadHistory()` in `orchestrator.ts` correctly detected the orphan and injected a synthetic error result in memory, allowing the LLM to recover. However, the synthetic result was never persisted to the DB.
+
+**Observed impact (beta logs, conv `6913c98e`):** `sonarr_get_series_status` call `call_vd4Ydqzwy3WmiDZYYtdK2xYM` was repaired on 9 consecutive requests over 12 minutes. The same pattern occurred for a `display_titles` call after a second stream failure. Each repair logged a WARN, none visible as a user-facing error, but they polluted logs and wasted CPU.
+
+#### Fix
+Added a `saveMessage()` call inside the orphan repair branch of `loadHistory()`. The first request that encounters an orphaned call writes the synthetic result to DB. Every subsequent `loadHistory()` call finds the row, includes it in `seenToolResultIds`, and skips the repair entirely.
+
+#### Test
+New regression test in `orchestrator.test.ts`: seeds a conversation with an orphaned tool call, runs two consecutive `orchestrate()` calls, and asserts the synthetic row count is exactly 1 after both runs (not 2 or more).
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/llm/orchestrator.ts` | Add `saveMessage()` call inside orphan repair branch in `loadHistory()` |
+| `src/__tests__/lib/orchestrator.test.ts` | New regression test: synthetic result row count stays 1 across consecutive requests |
