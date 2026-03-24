@@ -1,11 +1,12 @@
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
-import { getTableColumns, getTableName, is } from "drizzle-orm";
+import { getTableColumns, getTableName, is, eq } from "drizzle-orm";
 import { SQLiteTable } from "drizzle-orm/sqlite-core";
 import * as schema from "./schema";
 import path from "path";
 import fs from "fs";
+import { randomBytes } from "crypto";
 import { logger } from "@/lib/logger";
 
 const DB_DIR = process.env.CONFIG_DIR || (process.platform === "win32" ? "./.config" : "/config");
@@ -176,6 +177,24 @@ export function getDb() {
     // Logs one line per table (OK / repaired / throws on NOT NULL drift).
     ensureSchemaIntegrity(sqlite);
     logger.info("Database ready");
+
+    // ── 5. Auto-generate internal API key ────────────────────────────────────
+    // Generated once on first boot; the operator copies it from
+    // Settings → Logs → Internal API Key and gives it to Claude for
+    // the /beta-logs diagnostic command.
+    const existingApiKey = _db
+      .select({ value: schema.appConfig.value })
+      .from(schema.appConfig)
+      .where(eq(schema.appConfig.key, "internal_api_key"))
+      .get();
+    if (!existingApiKey) {
+      const newKey = randomBytes(32).toString("hex");
+      _db
+        .insert(schema.appConfig)
+        .values({ key: "internal_api_key", value: newKey, encrypted: true, updatedAt: new Date() })
+        .run();
+      logger.info("Generated internal API key for diagnostic endpoint");
+    }
   }
   return _db;
 }

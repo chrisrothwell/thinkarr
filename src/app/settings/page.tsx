@@ -142,6 +142,10 @@ export default function SettingsPage() {
   const [logTotalLines, setLogTotalLines] = useState(0);
   const [logShowing, setLogShowing] = useState(0);
 
+  // Internal API key state (admin only)
+  const [internalApiKey, setInternalApiKey] = useState<string>("");
+  const [internalApiKeyLoading, setInternalApiKeyLoading] = useState(false);
+
   // --- Load data ---
   useEffect(() => {
     // Always fetch session first to determine admin status
@@ -494,6 +498,33 @@ export default function SettingsPage() {
     }
   }
 
+  // --- Internal API key ---
+  async function loadInternalApiKey() {
+    setInternalApiKeyLoading(true);
+    try {
+      const res = await fetch("/api/settings/internal-api-key");
+      const data = await res.json();
+      if (data.success) setInternalApiKey(data.data.key);
+    } catch {
+      // Silent fail
+    } finally {
+      setInternalApiKeyLoading(false);
+    }
+  }
+
+  async function regenerateInternalApiKey() {
+    setInternalApiKeyLoading(true);
+    try {
+      const res = await fetch("/api/settings/internal-api-key", { method: "POST" });
+      const data = await res.json();
+      if (data.success) setInternalApiKey(data.data.key);
+    } catch {
+      // Silent fail
+    } finally {
+      setInternalApiKeyLoading(false);
+    }
+  }
+
   // --- User management ---
   async function updateUser(userId: number, updates: Partial<Pick<UserEntry, "isAdmin" | "defaultModel" | "canChangeModel" | "rateLimitMessages" | "rateLimitPeriod">>) {
     try {
@@ -615,7 +646,7 @@ export default function SettingsPage() {
           </div>
         )}
 
-        <Tabs defaultValue={isInitialSetup ? "llm" : "general"} onValueChange={(v) => { if (v === "logs") loadLogFiles(); }}>
+        <Tabs defaultValue={isInitialSetup ? "llm" : "general"} onValueChange={(v) => { if (v === "logs") { loadLogFiles(); loadInternalApiKey(); } }}>
           <TabsList>
             <TabsTrigger value="general">General</TabsTrigger>
             {currentUser?.isAdmin && <TabsTrigger value="llm">LLM Setup</TabsTrigger>}
@@ -1310,7 +1341,47 @@ export default function SettingsPage() {
           </TabsContent>
 
           {/* ===== TAB 5: Logs (admin only) ===== */}
-          <TabsContent value="logs" className="mt-4">
+          <TabsContent value="logs" className="mt-4 space-y-4">
+            {/* Internal API Key */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">Internal API Key</CardTitle>
+                <CardDescription>
+                  Use this key with the <code className="font-mono text-xs">/beta-logs</code> Claude slash command to pull live diagnostic logs.
+                  Set it as <code className="font-mono text-xs">THINKARR_INTERNAL_KEY</code> in your Claude settings.json.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center gap-2">
+                  <Input
+                    value={internalApiKey}
+                    readOnly
+                    className="font-mono text-sm"
+                    placeholder={internalApiKeyLoading ? "Loading…" : "Click regenerate to reveal key"}
+                  />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => copyToClipboard(internalApiKey)}
+                    disabled={!internalApiKey}
+                  >
+                    <Copy size={14} />
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="icon"
+                    onClick={regenerateInternalApiKey}
+                    disabled={internalApiKeyLoading}
+                  >
+                    {internalApiKeyLoading ? <Spinner size={14} /> : <RefreshCw size={14} />}
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground mt-2">
+                  Regenerating issues a new key immediately — update your Claude settings.json after regenerating.
+                </p>
+              </CardContent>
+            </Card>
+
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg">Application Logs</CardTitle>

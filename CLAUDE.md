@@ -138,3 +138,12 @@ For every feature or bug fix, check whether a unit or E2E test already covers th
 - E2E tests live in `tests/e2e/` and use Playwright.
 - Prefer unit tests for logic/API behaviour; prefer E2E tests only for UI interactions that can't be covered at the unit level.
 - If an existing test already covers the behaviour, no new test is needed — but do not remove or weaken existing tests.
+## Rule: use /beta-logs before diagnosing runtime issues
+
+When investigating a bug reported against beta (unexpected behaviour,
+missing data, wrong API response), run /beta-logs first to pull the last
+300 log lines from the live container before forming a hypothesis.
+
+- The command requires `THINKARR_INTERNAL_KEY` to be set in `.claude/settings.json` under `env`
+- Retrieve the key from **Settings → Logs → Internal API Key** in the beta admin UI
+- Do not commit or log the key value

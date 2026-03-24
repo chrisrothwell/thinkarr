@@ -1027,3 +1027,62 @@ Bumped `package.json` version from `1.1.1-beta.5` to `1.1.1` (stable release).
 | File | Change |
 |------|--------|
 | `package.json` | Version `1.1.1-beta.5` → `1.1.1` |
+
+### Phase 37: Internal Log Endpoint for Claude Diagnostics (Issue #132)
+
+Adds a zero-config internal diagnostic endpoint so Claude can pull live log lines directly from the
+running container without needing a Plex session or shell access.
+
+#### Features
+
+- **`GET /api/internal/logs`** — Returns the last N log lines (default 300, max 2000) aggregated
+  across all daily log files in `/config/logs/`. Protected by a static `X-Api-Key` header; returns
+  `401` for any missing or incorrect key. No Plex session required.
+
+- **Auto-generated key on first boot** — `getDb()` now checks for `internal_api_key` in
+  `app_config` immediately after schema integrity passes. If absent it generates a 64-char hex key
+  via `crypto.randomBytes(32)` and persists it with `encrypted: true`. Fully zero-config for the
+  operator.
+
+- **`GET /api/settings/internal-api-key`** — Admin-session-protected endpoint that returns the
+  current key so the settings UI can display it.
+
+- **`POST /api/settings/internal-api-key`** — Admin-session-protected endpoint that generates and
+  stores a new key, returning the new value immediately.
+
+- **Settings UI — Internal API Key card** — Added to the Logs tab above the file viewer. Shows the
+  key in a read-only input with a Copy button and a Regenerate button (same pattern as the MCP
+  bearer token). Key is loaded when the Logs tab is first opened.
+
+- **`.claude/commands/beta-logs.md`** — Custom slash command. Running `/beta-logs` in a Claude
+  session executes `curl -s -H "X-Api-Key: $THINKARR_INTERNAL_KEY" …/api/internal/logs?tail=300`
+  and uses the output as diagnostic context.
+
+- **`CLAUDE.md` rule** — New section "Rule: use /beta-logs before diagnosing runtime issues"
+  documents when to run the command and how to set `THINKARR_INTERNAL_KEY` in settings.json.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/app/api/internal/logs/route.ts` | New — `GET /api/internal/logs`, X-Api-Key auth, tail param |
+| `src/app/api/settings/internal-api-key/route.ts` | New — `GET` / `POST` for admin UI display + regeneration |
+| `src/lib/db/index.ts` | Auto-generate `internal_api_key` on first boot after schema integrity check |
+| `src/app/settings/page.tsx` | Internal API Key card added to Logs tab; state + fetch functions added |
+| `.claude/commands/beta-logs.md` | New slash command — fetches live logs from beta container |
+| `CLAUDE.md` | Added "use /beta-logs before diagnosing runtime issues" rule |
+| `src/__tests__/api/internal-logs.test.ts` | New — 401 on missing/wrong key, 200 on valid key, tail param, multi-file aggregation |
+
+#### Config keys added
+
+| Key | Encrypted | Description |
+|-----|-----------|-------------|
+| `internal_api_key` | true | 64-char hex key for `GET /api/internal/logs` |
+
+#### API routes added
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/internal/logs` | `X-Api-Key` header | Return last N log lines |
+| `GET` | `/api/settings/internal-api-key` | Admin session | Fetch current key for UI display |
+| `POST` | `/api/settings/internal-api-key` | Admin session | Regenerate and return new key |
