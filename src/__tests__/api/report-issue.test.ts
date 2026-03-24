@@ -319,7 +319,7 @@ describe("POST /api/report-issue — GitHub integration", () => {
 
     // Full report must have been logged before the GitHub call
     const submittedCall = logInfoSpy.mock.calls.find(
-      (args) => typeof args[0] === "string" && args[0].includes("report-issue: issue submitted"),
+      (args) => typeof args[0] === "string" && args[0].includes("report-issue: report logged"),
     );
     expect(submittedCall).toBeDefined();
     const meta = submittedCall![1] as Record<string, unknown>;
