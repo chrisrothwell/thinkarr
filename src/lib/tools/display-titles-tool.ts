@@ -144,7 +144,7 @@ If an Overseerr TV result has seasonCount > 1, you MUST call this tool with one 
         episodeNumber: t.episodeNumber ?? undefined,
       }));
 
-      return { ok: true, count: displayTitles.length };
+      return { displayTitles };
     },
   });
 }
