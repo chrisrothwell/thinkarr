@@ -98,6 +98,11 @@ export async function GET() {
       url: getConfig("overseerr.url") || "",
       apiKey: getConfig("overseerr.apiKey") ? "••••••••" : "",
     },
+    github: {
+      token: getConfig("github.token") ? "••••••••" : "",
+      owner: getConfig("github.owner") || "",
+      repo: getConfig("github.repo") || "",
+    },
   };
 
   return NextResponse.json<ApiResponse>({ success: true, data });
@@ -176,6 +181,27 @@ export async function PATCH(request: Request) {
       section: "llmEndpoints",
       endpointIds: endpoints.map((e) => e.id),
     });
+  }
+
+  // Handle GitHub config
+  if (body.github && typeof body.github === "object") {
+    const gh = body.github as Record<string, string>;
+    const changedKeys: string[] = [];
+    if (gh.token && gh.token !== "••••••••") {
+      setConfig("github.token", gh.token, true);
+      changedKeys.push("token=[redacted]");
+    }
+    if (typeof gh.owner === "string") {
+      setConfig("github.owner", gh.owner);
+      changedKeys.push(`owner=${gh.owner}`);
+    }
+    if (typeof gh.repo === "string") {
+      setConfig("github.repo", gh.repo);
+      changedKeys.push(`repo=${gh.repo}`);
+    }
+    if (changedKeys.length > 0) {
+      logger.info("SETTINGS_CHANGE", { adminUserId: session.user.id, section: "github", changed: changedKeys });
+    }
   }
 
   // Handle arr services

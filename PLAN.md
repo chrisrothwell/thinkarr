@@ -1086,3 +1086,36 @@ running container without needing a Plex session or shell access.
 | `GET` | `/api/internal/logs` | `X-Api-Key` header | Return last N log lines |
 | `GET` | `/api/settings/internal-api-key` | Admin session | Fetch current key for UI display |
 | `POST` | `/api/settings/internal-api-key` | Admin session | Regenerate and return new key |
+
+### Phase 38: Report Issue Feature (issue #159)
+
+#### Features
+- [x] **Report Issue button in chat window (#159)** — "Report Issue" flag button appears in the chat toolbar when a conversation is active. Clicking opens a modal where the user describes the observed problem. On submit, `POST /api/report-issue` fetches the full conversation transcript (messages, tool calls, timestamps) from the DB and creates a GitHub issue tagged `user-reported` via the GitHub REST API. If no GitHub credentials are configured the report is still logged at `info` level. The modal shows a link to the created issue on success. — `src/app/api/report-issue/route.ts` (new), `src/components/chat/report-issue-modal.tsx` (new), `src/app/chat/page.tsx`
+- [x] **GitHub config in Settings → Logs** — Admin can store `GITHUB_TOKEN`, `GITHUB_OWNER`, and `GITHUB_REPO` in `app_config` via a new card in the Logs tab. Env vars take precedence; stored values are used as fallback. Token is masked in the `GET /api/settings` response.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/app/api/report-issue/route.ts` | New — POST endpoint; auth, access control, transcript assembly, GitHub API call; falls back to `app_config` when env vars absent |
+| `src/components/chat/report-issue-modal.tsx` | New — modal: description textarea, submit, success/error feedback |
+| `src/app/chat/page.tsx` | Combined model-selector + Report Issue toolbar; renders modal |
+| `src/app/api/settings/route.ts` | `GET` returns `github: {token, owner, repo}` (token masked); `PATCH` handles `github` section |
+| `src/app/settings/page.tsx` | `githubConfig` state; loaded on init; included in save; GitHub config card in Logs tab |
+| `src/__tests__/api/report-issue.test.ts` | New — 12 tests covering auth, input validation, access control, no-token path, GitHub integration |
+
+#### API Routes
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/api/report-issue` | User session | Create a GitHub issue from a conversation report |
+
+#### Config keys added
+
+| Key | Encrypted | Description |
+|-----|-----------|-------------|
+| `github_token` | true | PAT with `repo` scope for creating issues |
+| `github_owner` | false | GitHub repository owner (default: `chrisrothwell`) |
+| `github_repo` | false | GitHub repository name (default: `thinkarr`) |
+
+Admin can now configure GitHub issue reporting credentials directly in **Settings → Logs** without needing environment variables. Token stored encrypted; owner/repo stored plain. Env vars (`GITHUB_TOKEN`, `GITHUB_OWNER`, `GITHUB_REPO`) still take precedence when set.
