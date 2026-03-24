@@ -40,12 +40,22 @@ const localTimestamp = winston.format.timestamp({
   format: () => formatLocalTimestamp(),
 });
 
+// Serialize log entries with timestamp always first, then level, message, then
+// remaining fields. Winston's built-in format.json() does not guarantee key
+// order, which makes log files hard to scan. Using printf gives us control.
+// JSON.stringify silently drops Symbol-keyed properties (e.g. Winston's
+// internal Symbol(level)), so no manual stripping is needed.
+const jsonWithTimestampFirst = winston.format.printf((info) => {
+  const { timestamp, level, message, ...meta } = info;
+  return JSON.stringify({ timestamp, level, message, ...meta });
+});
+
 const logger = winston.createLogger({
   level: "info",
   format: winston.format.combine(
     localTimestamp,
     winston.format.errors({ stack: true }),
-    winston.format.json()
+    jsonWithTimestampFirst,
   ),
   transports: [
     new winston.transports.Console({
@@ -64,7 +74,7 @@ const logger = winston.createLogger({
         datePattern: "YYYY-MM-DD",
         maxFiles: "14d",
         maxSize: "20m",
-        format: winston.format.combine(localTimestamp, winston.format.json()),
+        format: winston.format.combine(localTimestamp, winston.format.errors({ stack: true }), jsonWithTimestampFirst),
       }),
     ]),
   ],

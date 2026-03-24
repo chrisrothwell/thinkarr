@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Star } from "lucide-react";
 import type { DisplayTitle } from "@/types/titles";
+import { clientLog } from "@/lib/client-logger";
 
 interface TitleCardProps {
   title: DisplayTitle;
@@ -65,7 +66,9 @@ export function TitleCard({ title }: TitleCardProps) {
         setErrorMsg(data.error ?? "Request failed");
         setRequestStatus("error");
       }
-    } catch {
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Network error";
+      clientLog.error("Title card request failed", { message: msg, title: title.title, overseerrId: title.overseerrId });
       setErrorMsg("Network error");
       setRequestStatus("error");
     } finally {
