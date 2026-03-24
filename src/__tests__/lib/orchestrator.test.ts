@@ -290,4 +290,114 @@ describe("orchestrator — orphaned tool call repair (issue #151)", () => {
     const parsed = JSON.parse((syntheticMsg as unknown as { content: string }).content) as { error: string };
     expect(parsed.error).toMatch(/did not complete/);
   });
+
+  it("persists the synthetic result to DB so the repair does not repeat on subsequent requests", async () => {
+    const userId = seedUser(testDb);
+    const conversationId = seedConversation(testDb, userId);
+
+    const orphanedToolCallId = "call_persistent_repair_test";
+    const toolCallsJson = JSON.stringify([
+      { id: orphanedToolCallId, type: "function", function: { name: "display_titles", arguments: "{}" } },
+    ]);
+
+    insertMessage(testDb, conversationId, "user", "Find me a film", { createdAtOffset: 0 });
+    insertMessage(testDb, conversationId, "assistant", null, {
+      toolCalls: toolCallsJson,
+      createdAtOffset: 100,
+    });
+
+    const { orchestrate } = await import("@/lib/llm/orchestrator");
+    const { eq } = await import("drizzle-orm");
+
+    // First request — triggers the repair and should persist the synthetic result
+    for await (const _ of orchestrate({ conversationId, userMessage: "Hello" })) { /* drain */ }
+
+    // Exactly one synthetic tool result row should exist in the DB
+    const rowsAfterFirst = testDb
+      .select()
+      .from(schema.messages)
+      .where(eq(schema.messages.toolCallId, orphanedToolCallId))
+      .all();
+
+    expect(rowsAfterFirst).toHaveLength(1);
+    expect(rowsAfterFirst[0].role).toBe("tool");
+    const content = JSON.parse(rowsAfterFirst[0].content!) as { error: string };
+    expect(content.error).toMatch(/did not complete/);
+
+    // Second request — no new synthetic row should be added (repair does not repeat)
+    for await (const _ of orchestrate({ conversationId, userMessage: "Go on" })) { /* drain */ }
+
+    const rowsAfterSecond = testDb
+      .select()
+      .from(schema.messages)
+      .where(eq(schema.messages.toolCallId, orphanedToolCallId))
+      .all();
+
+    expect(rowsAfterSecond).toHaveLength(1); // still exactly 1, not 2
+  });
+});
+
+// ---------------------------------------------------------------------------
+// LLM error sanitization tests
+// ---------------------------------------------------------------------------
+
+describe("orchestrator — LLM error sanitization", () => {
+  it("yields a friendly message for a 429 quota error and does not expose the raw API error", async () => {
+    vi.doMock("@/lib/llm/client", () => ({
+      getLlmClient: () => ({
+        chat: {
+          completions: {
+            create: vi.fn().mockRejectedValue(
+              new Error("429 You exceeded your current quota, please check your plan and billing details."),
+            ),
+          },
+        },
+      }),
+      getLlmModel: () => "gpt-4o",
+      getLlmClientForEndpoint: vi.fn(),
+    }));
+
+    const userId = seedUser(testDb);
+    const conversationId = seedConversation(testDb, userId);
+
+    const { orchestrate } = await import("@/lib/llm/orchestrator");
+    const events = [];
+    for await (const event of orchestrate({ conversationId, userMessage: "Hello" })) {
+      events.push(event);
+    }
+
+    const errorEvent = events.find((e) => e.type === "error") as { type: string; message: string } | undefined;
+    expect(errorEvent).toBeDefined();
+    expect(errorEvent!.message).toBe("The AI service is temporarily unavailable. Please try again in a moment.");
+    expect(errorEvent!.message).not.toMatch(/quota/);
+    expect(errorEvent!.message).not.toMatch(/429/);
+  });
+
+  it("yields a friendly message for a generic LLM error and does not expose internal details", async () => {
+    vi.doMock("@/lib/llm/client", () => ({
+      getLlmClient: () => ({
+        chat: {
+          completions: {
+            create: vi.fn().mockRejectedValue(new Error("Connection reset by peer")),
+          },
+        },
+      }),
+      getLlmModel: () => "gpt-4o",
+      getLlmClientForEndpoint: vi.fn(),
+    }));
+
+    const userId = seedUser(testDb);
+    const conversationId = seedConversation(testDb, userId);
+
+    const { orchestrate } = await import("@/lib/llm/orchestrator");
+    const events = [];
+    for await (const event of orchestrate({ conversationId, userMessage: "Hello" })) {
+      events.push(event);
+    }
+
+    const errorEvent = events.find((e) => e.type === "error") as { type: string; message: string } | undefined;
+    expect(errorEvent).toBeDefined();
+    expect(errorEvent!.message).toBe("The AI service encountered an error. Please try again.");
+    expect(errorEvent!.message).not.toMatch(/Connection reset/);
+  });
 });

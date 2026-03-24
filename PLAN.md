@@ -1207,3 +1207,42 @@ When mobile Chrome backgrounds the app, the client TCP connection drops. This ca
 #### Fix
 - `src/app/api/chat/route.ts`: Introduced `enqueue()` helper that catches `controller.enqueue()` errors and sets `clientConnected = false`. The `for await` loop continues iterating the orchestrator generator regardless — tool calls execute to completion and results are saved to DB. `controller.close()` in the `finally` block is also wrapped since it may also throw on an already-cancelled stream.
 - `src/hooks/use-chat.ts`: Added `visibilitychange` listener (after all `useCallback` hooks so `loadMessages` is in scope). When the page becomes visible and no stream is active, reloads messages from DB so server-side results that completed while the page was backgrounded are immediately shown.
+
+### Phase 44: Persist orphaned tool call repair to DB
+
+#### Bug
+Beta log analysis revealed that `loadHistory()` was repairing orphaned tool calls (assistant message with `tool_calls` but no matching tool result row) in-memory on every single request. The synthetic error message was injected into the API message array but never written to DB, so every subsequent `loadHistory()` call hit the same orphan and re-injected the synthetic result. The logs showed the `"Repaired orphaned tool call"` warning firing repeatedly for the same `toolCallId` across consecutive requests.
+
+#### Fix
+Added a `saveMessage()` call inside the orphan repair loop in `loadHistory()`. The synthetic error result is now persisted to the DB immediately after injection. Subsequent `loadHistory()` calls find the row and include it normally — no repair needed.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/llm/orchestrator.ts` | `loadHistory()`: persist synthetic tool result via `saveMessage()` after injecting it |
+| `src/__tests__/lib/orchestrator.test.ts` | New test: verifies exactly 1 synthetic row after two consecutive orchestrate calls |
+
+### Phase 45: Sanitize LLM API errors before forwarding to client
+
+#### Bug
+Beta log analysis (conversation `df722f04`, March 25) showed raw OpenAI 429 quota errors being forwarded verbatim to the client UI:
+
+```
+ERROR [df722f04] [client] Server error event 429 You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.
+```
+
+These appeared as confusing "network error" glitches in the UI, exposing internal API details to end users.
+
+#### Fix
+Added `sanitizeLlmError()` helper in `orchestrator.ts`. Raw error is preserved in server-side logs; only a friendly message is yielded to the client:
+- 429 / quota / rate-limit → "The AI service is temporarily unavailable. Please try again in a moment."
+- 401 / 403 / unauthorized / forbidden → "The AI service is not properly configured. Please contact the administrator."
+- Everything else → "The AI service encountered an error. Please try again."
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/llm/orchestrator.ts` | Add `sanitizeLlmError()`; use it in the LLM catch block instead of forwarding raw error |
+| `src/__tests__/lib/orchestrator.test.ts` | 2 new tests: 429 yields friendly rate-limit message; generic error yields friendly fallback |

@@ -32,6 +32,17 @@ type ChatMessage = OpenAI.ChatCompletionMessageParam;
 
 const MAX_TOOL_ROUNDS = 5;
 
+/** Map raw LLM API errors to user-friendly messages. Raw error is preserved in server logs. */
+function sanitizeLlmError(raw: string): string {
+  if (/429|quota|rate.?limit/i.test(raw)) {
+    return "The AI service is temporarily unavailable. Please try again in a moment.";
+  }
+  if (/401|403|unauthorized|forbidden/i.test(raw)) {
+    return "The AI service is not properly configured. Please contact the administrator.";
+  }
+  return "The AI service encountered an error. Please try again.";
+}
+
 /** Load conversation history from DB, formatted for the OpenAI API. */
 function loadHistory(conversationId: string): ChatMessage[] {
   const db = getDb();
@@ -92,16 +103,24 @@ function loadHistory(conversationId: string): ChatMessage[] {
     if (msg.role === "assistant" && "tool_calls" in msg && msg.tool_calls) {
       for (const tc of msg.tool_calls) {
         if (!seenToolResultIds.has(tc.id)) {
+          const toolName = "function" in tc ? (tc as { function?: { name?: string } }).function?.name : undefined;
+          const syntheticContent = JSON.stringify({ error: "Tool call did not complete. Please try again." });
           repaired.push({
             role: "tool",
             tool_call_id: tc.id,
-            content: JSON.stringify({ error: "Tool call did not complete. Please try again." }),
+            content: syntheticContent,
           });
           seenToolResultIds.add(tc.id);
+          // Persist the synthetic result so subsequent loadHistory calls find it
+          // in the DB and don't re-trigger this repair on every request.
+          saveMessage(conversationId, "tool", syntheticContent, {
+            toolCallId: tc.id,
+            toolName,
+          });
           logger.warn("Repaired orphaned tool call in conversation history", {
             conversationId,
             toolCallId: tc.id,
-            toolName: "function" in tc ? (tc as { function?: { name?: string } }).function?.name : undefined,
+            toolName,
           });
         }
       }
@@ -249,7 +268,7 @@ export async function* orchestrate(
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "LLM request failed";
       logger.error("LLM request failed", { conversationId, error: msg });
-      yield { type: "error", message: msg };
+      yield { type: "error", message: sanitizeLlmError(msg) };
       return;
     }
 
