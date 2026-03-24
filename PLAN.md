@@ -1198,3 +1198,12 @@ Two related issues observed in beta logs (conversation `81f6c0cd`):
 | `src/components/chat/message-list.tsx` | Export `buildHistoricalToolCalls`; change fallback status from `"calling"` to `"error"` with "Connection was lost" |
 | `src/hooks/use-chat.ts` | Add `visibilitychange` listener to abort stale streams on mobile foreground |
 | `src/__tests__/lib/build-historical-tool-calls.test.ts` | New — 3 unit tests: done, interrupted (no result), and error result |
+
+### Phase 42 (addendum): Background SSE resilience
+
+#### Root cause
+When mobile Chrome backgrounds the app, the client TCP connection drops. This causes `controller.enqueue()` to throw (WHATWG streams cancel the controller when the consumer disconnects). That throw propagated through `for await (const event of orchestrate(...))` in `route.ts`, abandoning the generator mid-execution — before tool results were saved to DB.
+
+#### Fix
+- `src/app/api/chat/route.ts`: Introduced `enqueue()` helper that catches `controller.enqueue()` errors and sets `clientConnected = false`. The `for await` loop continues iterating the orchestrator generator regardless — tool calls execute to completion and results are saved to DB. `controller.close()` in the `finally` block is also wrapped since it may also throw on an already-cancelled stream.
+- `src/hooks/use-chat.ts`: Added `visibilitychange` listener (after all `useCallback` hooks so `loadMessages` is in scope). When the page becomes visible and no stream is active, reloads messages from DB so server-side results that completed while the page was backgrounded are immediately shown.
