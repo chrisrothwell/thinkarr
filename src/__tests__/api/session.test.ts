@@ -38,6 +38,7 @@ vi.mock("next/headers", () => ({
 // ---------------------------------------------------------------------------
 import * as loggerModule from "@/lib/logger";
 let logInfoSpy: MockInstance;
+let logWarnSpy: MockInstance;
 
 // ---------------------------------------------------------------------------
 // Route handler (imported after mocks)
@@ -54,6 +55,7 @@ beforeEach(() => {
   migrate(testDb, { migrationsFolder: path.join(process.cwd(), "drizzle") });
   mockState.sessionCookie = undefined;
   logInfoSpy = vi.spyOn(loggerModule.logger, "info");
+  logWarnSpy = vi.spyOn(loggerModule.logger, "warn");
 });
 
 afterEach(() => {
@@ -81,6 +83,28 @@ describe("GET /api/auth/session", () => {
     const body = await res.json();
     expect(body.success).toBe(true);
     expect(body.data.user.id).toBe(uid);
+  });
+
+  it("returns 401 and logs a warning when the session cookie exists but the session is expired", async () => {
+    // Insert an already-expired session directly
+    const uid = seedUser(testDb, { plexUsername: "bob" });
+    const expiredId = "expired-session-id";
+    testDb.insert(schema.sessions).values({
+      id: expiredId,
+      userId: uid,
+      expiresAt: new Date(Date.now() - 1000), // already expired
+      createdAt: new Date(),
+    }).run();
+    mockState.sessionCookie = expiredId;
+
+    const res = await GET();
+    expect(res.status).toBe(401);
+
+    const warnCall = logWarnSpy.mock.calls.find(
+      (args) => typeof args[0] === "string" && args[0] === "Session expired or not found",
+    );
+    expect(warnCall).toBeDefined();
+    expect(warnCall![1]).toMatchObject({ sessionId: expiredId });
   });
 });
 

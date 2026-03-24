@@ -1146,3 +1146,15 @@ Admin can now configure GitHub issue reporting credentials directly in **Setting
 | `src/app/error.tsx` | New — Next.js route error boundary; logs caught errors via `clientLog.error` |
 | `src/__tests__/api/session.test.ts` | New — tests for GET and DELETE `/api/auth/session` including logout log assertion |
 | `src/__tests__/api/report-issue.test.ts` | Update log message string assertion to match renamed log |
+
+### Phase 40: Session expiry logging
+
+#### Features
+- [x] **Expired session warning** — `getSession()` in `src/lib/auth/session.ts` now logs `warn "Session expired or not found"` with the `sessionId` when a session cookie is present but the session row is missing or past its `expiresAt`. Previously this was a silent null return, making it impossible in logs to distinguish "user has no cookie" from "user has a cookie but their 30-day session expired and they'll be bounced to the login screen".
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/auth/session.ts` | Import `logger`; add `logger.warn("Session expired or not found", { sessionId })` before the existing `return null` at line 75 |
+| `src/__tests__/api/session.test.ts` | Add `logWarnSpy`; new test case: expired session cookie returns 401 and logs the warning with the sessionId |
