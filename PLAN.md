@@ -1125,3 +1125,24 @@ Admin can now configure GitHub issue reporting credentials directly in **Setting
 
 #### Version bump
 - [x] Bumped `package.json` version from `1.1.1` to `1.1.2-beta.1`
+
+
+### Phase 39: Logging gap fixes
+
+#### Features
+- [x] **Logout logging** — `DELETE /api/auth/session` now reads the session before destroying it and logs `User logout` with `userId` and `plexUsername`. Previously the logout was silent in the logs, making it impossible to distinguish voluntary logouts from session expiry.
+- [x] **Report-issue log message clarity** — Renamed `"report-issue: issue submitted"` (which fired before the GitHub API call) to `"report-issue: report logged"` to make clear it is a local-only log entry. The post-GitHub success log is renamed `"report-issue: GitHub issue created"`. Eliminates the ambiguity seen in live logs where the warn and the info fired in the same millisecond with the same conversation ID.
+- [x] **Frontend global error logging** — Added `<ErrorLogger />` client component (`src/components/error-logger.tsx`) to the root layout. It attaches `window.onerror` and `window.unhandledrejection` listeners on mount and forwards errors to the server via `clientLog.error`, so unhandled JS errors and promise rejections now appear in `/api/internal/logs` alongside backend events.
+- [x] **Next.js error boundary** — Added `src/app/error.tsx` (React error boundary) that logs caught rendering errors via `clientLog.error` before rendering a minimal "try again" fallback UI.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/app/api/auth/session/route.ts` | `DELETE` handler: get session before destroy, log `User logout` |
+| `src/app/api/report-issue/route.ts` | Rename pre-GitHub log to `report-issue: report logged`; post-GitHub log to `report-issue: GitHub issue created` |
+| `src/components/error-logger.tsx` | New — client component; `window.onerror` + `unhandledrejection` → `clientLog.error` |
+| `src/app/layout.tsx` | Add `<ErrorLogger />` to root layout body |
+| `src/app/error.tsx` | New — Next.js route error boundary; logs caught errors via `clientLog.error` |
+| `src/__tests__/api/session.test.ts` | New — tests for GET and DELETE `/api/auth/session` including logout log assertion |
+| `src/__tests__/api/report-issue.test.ts` | Update log message string assertion to match renamed log |

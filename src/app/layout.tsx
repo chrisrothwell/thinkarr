@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import { ErrorLogger } from "@/components/error-logger";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -24,6 +25,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="antialiased">
+        <ErrorLogger />
         {children}
       </body>
     </html>
