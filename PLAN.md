@@ -1176,3 +1176,25 @@ Log analysis of conversation `81f6c0cd` revealed `overseerr_search` returning HT
 |------|--------|
 | `src/lib/services/overseerr.ts` | Strip reserved characters from query before `encodeURIComponent` in `search()` |
 | `src/__tests__/lib/overseerr.test.ts` | New test: parentheses stripped from query |
+
+### Phase 42: Fix stuck spinners and mobile SSE reconnection
+
+#### Bugs
+Two related issues observed in beta logs (conversation `81f6c0cd`):
+
+1. **Stuck spinner after SSE disconnect** — `buildHistoricalToolCalls` left incomplete tool calls with `status: "calling"` when rebuilding from the DB after a reload. Since `"calling"` renders a spinner, any tool call that never completed (e.g. because the stream dropped) showed an infinite spinner after reconnecting.
+
+2. **Mobile backgrounding silently kills stream** — When Chrome on mobile is backgrounded, the browser can silently suspend the SSE stream without throwing an error. The `finally` block (which reloads messages and clears state) never fired until the user manually retried.
+
+#### Fix
+- `message-list.tsx`: change the fallback status in `buildHistoricalToolCalls` from `"calling"` to `"error"` with message `"Connection was lost"` for tool calls that have no result record in the DB.
+- `use-chat.ts`: add a `visibilitychange` listener. When the page becomes visible after being hidden for > 3 s while a stream is active, abort the stream. The existing `finally` block then fires, reloads messages, and clears spinners.
+- `buildHistoricalToolCalls` is exported so it can be unit-tested directly.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/components/chat/message-list.tsx` | Export `buildHistoricalToolCalls`; change fallback status from `"calling"` to `"error"` with "Connection was lost" |
+| `src/hooks/use-chat.ts` | Add `visibilitychange` listener to abort stale streams on mobile foreground |
+| `src/__tests__/lib/build-historical-tool-calls.test.ts` | New — 3 unit tests: done, interrupted (no result), and error result |
