@@ -401,3 +401,107 @@ describe("orchestrator — LLM error sanitization", () => {
     expect(errorEvent!.message).not.toMatch(/Connection reset/);
   });
 });
+
+describe("orchestrator — 429 rate-limit retry", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    sqlite = new Database(":memory:");
+    testDb = drizzle(sqlite, { schema });
+    migrate(testDb, { migrationsFolder: path.resolve(process.cwd(), "drizzle") });
+  });
+  afterEach(() => {
+    sqlite.close();
+  });
+
+  it("retries on 429 and succeeds when second attempt works", async () => {
+    let callCount = 0;
+
+    vi.doMock("@/lib/llm/client", () => ({
+      getLlmClient: () => ({
+        chat: {
+          completions: {
+            create: vi.fn(async () => {
+              callCount++;
+              if (callCount === 1) {
+                throw new Error("429 Rate limit reached for gpt-4.1 on tokens per min (TPM). Please try again in 50ms.");
+              }
+              return (async function* () {
+                yield { choices: [{ delta: { content: "Retry succeeded." } }], usage: null };
+                yield { choices: [{ delta: {} }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } };
+              })();
+            }),
+          },
+        },
+      }),
+      getLlmModel: () => "gpt-4o",
+      getLlmClientForEndpoint: vi.fn(),
+    }));
+
+    // Make timer delays instant so the retry doesn't block the test
+    const origSetTimeout = globalThis.setTimeout;
+    (globalThis as unknown as { setTimeout: (fn: () => void) => number }).setTimeout =
+      (fn: () => void) => { Promise.resolve().then(fn); return 0; };
+
+    try {
+      const userId = seedUser(testDb);
+      const conversationId = seedConversation(testDb, userId);
+      const { orchestrate } = await import("@/lib/llm/orchestrator");
+
+      const events: unknown[] = [];
+      for await (const event of orchestrate({ conversationId, userMessage: "Hello" })) {
+        events.push(event);
+      }
+
+      expect(callCount).toBe(2);
+      expect(events.some((e) => (e as { type: string }).type === "text_delta")).toBe(true);
+      expect(events.some((e) => (e as { type: string }).type === "error")).toBe(false);
+    } finally {
+      globalThis.setTimeout = origSetTimeout;
+    }
+  });
+
+  it("surfaces a friendly error after all retries are exhausted", async () => {
+    vi.doMock("@/lib/llm/client", () => ({
+      getLlmClient: () => ({
+        chat: {
+          completions: {
+            create: vi.fn().mockRejectedValue(
+              new Error("429 Rate limit reached. Please try again in 50ms."),
+            ),
+          },
+        },
+      }),
+      getLlmModel: () => "gpt-4o",
+      getLlmClientForEndpoint: vi.fn(),
+    }));
+
+    // Make timer delays instant
+    const origSetTimeout = globalThis.setTimeout;
+    (globalThis as unknown as { setTimeout: (fn: () => void) => number }).setTimeout =
+      (fn: () => void) => { Promise.resolve().then(fn); return 0; };
+
+    try {
+      const userId = seedUser(testDb);
+      const conversationId = seedConversation(testDb, userId);
+      const { orchestrate } = await import("@/lib/llm/orchestrator");
+
+      const events: unknown[] = [];
+      for await (const event of orchestrate({ conversationId, userMessage: "Hello" })) {
+        events.push(event);
+      }
+
+      const errorEvents = events.filter(
+        (e) => (e as { type: string }).type === "error",
+      ) as { type: string; message: string }[];
+      expect(errorEvents.length).toBeGreaterThan(0);
+      expect(errorEvents[0].message).toBe(
+        "The AI service is temporarily unavailable. Please try again in a moment.",
+      );
+      // No raw API details leaked
+      expect(errorEvents[0].message).not.toMatch(/429/);
+      expect(errorEvents[0].message).not.toMatch(/TPM/);
+    } finally {
+      globalThis.setTimeout = origSetTimeout;
+    }
+  });
+});

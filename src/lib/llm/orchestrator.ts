@@ -32,6 +32,41 @@ type ChatMessage = OpenAI.ChatCompletionMessageParam;
 
 const MAX_TOOL_ROUNDS = 5;
 
+/**
+ * Retry an LLM API call on 429 rate-limit responses with exponential backoff.
+ * The OpenAI TPM limit resets on a sliding window — a short wait is usually
+ * enough (e.g. the API itself says "retry in 50ms" for brief spikes).
+ * Two retries: 1 s then 3 s. On any other error, throws immediately.
+ */
+async function callWithRateLimitRetry<T>(
+  fn: () => Promise<T>,
+  conversationId: string,
+  round: number,
+): Promise<T> {
+  const delays = [1000, 3000];
+  for (let attempt = 0; attempt <= delays.length; attempt++) {
+    try {
+      return await fn();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "";
+      if (/429|rate.?limit/i.test(msg) && attempt < delays.length) {
+        const delayMs = delays[attempt];
+        logger.warn("LLM rate limit hit, retrying after delay", {
+          conversationId,
+          round,
+          attempt: attempt + 1,
+          delayMs,
+        });
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        continue;
+      }
+      throw e;
+    }
+  }
+  // Unreachable, but TypeScript requires it
+  throw new Error("Rate limit retry exhausted");
+}
+
 /** Map raw LLM API errors to user-friendly messages. Raw error is preserved in server logs. */
 function sanitizeLlmError(raw: string): string {
   if (/429|quota|rate.?limit/i.test(raw)) {
@@ -65,7 +100,37 @@ function loadHistory(conversationId: string): ChatMessage[] {
       if (row.content) msg.content = row.content;
       if (row.toolCalls) {
         try {
-          msg.tool_calls = JSON.parse(row.toolCalls);
+          const toolCalls = JSON.parse(row.toolCalls) as OpenAI.ChatCompletionMessageToolCall[];
+          // Compact display_titles call arguments: strip summary, thumbPath, and cast
+          // from each title entry. These are the bulky repeated fields (a 20-season show
+          // repeats a 300-char summary 20 times). The tool result (via llmSummary) already
+          // confirms which cards were shown, so the full args are not needed in history.
+          msg.tool_calls = toolCalls.map((tc) => {
+            if (
+              tc.type === "function" &&
+              tc.function.name === "display_titles" &&
+              tc.function.arguments
+            ) {
+              try {
+                const args = JSON.parse(tc.function.arguments) as {
+                  titles: Record<string, unknown>[];
+                };
+                const compacted = {
+                  titles: args.titles.map(
+                    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+                    ({ summary: _s, thumbPath: _t, cast: _c, ...rest }) => rest,
+                  ),
+                };
+                return {
+                  ...tc,
+                  function: { ...tc.function, arguments: JSON.stringify(compacted) },
+                };
+              } catch {
+                return tc;
+              }
+            }
+            return tc;
+          });
         } catch {
           // Skip malformed tool calls
         }
@@ -210,13 +275,18 @@ export async function* orchestrate(
 
     try {
       const llmStart = Date.now();
-      const stream = await client.chat.completions.create({
-        model,
-        messages: apiMessages,
-        stream: true,
-        stream_options: { include_usage: true },
-        ...(tools && tools.length > 0 ? { tools } : {}),
-      });
+      const stream = await callWithRateLimitRetry(
+        () =>
+          client.chat.completions.create({
+            model,
+            messages: apiMessages,
+            stream: true,
+            stream_options: { include_usage: true },
+            ...(tools && tools.length > 0 ? { tools } : {}),
+          }),
+        conversationId,
+        round,
+      );
 
       // Accumulate streaming chunks
       const toolCallDeltas: Map<number, { id: string; name: string; args: string }> = new Map();

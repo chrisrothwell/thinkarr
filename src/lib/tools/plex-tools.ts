@@ -113,5 +113,21 @@ export function registerPlexTools() {
         .describe("Plex metadata key for the title (e.g. '/library/metadata/123' from a search result's 'key' field)"),
     }),
     handler: async (args) => plex.getTagsForTitle(args.metadataKey),
+    /** Compact history summary: limit directors to 3 and actors to 5 to avoid
+     *  large uncapped arrays bloating subsequent turns. */
+    llmSummary: (result: unknown) => {
+      const r = result as plex.PlexTitleTags;
+      return {
+        key: r.key,
+        title: r.title,
+        genres: r.genres,
+        directors: r.directors.slice(0, 3),
+        actors: r.actors.slice(0, 5),
+        countries: r.countries,
+        studio: r.studio,
+        contentRating: r.contentRating,
+        labels: r.labels,
+      };
+    },
   });
 }
