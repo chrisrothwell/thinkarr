@@ -1087,6 +1087,20 @@ running container without needing a Plex session or shell access.
 | `GET` | `/api/settings/internal-api-key` | Admin session | Fetch current key for UI display |
 | `POST` | `/api/settings/internal-api-key` | Admin session | Regenerate and return new key |
 
+### Phase 37b: Internal Logs API — efficiency improvements
+
+#### Features
+- **Newest-first file iteration with early exit** — `GET /api/internal/logs` now reads log files from newest to oldest and stops as soon as the unfiltered tail quota is met. A routine `tail=300` call no longer reads days-old files when the current log file already contains enough lines.
+- **`?level=<error|warn|info>` filter** — Callers can scope results to a single log severity. The filter matches the JSON field `"level":"<value>"` case-insensitively. `tail` applies to the filtered result set.
+- **`?conversationId=<id>` filter** — Callers can scope results to a single conversation session. Combinable with `?level=`.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/app/api/internal/logs/route.ts` | Newest-first iteration, early exit when quota met, `level` and `conversationId` query filters |
+| `src/__tests__/api/internal-logs.test.ts` | 6 new tests — early-exit optimisation, level filter, conversationId filter, combined filter, empty-result case, tail-on-filtered-lines |
+
 ### Phase 38: Report Issue Feature (issue #159)
 
 #### Features
