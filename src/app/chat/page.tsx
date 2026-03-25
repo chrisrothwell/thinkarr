@@ -5,10 +5,12 @@ import { Sidebar, SidebarToggle } from "@/components/chat/sidebar";
 import { MessageList } from "@/components/chat/message-list";
 import { ChatInput } from "@/components/chat/chat-input";
 import { PwaInstallBanner } from "@/components/chat/pwa-install-banner";
+import { ReportIssueModal } from "@/components/chat/report-issue-modal";
 import { Spinner } from "@/components/ui/spinner";
 import { useConversations } from "@/hooks/use-conversations";
 import { useChat } from "@/hooks/use-chat";
 import type { User } from "@/types";
+import { Flag } from "lucide-react";
 
 export type ChatMode = "text" | "voice" | "realtime";
 
@@ -36,6 +38,7 @@ export default function ChatPage() {
   // Chat mode (text / voice / realtime)
   const [chatMode, setChatMode] = useState<ChatMode>("text");
   const [endpointCaps, setEndpointCaps] = useState({ supportsVoice: false, supportsRealtime: false });
+  const [reportIssueOpen, setReportIssueOpen] = useState(false);
 
   const {
     conversations,
@@ -174,41 +177,57 @@ export default function ChatPage() {
       <main className="flex flex-1 flex-col min-w-0">
         <PwaInstallBanner />
 
-        {/* Model selector bar */}
-        {canChangeModel && models.length > 1 && (
-          <div className="flex items-center justify-end border-b px-4 py-1.5">
-            <label className="flex items-center gap-2 text-xs text-muted-foreground">
-              Model:
-              <select
-                value={selectedModel}
-                onChange={(e) => {
-                  const newModel = e.target.value;
-                  setSelectedModel(newModel);
-                  const opt = models.find((m) => m.id === newModel);
-                  const caps = {
-                    supportsVoice: opt?.supportsVoice ?? false,
-                    supportsRealtime: opt?.supportsRealtime ?? false,
-                  };
-                  setEndpointCaps(caps);
-                  // Reset to text mode if the new endpoint doesn't support current mode
-                  setChatMode((prev) => {
-                    if (prev === "voice" && !caps.supportsVoice) return "text";
-                    if (prev === "realtime" && !caps.supportsRealtime) return "text";
-                    return prev;
-                  });
-                }}
-                className="rounded border bg-background px-2 py-1 text-xs"
-                disabled={streaming}
+        {/* Top toolbar: model selector + report issue button */}
+        {(canChangeModel && models.length > 1) || activeConversationId ? (
+          <div className="flex items-center justify-between border-b px-4 py-1.5">
+            {/* Report Issue button — only shown when a conversation is active */}
+            {activeConversationId ? (
+              <button
+                onClick={() => setReportIssueOpen(true)}
+                className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                title="Report an issue with this conversation"
               >
-                {models.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+                <Flag size={13} />
+                Report Issue
+              </button>
+            ) : (
+              <span />
+            )}
+
+            {/* Model selector */}
+            {canChangeModel && models.length > 1 && (
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                Model:
+                <select
+                  value={selectedModel}
+                  onChange={(e) => {
+                    const newModel = e.target.value;
+                    setSelectedModel(newModel);
+                    const opt = models.find((m) => m.id === newModel);
+                    const caps = {
+                      supportsVoice: opt?.supportsVoice ?? false,
+                      supportsRealtime: opt?.supportsRealtime ?? false,
+                    };
+                    setEndpointCaps(caps);
+                    setChatMode((prev) => {
+                      if (prev === "voice" && !caps.supportsVoice) return "text";
+                      if (prev === "realtime" && !caps.supportsRealtime) return "text";
+                      return prev;
+                    });
+                  }}
+                  className="rounded border bg-background px-2 py-1 text-xs"
+                  disabled={streaming}
+                >
+                  {models.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
           </div>
-        )}
+        ) : null}
 
         <MessageList
           messages={messages}
@@ -250,6 +269,13 @@ export default function ChatPage() {
           selectedModel={selectedModel}
         />
       </main>
+
+      {reportIssueOpen && activeConversationId && (
+        <ReportIssueModal
+          conversationId={activeConversationId}
+          onClose={() => setReportIssueOpen(false)}
+        />
+      )}
     </div>
   );
 }

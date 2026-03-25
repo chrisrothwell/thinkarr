@@ -1,6 +1,9 @@
 # dev secrets
 secrets.txt
 
+# Claude Code local settings (may contain API keys / internal tokens)
+.claude/settings.local.json
+
 #dev config
 .config/
 config/

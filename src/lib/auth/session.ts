@@ -2,6 +2,7 @@ import { cookies, headers } from "next/headers";
 import { v4 as uuidv4 } from "uuid";
 import { getDb, schema } from "@/lib/db";
 import { eq, and, gt } from "drizzle-orm";
+import { logger } from "@/lib/logger";
 import type { User } from "@/types";
 
 const SESSION_COOKIE = "thinkarr_session";
@@ -72,7 +73,10 @@ export async function getSession(): Promise<SessionWithUser | null> {
     .where(and(eq(schema.sessions.id, sessionId), gt(schema.sessions.expiresAt, now)))
     .get();
 
-  if (!session) return null;
+  if (!session) {
+    logger.warn("Session expired or not found", { sessionId });
+    return null;
+  }
 
   const user = db
     .select()

@@ -202,6 +202,18 @@ Build an LLM-powered chat frontend for media management (*arr stack). Users log 
 - [x] **`src/__tests__/lib/plex.test.ts`** — Added tests for `searchByTag` with `tagType` (country, director, default genre) and `getTagsForTitle` (full extraction, empty fields)
 - [x] **`src/__tests__/lib/overseerr.test.ts`** — New: `listRequests` title resolution (movie, TV), seasons list, graceful fallback on fetch failure
 
+### Phase 19: Orphaned Tool Call Repair (issue #151)
+
+#### Bug Fix
+- [x] **Conversations permanently stuck after server crash mid-tool-call (#151)** — When the server crashed (or the SSE connection dropped) between saving the assistant message with `tool_calls` to the DB and saving the corresponding tool result messages, the conversation was left with an orphaned `tool_call_id`. Every subsequent user message caused the LLM API to return HTTP 400: `"An assistant message with 'tool_calls' must be followed by tool messages responding to each 'tool_call_id'."` — making the conversation permanently unrecoverable without manual DB intervention.
+
+  The fix is in `loadHistory()` in `src/lib/llm/orchestrator.ts`: after building the ordered message array from the DB, the function now scans for any assistant message whose `tool_calls` contain a `tool_call_id` that has no matching tool result message. For each such orphan it injects a synthetic error tool message (`{ error: "Tool call did not complete. Please try again." }`) immediately after the assistant message, restoring a valid OpenAI message sequence and allowing the LLM to recover gracefully. A `logger.warn` is emitted for each repair so the issue is visible in logs.
+
+  This covers three crash scenarios: (1) all tool results missing, (2) a partial crash where only some tool results were saved, and (3) the healthy case where nothing is missing (no-op). — `src/lib/llm/orchestrator.ts`
+
+#### Tests
+- [x] **`src/__tests__/lib/orchestrator.test.ts`** — New test file with 3 cases: (1) full orphan — assistant with one unmatched tool call; verifies synthetic error result is injected at the right position and the LLM call succeeds; (2) healthy history — all tool calls have results; verifies no extra tool messages are injected; (3) partial orphan — two tool calls but only the first result saved; verifies exactly one synthetic result is injected for the missing ID.
+
 ### Phase 17: Realtime OpenAI-Only Guard (issue #80)
 
 #### Bug Fix
@@ -1015,3 +1027,305 @@ Bumped `package.json` version from `1.1.1-beta.5` to `1.1.1` (stable release).
 | File | Change |
 |------|--------|
 | `package.json` | Version `1.1.1-beta.5` → `1.1.1` |
+
+### Phase 37: Internal Log Endpoint for Claude Diagnostics (Issue #132)
+
+Adds a zero-config internal diagnostic endpoint so Claude can pull live log lines directly from the
+running container without needing a Plex session or shell access.
+
+#### Features
+
+- **`GET /api/internal/logs`** — Returns the last N log lines (default 300, max 2000) aggregated
+  across all daily log files in `/config/logs/`. Protected by a static `X-Api-Key` header; returns
+  `401` for any missing or incorrect key. No Plex session required.
+
+- **Auto-generated key on first boot** — `getDb()` now checks for `internal_api_key` in
+  `app_config` immediately after schema integrity passes. If absent it generates a 64-char hex key
+  via `crypto.randomBytes(32)` and persists it with `encrypted: true`. Fully zero-config for the
+  operator.
+
+- **`GET /api/settings/internal-api-key`** — Admin-session-protected endpoint that returns the
+  current key so the settings UI can display it.
+
+- **`POST /api/settings/internal-api-key`** — Admin-session-protected endpoint that generates and
+  stores a new key, returning the new value immediately.
+
+- **Settings UI — Internal API Key card** — Added to the Logs tab above the file viewer. Shows the
+  key in a read-only input with a Copy button and a Regenerate button (same pattern as the MCP
+  bearer token). Key is loaded when the Logs tab is first opened.
+
+- **`.claude/commands/beta-logs.md`** — Custom slash command. Running `/beta-logs` in a Claude
+  session executes `curl -s -H "X-Api-Key: $THINKARR_INTERNAL_KEY" …/api/internal/logs?tail=300`
+  and uses the output as diagnostic context.
+
+- **`CLAUDE.md` rule** — New section "Rule: use /beta-logs before diagnosing runtime issues"
+  documents when to run the command and how to set `THINKARR_INTERNAL_KEY` in settings.json.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/app/api/internal/logs/route.ts` | New — `GET /api/internal/logs`, X-Api-Key auth, tail param |
+| `src/app/api/settings/internal-api-key/route.ts` | New — `GET` / `POST` for admin UI display + regeneration |
+| `src/lib/db/index.ts` | Auto-generate `internal_api_key` on first boot after schema integrity check |
+| `src/app/settings/page.tsx` | Internal API Key card added to Logs tab; state + fetch functions added |
+| `.claude/commands/beta-logs.md` | New slash command — fetches live logs from beta container |
+| `CLAUDE.md` | Added "use /beta-logs before diagnosing runtime issues" rule |
+| `src/__tests__/api/internal-logs.test.ts` | New — 401 on missing/wrong key, 200 on valid key, tail param, multi-file aggregation |
+
+#### Config keys added
+
+| Key | Encrypted | Description |
+|-----|-----------|-------------|
+| `internal_api_key` | true | 64-char hex key for `GET /api/internal/logs` |
+
+#### API routes added
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/internal/logs` | `X-Api-Key` header | Return last N log lines |
+| `GET` | `/api/settings/internal-api-key` | Admin session | Fetch current key for UI display |
+| `POST` | `/api/settings/internal-api-key` | Admin session | Regenerate and return new key |
+
+### Phase 37b: Internal Logs API — efficiency improvements
+
+#### Features
+- **Newest-first file iteration with early exit** — `GET /api/internal/logs` now reads log files from newest to oldest and stops as soon as the unfiltered tail quota is met. A routine `tail=300` call no longer reads days-old files when the current log file already contains enough lines.
+- **`?level=<error|warn|info>` filter** — Callers can scope results to a single log severity. The filter matches the JSON field `"level":"<value>"` case-insensitively. `tail` applies to the filtered result set.
+- **`?conversationId=<id>` filter** — Callers can scope results to a single conversation session. Combinable with `?level=`.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/app/api/internal/logs/route.ts` | Newest-first iteration, early exit when quota met, `level` and `conversationId` query filters |
+| `src/__tests__/api/internal-logs.test.ts` | 6 new tests — early-exit optimisation, level filter, conversationId filter, combined filter, empty-result case, tail-on-filtered-lines |
+
+### Phase 38: Report Issue Feature (issue #159)
+
+#### Features
+- [x] **Report Issue button in chat window (#159)** — "Report Issue" flag button appears in the chat toolbar when a conversation is active. Clicking opens a modal where the user describes the observed problem. On submit, `POST /api/report-issue` fetches the full conversation transcript (messages, tool calls, timestamps) from the DB and creates a GitHub issue tagged `user-reported` via the GitHub REST API. If no GitHub credentials are configured the report is still logged at `info` level. The modal shows a link to the created issue on success. — `src/app/api/report-issue/route.ts` (new), `src/components/chat/report-issue-modal.tsx` (new), `src/app/chat/page.tsx`
+- [x] **GitHub config in Settings → Logs** — Admin can store `GITHUB_TOKEN`, `GITHUB_OWNER`, and `GITHUB_REPO` in `app_config` via a new card in the Logs tab. Env vars take precedence; stored values are used as fallback. Token is masked in the `GET /api/settings` response.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/app/api/report-issue/route.ts` | New — POST endpoint; auth, access control, transcript assembly, GitHub API call; falls back to `app_config` when env vars absent |
+| `src/components/chat/report-issue-modal.tsx` | New — modal: description textarea, submit, success/error feedback |
+| `src/app/chat/page.tsx` | Combined model-selector + Report Issue toolbar; renders modal |
+| `src/app/api/settings/route.ts` | `GET` returns `github: {token, owner, repo}` (token masked); `PATCH` handles `github` section |
+| `src/app/settings/page.tsx` | `githubConfig` state; loaded on init; included in save; GitHub config card in Logs tab |
+| `src/__tests__/api/report-issue.test.ts` | New — 12 tests covering auth, input validation, access control, no-token path, GitHub integration |
+
+#### API Routes
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/api/report-issue` | User session | Create a GitHub issue from a conversation report |
+
+#### Config keys added
+
+| Key | Encrypted | Description |
+|-----|-----------|-------------|
+| `github_token` | true | PAT with `repo` scope for creating issues |
+| `github_owner` | false | GitHub repository owner (default: `chrisrothwell`) |
+| `github_repo` | false | GitHub repository name (default: `thinkarr`) |
+
+Admin can now configure GitHub issue reporting credentials directly in **Settings → Logs** without needing environment variables. Token stored encrypted; owner/repo stored plain. Env vars (`GITHUB_TOKEN`, `GITHUB_OWNER`, `GITHUB_REPO`) still take precedence when set.
+
+
+### Phase: Version 1.1.2-beta.1
+
+#### Version bump
+- [x] Bumped `package.json` version from `1.1.1` to `1.1.2-beta.1`
+
+
+### Phase 39: Logging gap fixes
+
+#### Features
+- [x] **Logout logging** — `DELETE /api/auth/session` now reads the session before destroying it and logs `User logout` with `userId` and `plexUsername`. Previously the logout was silent in the logs, making it impossible to distinguish voluntary logouts from session expiry.
+- [x] **Report-issue log message clarity** — Renamed `"report-issue: issue submitted"` (which fired before the GitHub API call) to `"report-issue: report logged"` to make clear it is a local-only log entry. The post-GitHub success log is renamed `"report-issue: GitHub issue created"`. Eliminates the ambiguity seen in live logs where the warn and the info fired in the same millisecond with the same conversation ID.
+- [x] **Frontend global error logging** — Added `<ErrorLogger />` client component (`src/components/error-logger.tsx`) to the root layout. It attaches `window.onerror` and `window.unhandledrejection` listeners on mount and forwards errors to the server via `clientLog.error`, so unhandled JS errors and promise rejections now appear in `/api/internal/logs` alongside backend events.
+- [x] **Next.js error boundary** — Added `src/app/error.tsx` (React error boundary) that logs caught rendering errors via `clientLog.error` before rendering a minimal "try again" fallback UI.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/app/api/auth/session/route.ts` | `DELETE` handler: get session before destroy, log `User logout` |
+| `src/app/api/report-issue/route.ts` | Rename pre-GitHub log to `report-issue: report logged`; post-GitHub log to `report-issue: GitHub issue created` |
+| `src/components/error-logger.tsx` | New — client component; `window.onerror` + `unhandledrejection` → `clientLog.error` |
+| `src/app/layout.tsx` | Add `<ErrorLogger />` to root layout body |
+| `src/app/error.tsx` | New — Next.js route error boundary; logs caught errors via `clientLog.error` |
+| `src/__tests__/api/session.test.ts` | New — tests for GET and DELETE `/api/auth/session` including logout log assertion |
+| `src/__tests__/api/report-issue.test.ts` | Update log message string assertion to match renamed log |
+
+### Phase 40: Session expiry logging
+
+#### Features
+- [x] **Expired session warning** — `getSession()` in `src/lib/auth/session.ts` now logs `warn "Session expired or not found"` with the `sessionId` when a session cookie is present but the session row is missing or past its `expiresAt`. Previously this was a silent null return, making it impossible in logs to distinguish "user has no cookie" from "user has a cookie but their 30-day session expired and they'll be bounced to the login screen".
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/auth/session.ts` | Import `logger`; add `logger.warn("Session expired or not found", { sessionId })` before the existing `return null` at line 75 |
+| `src/__tests__/api/session.test.ts` | Add `logWarnSpy`; new test case: expired session cookie returns 401 and logs the warning with the sessionId |
+
+### Phase 41: Fix Overseerr search — parentheses in query cause HTTP 400
+
+#### Bug
+Log analysis of conversation `81f6c0cd` revealed `overseerr_search` returning HTTP 400 when the user searched for titles like `"Star Trek (2009)"`. Overseerr validates the decoded query value server-side and rejects RFC 3986 reserved characters including `(` and `)`. The existing `encodeURIComponent` encoding is insufficient because Overseerr decodes the value before validation.
+
+#### Fix
+- Strip RFC 3986 reserved characters (`( ) [ ] { } ! $ & ' * + , ; = ? # @ / \`) from the query string before encoding, collapsing extra whitespace. The movie/show is still found correctly — e.g. `"Star Trek (2009)"` → `"Star Trek 2009"`.
+
+#### Test
+- Added regression test: `"Star Trek (2009)"` must call `fetch` with a URL containing no `(` or `)` and must contain `Star%20Trek%202009`.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/services/overseerr.ts` | Strip reserved characters from query before `encodeURIComponent` in `search()` |
+| `src/__tests__/lib/overseerr.test.ts` | New test: parentheses stripped from query |
+
+### Phase 42: Fix stuck spinners and mobile SSE reconnection
+
+#### Bugs
+Two related issues observed in beta logs (conversation `81f6c0cd`):
+
+1. **Stuck spinner after SSE disconnect** — `buildHistoricalToolCalls` left incomplete tool calls with `status: "calling"` when rebuilding from the DB after a reload. Since `"calling"` renders a spinner, any tool call that never completed (e.g. because the stream dropped) showed an infinite spinner after reconnecting.
+
+2. **Mobile backgrounding silently kills stream** — When Chrome on mobile is backgrounded, the browser can silently suspend the SSE stream without throwing an error. The `finally` block (which reloads messages and clears state) never fired until the user manually retried.
+
+#### Fix
+- `message-list.tsx`: change the fallback status in `buildHistoricalToolCalls` from `"calling"` to `"error"` with message `"Connection was lost"` for tool calls that have no result record in the DB.
+- `use-chat.ts`: add a `visibilitychange` listener. When the page becomes visible after being hidden for > 3 s while a stream is active, abort the stream. The existing `finally` block then fires, reloads messages, and clears spinners.
+- `buildHistoricalToolCalls` is exported so it can be unit-tested directly.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/components/chat/message-list.tsx` | Export `buildHistoricalToolCalls`; change fallback status from `"calling"` to `"error"` with "Connection was lost" |
+| `src/hooks/use-chat.ts` | Add `visibilitychange` listener to abort stale streams on mobile foreground |
+| `src/__tests__/lib/build-historical-tool-calls.test.ts` | New — 3 unit tests: done, interrupted (no result), and error result |
+
+### Phase 42 (addendum): Background SSE resilience
+
+#### Root cause
+When mobile Chrome backgrounds the app, the client TCP connection drops. This causes `controller.enqueue()` to throw (WHATWG streams cancel the controller when the consumer disconnects). That throw propagated through `for await (const event of orchestrate(...))` in `route.ts`, abandoning the generator mid-execution — before tool results were saved to DB.
+
+#### Fix
+- `src/app/api/chat/route.ts`: Introduced `enqueue()` helper that catches `controller.enqueue()` errors and sets `clientConnected = false`. The `for await` loop continues iterating the orchestrator generator regardless — tool calls execute to completion and results are saved to DB. `controller.close()` in the `finally` block is also wrapped since it may also throw on an already-cancelled stream.
+- `src/hooks/use-chat.ts`: Added `visibilitychange` listener (after all `useCallback` hooks so `loadMessages` is in scope). When the page becomes visible and no stream is active, reloads messages from DB so server-side results that completed while the page was backgrounded are immediately shown.
+
+### Phase 43: Lean overseerr_search — eliminate per-result detail fetches
+
+#### Problem
+Log analysis of conversation `81f6c0cd` showed that each `overseerr_search` tool call was firing up to 10 parallel `/movie|tv/{id}` requests (one per result) to retrieve `cast` and `imdbId`. With the LLM making 15 parallel search calls in a single turn, this produced ~150 supplementary Overseerr HTTP requests and caused the prompt token count to balloon from ~6k to ~16k (search result JSON accumulated in conversation history).
+
+#### Fix
+- Removed the `Promise.all` detail-fetch block from `search()` entirely.
+- All fields needed for title cards (`mediaStatus`, `summary`, `rating`, `thumbPath`, `seasonCount`) are already present in the TMDB search payload — no extra fetches required.
+- `cast`, `imdbId`, `genres`, `runtime`, per-season availability, and request history are now exclusively returned by `overseerr_get_details`, called on demand when the user asks for more information about a specific title.
+- Updated `OverseerrSearchResult` interface: removed `cast` and `imdbId`.
+- Updated tool descriptions to clearly document the search vs. get_details split.
+- Tests: replaced cast/imdbId-in-search tests with a "no extra fetches" assertion suite and new `getDetails` coverage.
+
+#### API call reduction
+| Before | After |
+|--------|-------|
+| 1 search + up to 10 detail fetches per tool call | 1 search fetch per tool call |
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/services/overseerr.ts` | Remove detail fetch loop from `search()`; drop `cast`/`imdbId` from `OverseerrSearchResult`; read `seasonCount` directly from `r.numberOfSeasons` |
+| `src/lib/tools/overseerr-tools.ts` | Update `overseerr_search` and `overseerr_get_details` descriptions |
+| `src/__tests__/lib/overseerr.test.ts` | Replace cast/request search tests with no-extra-fetch and `getDetails` test suites |
+
+### Phase 44: Fix repeated orphaned tool call repair on every request
+
+#### Root cause
+When the SSE stream dropped mid-tool-execution (mobile backgrounding / network flap), the tool call was saved to the `messages` table (as part of the assistant row's `toolCalls` JSON) but no corresponding tool result row was ever written. `loadHistory()` in `orchestrator.ts` correctly detected the orphan and injected a synthetic error result in memory, allowing the LLM to recover. However, the synthetic result was never persisted to the DB.
+
+**Observed impact (beta logs, conv `6913c98e`):** `sonarr_get_series_status` call `call_vd4Ydqzwy3WmiDZYYtdK2xYM` was repaired on 9 consecutive requests over 12 minutes. The same pattern occurred for a `display_titles` call after a second stream failure. Each repair logged a WARN, none visible as a user-facing error, but they polluted logs and wasted CPU.
+
+#### Fix
+Added a `saveMessage()` call inside the orphan repair branch of `loadHistory()`. The first request that encounters an orphaned call writes the synthetic result to DB. Every subsequent `loadHistory()` call finds the row, includes it in `seenToolResultIds`, and skips the repair entirely.
+
+#### Test
+New regression test in `orchestrator.test.ts`: seeds a conversation with an orphaned tool call, runs two consecutive `orchestrate()` calls, and asserts the synthetic row count is exactly 1 after both runs (not 2 or more).
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/llm/orchestrator.ts` | Add `saveMessage()` call inside orphan repair branch in `loadHistory()` |
+| `src/__tests__/lib/orchestrator.test.ts` | New regression test: synthetic result row count stays 1 across consecutive requests |
+
+### Phase 45: Sanitize LLM API errors before forwarding to client
+
+#### Bug
+Beta log analysis (conversation `df722f04`, March 25) showed raw OpenAI 429 quota errors being forwarded verbatim to the client UI:
+
+```
+ERROR [df722f04] [client] Server error event 429 You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.
+```
+
+These appeared as confusing "network error" glitches in the UI, exposing internal API details to end users.
+
+#### Fix
+Added `sanitizeLlmError()` helper in `orchestrator.ts`. Raw error is preserved in server-side logs; only a friendly message is yielded to the client:
+- 429 / quota / rate-limit → "The AI service is temporarily unavailable. Please try again in a moment."
+- 401 / 403 / unauthorized / forbidden → "The AI service is not properly configured. Please contact the administrator."
+- Everything else → "The AI service encountered an error. Please try again."
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/llm/orchestrator.ts` | Add `sanitizeLlmError()`; use it in the LLM catch block instead of forwarding raw error |
+| `src/__tests__/lib/orchestrator.test.ts` | 2 new tests: 429 yields friendly rate-limit message; generic error yields friendly fallback |
+
+### Phase 46: Fix CodeQL unvalidated dynamic method call in client-log route
+
+#### Issue
+GitHub Code Scanning (CodeQL) alert #25 flagged `src/app/api/client-log/route.ts` line 53:
+
+```typescript
+logger[level](`[client] ${message}`, ...);
+```
+
+Even though `level` is validated to only be `"warn"`, `"error"`, or `"info"`, CodeQL cannot trace through the ternary expression and flags the dynamic property access as an "unvalidated dynamic method call" — a real pattern that can cause unexpected dispatch or prototype pollution in less controlled code.
+
+#### Fix
+Replaced the dynamic bracket access with an explicit `if/else if/else` dispatch:
+
+```typescript
+if (level === "warn") { logger.warn(...); }
+else if (level === "error") { logger.error(...); }
+else { logger.info(...); }
+```
+
+This eliminates the bracket notation entirely, satisfying CodeQL without changing runtime behaviour.
+
+#### Test
+New unit test suite `src/__tests__/api/client-log.test.ts` covering:
+- 401 when unauthenticated
+- 400 for invalid JSON
+- Correct logger method called for `info`, `warn`, `error` levels
+- Default to `info` for unknown or missing level
+- Message truncation at 500 characters
+- Default message for non-string input
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/app/api/client-log/route.ts` | Replace `logger[level](...)` with explicit `if/else if/else` dispatch |
+| `src/__tests__/api/client-log.test.ts` | New unit test suite (10 tests) |

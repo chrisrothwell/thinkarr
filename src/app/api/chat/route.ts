@@ -41,6 +41,8 @@ export async function POST(request: Request) {
     );
   }
 
+  logger.info("Chat request received", { userId: session.user.id, conversationId: body.conversationId });
+
   // 3. Verify conversation ownership
   const db = getDb();
   const conversation = db
@@ -92,14 +94,32 @@ export async function POST(request: Request) {
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
+      // Track whether the SSE client is still connected. When the client
+      // disconnects (e.g. mobile app backgrounded), controller.enqueue()
+      // throws because the WHATWG stream is cancelled. We catch that error
+      // so the orchestrator keeps running and saves all tool results to the
+      // DB — the client can reload the conversation when it reconnects.
+      let clientConnected = true;
+
+      const enqueue = (line: Uint8Array) => {
+        if (!clientConnected) return;
+        try {
+          controller.enqueue(line);
+        } catch {
+          clientConnected = false;
+          logger.info("SSE client disconnected — continuing orchestration in background", {
+            conversationId: body.conversationId,
+          });
+        }
+      };
+
       try {
         for await (const event of orchestrate({
           conversationId: body.conversationId,
           userMessage: body.message,
           modelId: body.modelId,
         })) {
-          const line = `data: ${JSON.stringify(event)}\n\n`;
-          controller.enqueue(encoder.encode(line));
+          enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
         }
 
         // 6. Generate title for new chats and emit it before closing so the
@@ -108,17 +128,16 @@ export async function POST(request: Request) {
           const newTitle = await generateTitle(body.conversationId, body.message);
           if (newTitle) {
             const titleEvent = { type: "title_update", conversationId: body.conversationId, title: newTitle };
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify(titleEvent)}\n\n`));
+            enqueue(encoder.encode(`data: ${JSON.stringify(titleEvent)}\n\n`));
           }
         }
 
-        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        enqueue(encoder.encode("data: [DONE]\n\n"));
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : "Stream error";
-        const errorLine = `data: ${JSON.stringify({ type: "error", message: msg })}\n\n`;
-        controller.enqueue(encoder.encode(errorLine));
+        enqueue(encoder.encode(`data: ${JSON.stringify({ type: "error", message: msg })}\n\n`));
       } finally {
-        controller.close();
+        try { controller.close(); } catch { /* already closed by client disconnect */ }
       }
     },
   });

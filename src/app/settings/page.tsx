@@ -132,6 +132,9 @@ export default function SettingsPage() {
   // PWA install (also registers SW and captures beforeinstallprompt)
   const { isAvailable: pwaInstallAvailable, isMobile: pwaMobile, isIosDevice: pwaIsIos, install: triggerPwaInstall } = usePwaInstall();
 
+  // GitHub config (admin only)
+  const [githubConfig, setGithubConfig] = useState({ token: "", owner: "", repo: "" });
+
   // Log state (admin only)
   const [logFiles, setLogFiles] = useState<{ name: string; size: number; modified: string }[]>([]);
   const [logFilesLoading, setLogFilesLoading] = useState(false);
@@ -141,6 +144,10 @@ export default function SettingsPage() {
   const [logContentLoading, setLogContentLoading] = useState(false);
   const [logTotalLines, setLogTotalLines] = useState(0);
   const [logShowing, setLogShowing] = useState(0);
+
+  // Internal API key state (admin only)
+  const [internalApiKey, setInternalApiKey] = useState<string>("");
+  const [internalApiKeyLoading, setInternalApiKeyLoading] = useState(false);
 
   // --- Load data ---
   useEffect(() => {
@@ -184,6 +191,11 @@ export default function SettingsPage() {
               };
             }
             setArrConfigs(arrs);
+            setGithubConfig({
+              token: d.github?.token || "",
+              owner: d.github?.owner || "",
+              repo: d.github?.repo || "",
+            });
             // Snapshot the freshly loaded config so we can detect unsaved changes later
             savedConfigRef.current = JSON.stringify({
               endpoints: (d.llmEndpoints || []).map((ep: LlmEndpoint) => ({
@@ -258,6 +270,7 @@ export default function SettingsPage() {
         realtimeSystemPrompt: _rpm === "default" ? "" : ep.realtimeSystemPrompt,
       })),
       plex: { url: plexConfig.url, token: plexConfig.token },
+      github: githubConfig,
     };
     for (const svc of ARR_SERVICES) {
       body[svc.key] = arrConfigs[svc.key];
@@ -299,7 +312,7 @@ export default function SettingsPage() {
     } finally {
       setSaving(false);
     }
-  }, [endpoints, plexConfig, arrConfigs, isInitialSetup, redirectCountdown]);
+  }, [endpoints, plexConfig, arrConfigs, githubConfig, isInitialSetup, redirectCountdown]);
 
   // --- Plex server discovery ---
   async function discoverPlexServers() {
@@ -494,6 +507,33 @@ export default function SettingsPage() {
     }
   }
 
+  // --- Internal API key ---
+  async function loadInternalApiKey() {
+    setInternalApiKeyLoading(true);
+    try {
+      const res = await fetch("/api/settings/internal-api-key");
+      const data = await res.json();
+      if (data.success) setInternalApiKey(data.data.key);
+    } catch {
+      // Silent fail
+    } finally {
+      setInternalApiKeyLoading(false);
+    }
+  }
+
+  async function regenerateInternalApiKey() {
+    setInternalApiKeyLoading(true);
+    try {
+      const res = await fetch("/api/settings/internal-api-key", { method: "POST" });
+      const data = await res.json();
+      if (data.success) setInternalApiKey(data.data.key);
+    } catch {
+      // Silent fail
+    } finally {
+      setInternalApiKeyLoading(false);
+    }
+  }
+
   // --- User management ---
   async function updateUser(userId: number, updates: Partial<Pick<UserEntry, "isAdmin" | "defaultModel" | "canChangeModel" | "rateLimitMessages" | "rateLimitPeriod">>) {
     try {
@@ -615,7 +655,7 @@ export default function SettingsPage() {
           </div>
         )}
 
-        <Tabs defaultValue={isInitialSetup ? "llm" : "general"} onValueChange={(v) => { if (v === "logs") loadLogFiles(); }}>
+        <Tabs defaultValue={isInitialSetup ? "llm" : "general"} onValueChange={(v) => { if (v === "logs") { loadLogFiles(); loadInternalApiKey(); } }}>
           <TabsList>
             <TabsTrigger value="general">General</TabsTrigger>
             {currentUser?.isAdmin && <TabsTrigger value="llm">LLM Setup</TabsTrigger>}
@@ -1310,7 +1350,103 @@ export default function SettingsPage() {
           </TabsContent>
 
           {/* ===== TAB 5: Logs (admin only) ===== */}
-          <TabsContent value="logs" className="mt-4">
+          <TabsContent value="logs" className="mt-4 space-y-4">
+            {/* Internal API Key */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">Internal API Key</CardTitle>
+                <CardDescription>
+                  Use this key with the <code className="font-mono text-xs">/beta-logs</code> Claude slash command to pull live diagnostic logs.
+                  Set it as <code className="font-mono text-xs">THINKARR_INTERNAL_KEY</code> in your Claude settings.json.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center gap-2">
+                  <Input
+                    value={internalApiKey}
+                    readOnly
+                    className="font-mono text-sm"
+                    placeholder={internalApiKeyLoading ? "Loading…" : "Click regenerate to reveal key"}
+                  />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => copyToClipboard(internalApiKey)}
+                    disabled={!internalApiKey}
+                  >
+                    <Copy size={14} />
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="icon"
+                    onClick={regenerateInternalApiKey}
+                    disabled={internalApiKeyLoading}
+                  >
+                    {internalApiKeyLoading ? <Spinner size={14} /> : <RefreshCw size={14} />}
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground mt-2">
+                  Regenerating issues a new key immediately — update your Claude settings.json after regenerating.
+                </p>
+              </CardContent>
+            </Card>
+
+            {/* GitHub issue reporting config */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">GitHub Issue Reporting</CardTitle>
+                <CardDescription>
+                  When configured, the &quot;Report Issue&quot; button in the chat window will create GitHub
+                  issues tagged <code className="font-mono text-xs">user-reported</code>. Leave
+                  blank to log reports locally only.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-1.5">
+                  <Label htmlFor="github-token">Personal Access Token</Label>
+                  <Input
+                    id="github-token"
+                    type="password"
+                    placeholder="ghp_••••••••"
+                    value={githubConfig.token}
+                    onChange={(e) => setGithubConfig((prev) => ({ ...prev, token: e.target.value }))}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Requires <code className="font-mono">repo</code> scope (or{" "}
+                    <code className="font-mono">public_repo</code> for public repos).
+                  </p>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="github-owner">Repository Owner</Label>
+                    <Input
+                      id="github-owner"
+                      placeholder="chrisrothwell"
+                      value={githubConfig.owner}
+                      onChange={(e) => setGithubConfig((prev) => ({ ...prev, owner: e.target.value }))}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="github-repo">Repository Name</Label>
+                    <Input
+                      id="github-repo"
+                      placeholder="thinkarr"
+                      value={githubConfig.repo}
+                      onChange={(e) => setGithubConfig((prev) => ({ ...prev, repo: e.target.value }))}
+                    />
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  The <code className="font-mono text-xs">user-reported</code> label must exist in
+                  the repository before issues can be filed. Values from{" "}
+                  <code className="font-mono text-xs">GITHUB_TOKEN</code>,{" "}
+                  <code className="font-mono text-xs">GITHUB_OWNER</code>, and{" "}
+                  <code className="font-mono text-xs">GITHUB_REPO</code> environment variables
+                  take precedence over these settings.
+                </p>
+              </CardContent>
+            </Card>
+
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg">Application Logs</CardTitle>

@@ -24,7 +24,7 @@ async function plexFetch(path: string) {
     throw new Error(`Plex API error: HTTP ${res.status}`);
   }
   const data = await res.json();
-  logger.info("Plex API response", { url: fullUrl, status: res.status, body: JSON.stringify(data).slice(0, 5000) });
+  logger.info("Plex API response", { url: fullUrl, status: res.status });
   return data;
 }
 
