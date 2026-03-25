@@ -373,11 +373,13 @@ export async function* orchestrate(
       }
 
       // Add to conversation for next round — the LLM needs a tool message for every tool_calls entry.
-      // Use the compact LLM summary so large tool results don't bloat the context window.
+      // Use the full result here so the LLM can read all fields (e.g. summary, thumbPath) to pass to
+      // display_titles. The compact llmSummary is only used when loading historical messages (loadHistory),
+      // where the LLM only needs a brief reminder of what was found, not the full payload.
       apiMessages.push({
         role: "tool",
         tool_call_id: tc.id,
-        content: getToolLlmContent(tc.function.name, result),
+        content: result,
       });
 
       yield {

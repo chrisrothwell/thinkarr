@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { defineTool } from "./registry";
 import * as overseerr from "@/lib/services/overseerr";
+import type { OverseerrSearchResult, OverseerrRequest } from "@/lib/services/overseerr";
 
 const pageParam = z.number().int().min(1).optional().describe("Page number (1-based). Omit or use 1 for the first page. Use hasMore from the previous response to know whether a next page exists.");
 
@@ -13,6 +14,15 @@ export function registerOverseerrTools() {
       page: pageParam,
     }),
     handler: async (args) => overseerr.search(args.query, args.page ?? 1),
+    llmSummary: (result: unknown) => {
+      const r = result as { results: OverseerrSearchResult[]; hasMore: boolean };
+      return {
+        results: r.results.map(({ overseerrId, overseerrMediaType, title, year, rating, mediaStatus, seasonCount }) => ({
+          overseerrId, overseerrMediaType, title, year, rating, mediaStatus, seasonCount,
+        })),
+        hasMore: r.hasMore,
+      };
+    },
   });
 
   defineTool({
@@ -32,5 +42,14 @@ export function registerOverseerrTools() {
       page: pageParam,
     }),
     handler: async (args) => overseerr.listRequests(args.page ?? 1),
+    llmSummary: (result: unknown) => {
+      const r = result as { results: OverseerrRequest[]; hasMore: boolean };
+      return {
+        results: r.results.map(({ mediaType, title, year, status, mediaStatus, requestedBy, overseerrId, seasonsRequested }) => ({
+          mediaType, title, year, status, mediaStatus, requestedBy, overseerrId, seasonsRequested,
+        })),
+        hasMore: r.hasMore,
+      };
+    },
   });
 }

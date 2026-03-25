@@ -135,7 +135,7 @@ export async function search(query: string, page = 1): Promise<{ results: Overse
       overseerrMediaType: r.mediaType as string,
       title: (r.title || r.name) as string,
       year: ((r.releaseDate || r.firstAirDate) as string | undefined)?.substring(0, 4),
-      summary: r.overview as string | undefined,
+      summary: (r.overview as string | undefined)?.substring(0, 300),
       rating: r.voteAverage as number | undefined,
       mediaStatus: mediaStatusLabel(mediaInfo),
       thumbPath: posterPath ? `https://image.tmdb.org/t/p/w300${posterPath}` : undefined,
