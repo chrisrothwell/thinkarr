@@ -17,8 +17,11 @@ export function registerOverseerrTools() {
     llmSummary: (result: unknown) => {
       const r = result as { results: OverseerrSearchResult[]; hasMore: boolean };
       return {
-        results: r.results.map(({ overseerrId, overseerrMediaType, title, year, rating, mediaStatus, seasonCount }) => ({
-          overseerrId, overseerrMediaType, title, year, rating, mediaStatus, seasonCount,
+        // thumbPath preserved: the LLM needs the poster URL to pass to
+        // display_titles in follow-up turns without re-searching.
+        // summary stripped: 300 chars × 10 results = main token saving.
+        results: r.results.map(({ overseerrId, overseerrMediaType, title, year, rating, mediaStatus, seasonCount, thumbPath }) => ({
+          overseerrId, overseerrMediaType, title, year, rating, mediaStatus, seasonCount, thumbPath,
         })),
         hasMore: r.hasMore,
       };
@@ -34,12 +37,25 @@ export function registerOverseerrTools() {
     }),
     handler: async (args) => overseerr.getDetails(args.id, args.mediaType),
     /** Compact history summary: keep identity + cast (5) + genres + runtime fields.
-     *  Strip the per-season status list (can be 20+ entries) and request history. */
+     *  Seasons: compact string "S1:available S2:pending S3:not_requested" instead
+     *  of full objects — preserves ALL per-season statuses so the LLM can set
+     *  correct mediaStatus on follow-up display_titles calls (pending seasons must
+     *  not be shown as not_requested, which would display a fake Request button).
+     *  Request history dropped entirely (not needed after initial display). */
     llmSummary: (result: unknown) => {
       const r = result as OverseerrDetails;
-      const availableSeasons = r.seasons
-        ?.filter((s) => s.status === "Available")
-        .map((s) => s.seasonNumber);
+      // Map Overseerr status strings to display_titles mediaStatus values
+      const statusMap: Record<string, string> = {
+        "Available": "available",
+        "Partially Available": "partial",
+        "Pending": "pending",
+        "Processing": "pending",
+      };
+      const seasonsCompact = r.seasons && r.seasons.length > 0
+        ? r.seasons
+            .map((s) => `S${s.seasonNumber}:${statusMap[s.status] ?? "not_requested"}`)
+            .join(" ")
+        : undefined;
       return {
         overseerrId: r.overseerrId,
         overseerrMediaType: r.overseerrMediaType,
@@ -51,7 +67,7 @@ export function registerOverseerrTools() {
         runtime: r.runtime,
         episodeRuntime: r.episodeRuntime,
         seasonCount: r.seasonCount,
-        ...(availableSeasons && availableSeasons.length > 0 ? { availableSeasons } : {}),
+        ...(seasonsCompact ? { seasons: seasonsCompact } : {}),
       };
     },
   });
