@@ -7,12 +7,22 @@ const pageParam = z.number().int().min(1).optional().describe("Page number (1-ba
 export function registerOverseerrTools() {
   defineTool({
     name: "overseerr_search",
-    description: "Search for movies or TV shows on Overseerr. Returns availability, request status, rating, summary (synopsis), cast, thumbPath (poster), overseerrId, and overseerrMediaType — all fields map directly to display_titles. Returns up to 50 results per page with a hasMore flag.",
+    description: "Search for movies or TV shows on Overseerr. Returns title card fields from the search payload directly — no extra fetches: mediaStatus (availability), summary (synopsis), rating, thumbPath (poster), seasonCount (TV), overseerrId, and overseerrMediaType. Returns up to 10 results per page with a hasMore flag. For cast, imdbId, genres, runtime, per-season availability, or request history, call overseerr_get_details.",
     schema: z.object({
       query: z.string().describe("Search query (movie or TV show title)"),
       page: pageParam,
     }),
     handler: async (args) => overseerr.search(args.query, args.page ?? 1),
+  });
+
+  defineTool({
+    name: "overseerr_get_details",
+    description: "Get full details for a specific movie or TV show from Overseerr. Returns cast (top 10), imdbId, genres, runtime (movie) or episode runtime (TV), season-by-season availability, and pending/approved request history. Call this to enrich a title card with cast, or when the user asks for more information about a specific title.",
+    schema: z.object({
+      id: z.number().int().describe("Overseerr media ID (overseerrId from overseerr_search results)"),
+      mediaType: z.enum(["movie", "tv"]).describe("Media type"),
+    }),
+    handler: async (args) => overseerr.getDetails(args.id, args.mediaType),
   });
 
   defineTool({
