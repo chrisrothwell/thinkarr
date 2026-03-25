@@ -50,7 +50,17 @@ export async function POST(request: Request) {
   const message = typeof body.message === "string" ? body.message.slice(0, 500) : "client log";
   const context = body.context && typeof body.context === "object" ? body.context : {};
 
-  logger[level](`[client] ${message}`, { userId: session.user.id, ...context });
+  const logArgs: [string, Record<string, unknown>] = [
+    `[client] ${message}`,
+    { userId: session.user.id, ...context },
+  ];
+  if (level === "warn") {
+    logger.warn(...logArgs);
+  } else if (level === "error") {
+    logger.error(...logArgs);
+  } else {
+    logger.info(...logArgs);
+  }
 
   return NextResponse.json({ success: true });
 }

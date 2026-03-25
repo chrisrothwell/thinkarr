@@ -1291,3 +1291,41 @@ Added `sanitizeLlmError()` helper in `orchestrator.ts`. Raw error is preserved i
 |------|--------|
 | `src/lib/llm/orchestrator.ts` | Add `sanitizeLlmError()`; use it in the LLM catch block instead of forwarding raw error |
 | `src/__tests__/lib/orchestrator.test.ts` | 2 new tests: 429 yields friendly rate-limit message; generic error yields friendly fallback |
+
+### Phase 46: Fix CodeQL unvalidated dynamic method call in client-log route
+
+#### Issue
+GitHub Code Scanning (CodeQL) alert #25 flagged `src/app/api/client-log/route.ts` line 53:
+
+```typescript
+logger[level](`[client] ${message}`, ...);
+```
+
+Even though `level` is validated to only be `"warn"`, `"error"`, or `"info"`, CodeQL cannot trace through the ternary expression and flags the dynamic property access as an "unvalidated dynamic method call" — a real pattern that can cause unexpected dispatch or prototype pollution in less controlled code.
+
+#### Fix
+Replaced the dynamic bracket access with an explicit `if/else if/else` dispatch:
+
+```typescript
+if (level === "warn") { logger.warn(...); }
+else if (level === "error") { logger.error(...); }
+else { logger.info(...); }
+```
+
+This eliminates the bracket notation entirely, satisfying CodeQL without changing runtime behaviour.
+
+#### Test
+New unit test suite `src/__tests__/api/client-log.test.ts` covering:
+- 401 when unauthenticated
+- 400 for invalid JSON
+- Correct logger method called for `info`, `warn`, `error` levels
+- Default to `info` for unknown or missing level
+- Message truncation at 500 characters
+- Default message for non-string input
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/app/api/client-log/route.ts` | Replace `logger[level](...)` with explicit `if/else if/else` dispatch |
+| `src/__tests__/api/client-log.test.ts` | New unit test suite (10 tests) |
