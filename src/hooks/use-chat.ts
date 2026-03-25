@@ -217,8 +217,21 @@ export function useChat(conversationId: string | null, options?: UseChatOptions)
   // Only fires when not actively streaming — avoids racing with a live stream.
   useEffect(() => {
     const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible" && !streamingRef.current && conversationIdRef.current) {
-        void loadMessages(conversationIdRef.current);
+      const conversationId = conversationIdRef.current;
+      if (document.visibilityState === "hidden") {
+        clientLog.info("page hidden", {
+          streaming: streamingRef.current,
+          conversationId,
+        });
+      } else if (document.visibilityState === "visible") {
+        clientLog.info("page visible", {
+          streaming: streamingRef.current,
+          conversationId,
+          willReload: !streamingRef.current && !!conversationId,
+        });
+        if (!streamingRef.current && conversationId) {
+          void loadMessages(conversationId);
+        }
       }
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
