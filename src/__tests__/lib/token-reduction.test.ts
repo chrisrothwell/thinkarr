@@ -78,9 +78,9 @@ describe("overseerr.search — summary truncation", () => {
 describe("plex tool llmSummary", () => {
   beforeEach(() => { vi.resetModules(); });
 
-  it("strips summary, thumbPath, seasons, totalEpisodes, watchedEpisodes, dateAdded from history", async () => {
+  it("strips summary/secondary metadata but keeps thumbPath and plexKey from history", async () => {
     const { registerPlexTools } = await import("@/lib/tools/plex-tools");
-    const { defineTool, getToolLlmContent } = await import("@/lib/tools/registry");
+    const { getToolLlmContent } = await import("@/lib/tools/registry");
 
     // Need to clear registry between tests — re-importing with resetModules handles this
     registerPlexTools();
@@ -106,24 +106,24 @@ describe("plex tool llmSummary", () => {
     const compact = JSON.parse(getToolLlmContent("plex_search_library", fullResult)) as Record<string, unknown>;
     const item = (compact.results as Record<string, unknown>[])[0];
 
-    // Fields that should be PRESENT
+    // Fields that should be PRESENT (including thumbPath — needed for follow-up display)
     expect(item.title).toBe("The Matrix");
     expect(item.year).toBe(1999);
     expect(item.mediaType).toBe("movie");
     expect(item.plexKey).toBe("/library/metadata/42");
+    expect(item.thumbPath).toBe("/library/metadata/42/thumb");
     expect(item.rating).toBe(8.7);
     expect(item.cast).toEqual(["Keanu Reeves"]);
 
     // Fields that should be STRIPPED
     expect(item).not.toHaveProperty("summary");
-    expect(item).not.toHaveProperty("thumbPath");
     expect(item).not.toHaveProperty("seasons");
     expect(item).not.toHaveProperty("totalEpisodes");
     expect(item).not.toHaveProperty("watchedEpisodes");
     expect(item).not.toHaveProperty("dateAdded");
   });
 
-  it("plex_check_availability llmSummary preserves available flag and strips bulky fields", async () => {
+  it("plex_check_availability llmSummary preserves available flag, thumbPath, and plexKey", async () => {
     const { registerPlexTools } = await import("@/lib/tools/plex-tools");
     const { getToolLlmContent } = await import("@/lib/tools/registry");
 
@@ -149,8 +149,9 @@ describe("plex tool llmSummary", () => {
     expect(compact.available).toBe(true);
     const item = (compact.results as Record<string, unknown>[])[0];
     expect(item.plexKey).toBe("/library/metadata/99");
+    // thumbPath preserved for follow-up display_titles calls
+    expect(item.thumbPath).toBe("/library/metadata/99/thumb");
     expect(item).not.toHaveProperty("summary");
-    expect(item).not.toHaveProperty("thumbPath");
     expect(item).not.toHaveProperty("dateAdded");
   });
 });
@@ -161,7 +162,7 @@ describe("plex tool llmSummary", () => {
 describe("overseerr_search llmSummary", () => {
   beforeEach(() => { vi.resetModules(); });
 
-  it("strips summary and thumbPath, keeps identity and status fields", async () => {
+  it("strips summary, keeps thumbPath and identity/status fields", async () => {
     const { registerOverseerrTools } = await import("@/lib/tools/overseerr-tools");
     const { getToolLlmContent } = await import("@/lib/tools/registry");
 
@@ -189,8 +190,9 @@ describe("overseerr_search llmSummary", () => {
     expect(item.overseerrMediaType).toBe("movie");
     expect(item.title).toBe("Fight Club");
     expect(item.mediaStatus).toBe("Available");
+    // thumbPath preserved — needed for follow-up display_titles calls without re-searching
+    expect(item.thumbPath).toBe("https://image.tmdb.org/t/p/w300/poster.jpg");
     expect(item).not.toHaveProperty("summary");
-    expect(item).not.toHaveProperty("thumbPath");
   });
 });
 
@@ -200,7 +202,7 @@ describe("overseerr_search llmSummary", () => {
 describe("overseerr_get_details llmSummary", () => {
   beforeEach(() => { vi.resetModules(); });
 
-  it("limits cast to 5, strips seasons list and requests from history", async () => {
+  it("limits cast to 5, compacts seasons to status string, strips requests from history", async () => {
     const { registerOverseerrTools } = await import("@/lib/tools/overseerr-tools");
     const { getToolLlmContent } = await import("@/lib/tools/registry");
     registerOverseerrTools();
@@ -235,12 +237,13 @@ describe("overseerr_get_details llmSummary", () => {
     expect((compact.cast as string[]).length).toBe(5);
     expect((compact.cast as string[])[0]).toBe("Brad Pitt");
 
-    // No full seasons list or requests in history
-    expect(compact).not.toHaveProperty("seasons");
+    // Seasons compacted to status string (all statuses preserved, not just available)
+    expect(compact.seasons).toBe("S1:available S2:not_requested");
+    // Requests stripped
     expect(compact).not.toHaveProperty("requests");
   });
 
-  it("includes availableSeasons when seasons are available", async () => {
+  it("includes compact seasons string with all statuses (available, pending, not_requested)", async () => {
     const { registerOverseerrTools } = await import("@/lib/tools/overseerr-tools");
     const { getToolLlmContent } = await import("@/lib/tools/registry");
     registerOverseerrTools();
@@ -264,8 +267,9 @@ describe("overseerr_get_details llmSummary", () => {
     const compact = JSON.parse(getToolLlmContent("overseerr_get_details", fullResult)) as Record<string, unknown>;
 
     expect(compact.seasonCount).toBe(8);
-    expect(compact.availableSeasons).toEqual([1, 2]);
-    expect(compact).not.toHaveProperty("seasons");
+    // Compact string preserves all season statuses so LLM sets correct mediaStatus per season
+    expect(compact.seasons).toBe("S1:available S2:available S3:not_requested");
+    expect(compact).not.toHaveProperty("availableSeasons");
     expect(compact).not.toHaveProperty("requests");
   });
 });
@@ -430,9 +434,11 @@ describe("radarr_search_movie llmSummary", () => {
 describe("display_titles tool call arg compression", () => {
   beforeEach(() => { vi.resetModules(); });
 
-  it("strips summary, thumbPath, cast from display_titles tool call args in history", async () => {
+  it("strips summary and cast from display_titles tool call args in history, preserves thumbPath", async () => {
     // We test the compression logic directly by simulating what loadHistory does:
     // parse stored tool_calls JSON, apply the compaction, check the result.
+    // thumbPath is preserved (needed for follow-up display_titles without re-searching).
+    // Only summary and cast are stripped (bulk savings without losing poster URLs).
     type TitleArg = {
       title: string;
       mediaType: string;
@@ -467,8 +473,11 @@ describe("display_titles tool call arg compression", () => {
         const args = JSON.parse(tc.function.arguments) as { titles: TitleArg[] };
         const compactedArgs = {
           titles: args.titles.map(
+            // Strip only decorative fields (summary, cast) — NOT thumbPath.
+            // thumbPath is needed so the LLM can reuse the poster URL in
+            // follow-up display_titles calls without re-searching.
             // eslint-disable-next-line @typescript-eslint/no-unused-vars
-            ({ summary: _s, thumbPath: _t, cast: _c, ...rest }) => rest,
+            ({ summary: _s, cast: _c, ...rest }) => rest,
           ),
         };
         return { ...tc, function: { ...tc.function, arguments: JSON.stringify(compactedArgs) } };
@@ -485,10 +494,14 @@ describe("display_titles tool call arg compression", () => {
     expect(titles[0].mediaStatus).toBe("available");
     expect(titles[2].mediaStatus).toBe("not_requested");
 
+    // thumbPath preserved for follow-up display_titles calls
+    for (const t of titles) {
+      expect(t.thumbPath).toBe("https://image.tmdb.org/t/p/w300/poster.jpg");
+    }
+
     // Bulky repeated fields stripped
     for (const t of titles) {
       expect(t).not.toHaveProperty("summary");
-      expect(t).not.toHaveProperty("thumbPath");
       expect(t).not.toHaveProperty("cast");
     }
   });

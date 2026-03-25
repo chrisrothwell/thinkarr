@@ -45,7 +45,7 @@ mediaStatus mapping:
 - "not_requested": not in Plex and not in Overseerr
 
 IMPORTANT — multi-season TV shows:
-If an Overseerr TV result has seasonCount > 1, you MUST call this tool with one entry per season (S1 through S{seasonCount}), not one entry for the whole show. Set seasonNumber on each entry. Do NOT create a single card for a multi-season show — it will cause the request to fail.`,
+For any TV show from Overseerr (overseerrMediaType = 'tv'), always call overseerr_get_details first to get the accurate seasonCount (the search result's seasonCount is unreliable for untracked shows). Then call this tool with one entry per season (S1 through S{seasonCount}), never one entry for the whole show. Set seasonNumber on each entry. Do NOT create a single card for a multi-season show — it will cause the request to fail.`,
     schema: z.object({
       titles: z.array(titleInputSchema).min(1).max(50),
     }),

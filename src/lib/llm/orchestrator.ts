@@ -115,10 +115,16 @@ function loadHistory(conversationId: string): ChatMessage[] {
                 const args = JSON.parse(tc.function.arguments) as {
                   titles: Record<string, unknown>[];
                 };
+                // Strip only decorative fields (summary, cast) — NOT thumbPath.
+                // thumbPath is needed so the LLM can reuse the poster URL in
+                // follow-up display_titles calls without re-searching.
+                // seasonNumber, overseerrId, overseerrMediaType, plexKey and
+                // mediaStatus are all preserved so season-specific request and
+                // watch buttons remain functional.
                 const compacted = {
                   titles: args.titles.map(
                     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-                    ({ summary: _s, thumbPath: _t, cast: _c, ...rest }) => rest,
+                    ({ summary: _s, cast: _c, ...rest }) => rest,
                   ),
                 };
                 return {
