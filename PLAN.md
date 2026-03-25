@@ -1329,3 +1329,49 @@ New unit test suite `src/__tests__/api/client-log.test.ts` covering:
 |------|--------|
 | `src/app/api/client-log/route.ts` | Replace `logger[level](...)` with explicit `if/else if/else` dispatch |
 | `src/__tests__/api/client-log.test.ts` | New unit test suite (10 tests) |
+
+### Phase 47: Reduce OpenAI token consumption to prevent TPM rate-limit exhaustion
+
+#### Problem
+A handful of queries was hitting the OpenAI tokens-per-minute (TPM) rate limit, even on tier 1 (30,000 TPM). Root-cause analysis identified three compounding sources of token bloat:
+
+1. **`overseerr.search()` — unbounded summary field**: `r.overview` was mapped directly from the TMDB payload with no length cap. TMDB overviews can be 500–1,000+ characters. With 10 results per page, a single `overseerr_search` call could inject up to ~10,000 characters of synopsis text into the prompt.
+
+2. **No `llmSummary` on Plex or Overseerr tools**: The `llmSummary` mechanism (used by `display_titles` since Phase 43) compresses tool results stored in conversation history — `loadHistory()` calls `getToolLlmContent()` which substitutes a compact form when the tool defines one. Without it on Plex/Overseerr tools, every turn in a multi-turn conversation re-sent full JSON blobs (summaries, thumbnail paths, episode counts) accumulated from all previous searches.
+
+3. **Architectural conflict — `getToolLlmContent` used for both in-round and history**: The orchestrator called `getToolLlmContent()` both when appending a fresh tool result to `apiMessages` (in-round) and when `loadHistory()` loaded old results from the DB. An aggressive `llmSummary` on Plex tools (stripping `summary` and `thumbPath`) would have broken `display_titles` because the LLM needs those fields from the in-round result to construct its `display_titles` arguments.
+
+#### Fixes
+
+**Fix 1 — Truncate Overseerr summary at source** (`src/lib/services/overseerr.ts`)  
+Added `.substring(0, 300)` to `r.overview` in `search()`. TMDB overviews are already truncated at 300 chars in Plex results; this makes both data sources consistent. Directly reduces in-round prompt tokens for every `overseerr_search` call.
+
+**Fix 2 — Decouple in-round vs history usage** (`src/lib/llm/orchestrator.ts`)  
+Changed the in-round `apiMessages.push` to pass `result` directly (full JSON) instead of `getToolLlmContent(name, result)`. The `loadHistory()` function continues to use `getToolLlmContent()` for its DB-loaded messages. This decoupling means `llmSummary` functions now only affect conversation history, not the current tool round — so they can safely strip any field without breaking subsequent tool calls.
+
+**Fix 3 — Add `llmSummary` to all Plex search tools** (`src/lib/tools/plex-tools.ts`)  
+Added a shared `plexResultsLlmSummary()` helper used by `plex_search_library`, `plex_get_on_deck`, `plex_get_recently_added`, `plex_search_collection`, and `plex_search_by_tag`. The `plex_check_availability` tool gets an inline variant preserving the `available` flag. The compact form retains: `title`, `year`, `mediaType`, `plexKey`, `rating`, `cast`, `showTitle`, `seasonNumber`, `episodeNumber`. Stripped from history: `summary`, `thumbPath`, `seasons`, `totalEpisodes`, `watchedEpisodes`, `dateAdded`.
+
+**Fix 4 — Add `llmSummary` to Overseerr tools** (`src/lib/tools/overseerr-tools.ts`)  
+- `overseerr_search`: compact form retains `overseerrId`, `overseerrMediaType`, `title`, `year`, `rating`, `mediaStatus`, `seasonCount`. Strips `summary` and `thumbPath`.  
+- `overseerr_list_requests`: compact form retains `mediaType`, `title`, `year`, `status`, `mediaStatus`, `requestedBy`, `overseerrId`, `seasonsRequested`. Strips `id`, `requestedAt`, `tmdbId`, `thumbPath`.
+
+#### Token savings estimate (per turn in a multi-turn conversation)
+
+| Source | Before | After (history) | Saving |
+|--------|--------|-----------------|--------|
+| `overseerr_search` (10 results) | ~7,500 chars | ~1,000 chars | ~1,600 tokens |
+| `plex_search_library` (10 results) | ~5,500 chars | ~1,200 chars | ~1,075 tokens |
+| `overseerr_list_requests` (10 results) | ~3,000 chars | ~700 chars | ~575 tokens |
+
+A conversation that had 3 prior searches now starts each new turn with ~3,250 fewer tokens in its history — enough to prevent limit exhaustion at tier 1 (30,000 TPM).
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/services/overseerr.ts` | Truncate `summary` to 300 chars in `search()` |
+| `src/lib/llm/orchestrator.ts` | In-round tool messages use `result` (full); `loadHistory` uses `getToolLlmContent` (compact) |
+| `src/lib/tools/plex-tools.ts` | Add `plexResultsLlmSummary` helper + `llmSummary` on all 6 Plex search tools |
+| `src/lib/tools/overseerr-tools.ts` | Add `llmSummary` on `overseerr_search` and `overseerr_list_requests`; import types |
+| `src/__tests__/lib/token-reduction.test.ts` | 6 new tests covering all four fixes |
