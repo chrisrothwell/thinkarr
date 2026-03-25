@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback } from "react";
+import { clientLog } from "@/lib/client-logger";
 
 export function useVoiceInput() {
   const [recording, setRecording] = useState(false);
@@ -83,7 +84,12 @@ export function useVoiceInput() {
             setError(data.error || "Transcription failed");
             resolve("");
           }
-        } catch {
+        } catch (e: unknown) {
+          clientLog.error("Transcription network failure", {
+            errorName: e instanceof Error ? e.name : "UnknownError",
+            errorMessage: e instanceof Error ? e.message : "Unknown error",
+            online: typeof navigator !== "undefined" ? navigator.onLine : null,
+          });
           setError("Network error during transcription");
           resolve("");
         } finally {

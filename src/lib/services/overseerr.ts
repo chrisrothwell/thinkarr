@@ -53,20 +53,29 @@ export interface OverseerrRequestSummary {
 export interface OverseerrSearchResult {
   overseerrId: number;          // Overseerr media ID — pass directly as overseerrId to display_titles
   overseerrMediaType: string;   // "movie" | "tv" — pass directly as overseerrMediaType to display_titles
-  mediaType: string;            // Same as overseerrMediaType; kept for context
   title: string;
   year?: string;
   summary?: string;             // Synopsis — pass directly as summary to display_titles
   rating?: number;              // TMDB audience rating (0–10) — pass directly as rating to display_titles
-  cast?: string[];              // Top cast members (up to 5) — pass directly as cast to display_titles
   mediaStatus: string;
   thumbPath?: string;           // Full TMDB poster URL — pass directly as thumbPath to display_titles
-  imdbId?: string;              // IMDB ID (e.g. "tt1234567") when available
-  // TV-specific
+  seasonCount?: number;         // TV only — total number of seasons; use to generate per-season cards
+  // cast, imdbId, genres, runtime, seasons, requests → call overseerr_get_details
+}
+
+export interface OverseerrDetails {
+  overseerrId: number;
+  overseerrMediaType: string;
+  title: string;
+  year?: string;
+  imdbId?: string;
+  cast?: string[];              // Top 10 cast members
+  genres?: string[];
+  runtime?: number;             // Movie: total runtime in minutes
+  episodeRuntime?: number;      // TV: typical episode runtime in minutes
   seasonCount?: number;
-  seasons?: OverseerrSeasonStatus[];
-  // Request details — populated when mediaInfo includes pending/active requests
-  requests?: OverseerrRequestSummary[];
+  seasons?: OverseerrSeasonStatus[];   // Per-season availability
+  requests?: OverseerrRequestSummary[]; // Pending/active requests
 }
 
 function mediaStatusLabel(info?: Record<string, unknown>): string {
@@ -97,8 +106,13 @@ export async function search(query: string, page = 1): Promise<{ results: Overse
   // Use encodeURIComponent to produce RFC 3986-compliant %20 encoding for spaces
   // and other reserved characters (#128). URLSearchParams uses + for spaces which
   // some servers do not decode as a space character.
+  //
+  // Overseerr validates the decoded query value server-side and rejects RFC 3986
+  // reserved characters such as '(' and ')' with HTTP 400. Strip them before
+  // encoding so queries like "Star Trek (2009)" succeed (#overseerr-paren-fix).
+  const sanitized = query.replace(/[()[\]{}!$&'*+,;=?#@/\\]/g, " ").replace(/\s+/g, " ").trim();
   const data = await overseerrFetch(
-    `/search?query=${encodeURIComponent(query)}&page=${encodeURIComponent(String(page))}&language=en`,
+    `/search?query=${encodeURIComponent(sanitized)}&page=${encodeURIComponent(String(page))}&language=en`,
   );
   const raw = (data?.results || []) as Record<string, unknown>[];
   const totalPages = (data?.totalPages as number | undefined) ?? 1;
@@ -108,88 +122,84 @@ export async function search(query: string, page = 1): Promise<{ results: Overse
   // firing N detail calls for results that will be discarded (#151).
   const page10 = raw.slice(0, 10);
 
-  // Fetch details for the returned results in parallel:
-  //   - movies: get cast (credits not in search results)
-  //   - TV: get numberOfSeasons + cast
-  interface DetailInfo { seasonCount?: number; cast?: string[] }
-  const detailMap = new Map<number, DetailInfo>();
-  await Promise.all(
-    page10.map(async (r) => {
-      const isTV = r.mediaType === "tv";
-      try {
-        const detail = await overseerrFetch(isTV ? `/tv/${r.id as number}` : `/movie/${r.id as number}`);
-        const credits = detail?.credits as Record<string, unknown> | undefined;
-        const castRaw = (credits?.cast as Record<string, unknown>[] | undefined) ?? [];
-        const cast = castRaw
-          .slice(0, 5)
-          .map((c) => c.name as string)
-          .filter(Boolean);
-        const info: DetailInfo = { cast: cast.length > 0 ? cast : undefined };
-        if (isTV) {
-          const count = detail?.numberOfSeasons as number | undefined;
-          if (count) info.seasonCount = count;
-        }
-        detailMap.set(r.id as number, info);
-      } catch { /* non-fatal */ }
-    }),
-  );
-
+  // No per-result detail fetches: all fields needed for title cards are already
+  // present in the search payload. cast, imdbId, genres, runtime, per-season
+  // availability, and request history are available via overseerr_get_details.
   const results = page10.map((r) => {
     const mediaInfo = r.mediaInfo as Record<string, unknown> | undefined;
     const isTV = r.mediaType === "tv";
-    const rawSeasons = (mediaInfo?.seasons as Record<string, unknown>[]) || [];
-    const detail = detailMap.get(r.id as number);
-
     const posterPath = r.posterPath as string | undefined;
-    const extIds = r.externalIds as Record<string, unknown> | undefined;
-    const imdbId = (r.imdbId as string | undefined) ?? (extIds?.imdbId as string | undefined);
 
-    // Extract any pending/active requests embedded in mediaInfo
-    const rawRequests = (mediaInfo?.requests as Record<string, unknown>[]) ?? [];
-    const requests: OverseerrRequestSummary[] = rawRequests.map((req) => {
-      const requester = req.requestedBy as Record<string, unknown> | undefined;
-      const isShowRequest = r.mediaType === "tv";
-      const seasons = isShowRequest
-        ? ((req.seasons as Record<string, unknown>[]) ?? [])
-            .map((s) => s.seasonNumber as number)
-            .sort((a, b) => a - b)
-        : undefined;
-      return {
-        id: req.id as number,
-        status: requestStatusLabel(req.status as number),
-        requestedBy: (requester?.displayName as string | undefined) ?? "Unknown",
-        requestedAt: req.createdAt as string,
-        seasonsRequested: seasons && seasons.length > 0 ? seasons : undefined,
-      };
-    });
-
-    const mediaType = r.mediaType as string;
     return {
       overseerrId: r.id as number,
-      overseerrMediaType: mediaType,
-      mediaType,
+      overseerrMediaType: r.mediaType as string,
       title: (r.title || r.name) as string,
       year: ((r.releaseDate || r.firstAirDate) as string | undefined)?.substring(0, 4),
       summary: r.overview as string | undefined,
       rating: r.voteAverage as number | undefined,
-      cast: detail?.cast,
       mediaStatus: mediaStatusLabel(mediaInfo),
       thumbPath: posterPath ? `https://image.tmdb.org/t/p/w300${posterPath}` : undefined,
-      imdbId: imdbId || undefined,
-      seasonCount: isTV ? (detail?.seasonCount ?? (r.numberOfSeasons as number | undefined)) : undefined,
-      seasons: isTV && rawSeasons.length > 0
-        ? rawSeasons
-            .filter((s) => (s.seasonNumber as number) > 0)
-            .map((s) => ({
-              seasonNumber: s.seasonNumber as number,
-              status: seasonStatusLabel(s.status as number),
-            }))
-        : undefined,
-      requests: requests.length > 0 ? requests : undefined,
+      seasonCount: isTV ? (r.numberOfSeasons as number | undefined) : undefined,
     };
   });
 
   return { results, hasMore };
+}
+
+export async function getDetails(id: number, mediaType: "movie" | "tv"): Promise<OverseerrDetails> {
+  const detail = await overseerrFetch(mediaType === "tv" ? `/tv/${id}` : `/movie/${id}`);
+
+  const credits = detail?.credits as Record<string, unknown> | undefined;
+  const castRaw = (credits?.cast as Record<string, unknown>[] | undefined) ?? [];
+  const cast = castRaw.slice(0, 10).map((c) => c.name as string).filter(Boolean);
+
+  const genreRaw = (detail?.genres as Record<string, unknown>[] | undefined) ?? [];
+  const genres = genreRaw.map((g) => g.name as string).filter(Boolean);
+
+  const extIds = detail?.externalIds as Record<string, unknown> | undefined;
+  const imdbId = (extIds?.imdbId as string | undefined) || undefined;
+
+  const mediaInfo = detail?.mediaInfo as Record<string, unknown> | undefined;
+  const rawSeasons = (mediaInfo?.seasons as Record<string, unknown>[]) ?? [];
+  const seasons: OverseerrSeasonStatus[] = rawSeasons
+    .filter((s) => (s.seasonNumber as number) > 0)
+    .map((s) => ({ seasonNumber: s.seasonNumber as number, status: seasonStatusLabel(s.status as number) }));
+
+  const rawRequests = (mediaInfo?.requests as Record<string, unknown>[]) ?? [];
+  const requests: OverseerrRequestSummary[] = rawRequests.map((req) => {
+    const requester = req.requestedBy as Record<string, unknown> | undefined;
+    const reqSeasons = mediaType === "tv"
+      ? ((req.seasons as Record<string, unknown>[]) ?? [])
+          .map((s) => s.seasonNumber as number)
+          .sort((a, b) => a - b)
+      : undefined;
+    return {
+      id: req.id as number,
+      status: requestStatusLabel(req.status as number),
+      requestedBy: (requester?.displayName as string | undefined) ?? "Unknown",
+      requestedAt: req.createdAt as string,
+      seasonsRequested: reqSeasons && reqSeasons.length > 0 ? reqSeasons : undefined,
+    };
+  });
+
+  const title = (detail?.title || detail?.name) as string;
+  const releaseDate = (detail?.releaseDate || detail?.firstAirDate) as string | undefined;
+  const episodeRuntimes = detail?.episodeRunTime as number[] | undefined;
+
+  return {
+    overseerrId: id,
+    overseerrMediaType: mediaType,
+    title,
+    year: releaseDate?.substring(0, 4),
+    imdbId,
+    cast: cast.length > 0 ? cast : undefined,
+    genres: genres.length > 0 ? genres : undefined,
+    runtime: mediaType === "movie" ? (detail?.runtime as number | undefined) : undefined,
+    episodeRuntime: mediaType === "tv" ? episodeRuntimes?.[0] : undefined,
+    seasonCount: mediaType === "tv" ? (detail?.numberOfSeasons as number | undefined) : undefined,
+    seasons: seasons.length > 0 ? seasons : undefined,
+    requests: requests.length > 0 ? requests : undefined,
+  };
 }
 
 export interface OverseerrRequest {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import type { Message } from "@/types";
 import type { ToolCallDisplay } from "@/types/chat";
 import { generateId } from "@/lib/utils";
@@ -38,8 +38,12 @@ export function useChat(conversationId: string | null, options?: UseChatOptions)
         setMessages(data.data.messages);
       }
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Failed to load messages";
-      clientLog.error("Failed to load messages", { message: msg, conversationId: convId });
+      clientLog.error("Failed to load messages", {
+        errorName: e instanceof Error ? e.name : "UnknownError",
+        errorMessage: e instanceof Error ? e.message : "Unknown error",
+        online: typeof navigator !== "undefined" ? navigator.onLine : null,
+        conversationId: convId,
+      });
       setError("Failed to load messages");
     }
   }, []);
@@ -86,6 +90,7 @@ export function useChat(conversationId: string | null, options?: UseChatOptions)
       const controller = new AbortController();
       abortRef.current = controller;
 
+      let phase: "fetch" | "stream" = "fetch";
       try {
         const res = await fetch("/api/chat", {
           method: "POST",
@@ -102,6 +107,7 @@ export function useChat(conversationId: string | null, options?: UseChatOptions)
         const reader = res.body?.getReader();
         if (!reader) throw new Error("No response body");
 
+        phase = "stream";
         const decoder = new TextDecoder();
         let buffer = "";
 
@@ -171,9 +177,23 @@ export function useChat(conversationId: string | null, options?: UseChatOptions)
         }
       } catch (e: unknown) {
         if (e instanceof DOMException && e.name === "AbortError") return;
-        const msg = e instanceof Error ? e.message : "Failed to send message";
-        clientLog.error("SSE stream failure", { message: msg, conversationId: convId });
-        setError(msg);
+        const errName = e instanceof Error ? e.name : "UnknownError";
+        const errMsg = e instanceof Error ? e.message : "Unknown error";
+        const online = typeof navigator !== "undefined" ? navigator.onLine : null;
+        clientLog.error("SSE stream failure", {
+          phase,
+          errorName: errName,
+          errorMessage: errMsg,
+          online,
+          conversationId: convId,
+        });
+        const userMsg =
+          errMsg === "Failed to fetch" || errMsg === "NetworkError when attempting to fetch resource."
+            ? online === false
+              ? "Network error: you appear to be offline"
+              : "Network error: could not reach the server"
+            : errMsg;
+        setError(userMsg);
         setMessages((prev) => prev.filter((m) => m.id !== assistantId || (m.content && m.content.length > 0)));
       } finally {
         streamingRef.current = false;
@@ -192,8 +212,14 @@ export function useChat(conversationId: string | null, options?: UseChatOptions)
               setMessages(data.data.messages);
               setToolCalls(new Map());
             }
-          } catch {
+          } catch (e: unknown) {
             // Best-effort — messages stay as optimistic state if reload fails
+            clientLog.warn("Post-stream message reload failed", {
+              errorName: e instanceof Error ? e.name : "UnknownError",
+              errorMessage: e instanceof Error ? e.message : "Unknown error",
+              online: typeof navigator !== "undefined" ? navigator.onLine : null,
+              conversationId: convId,
+            });
           }
         }
       }
@@ -210,6 +236,33 @@ export function useChat(conversationId: string | null, options?: UseChatOptions)
     setToolCalls(new Map());
     setError(null);
   }, []);
+
+  // When the user returns to the page (e.g. after backgrounding Chrome on
+  // mobile), reload messages so any tool results that completed server-side
+  // while the SSE connection was down are immediately visible.
+  // Only fires when not actively streaming — avoids racing with a live stream.
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      const conversationId = conversationIdRef.current;
+      if (document.visibilityState === "hidden") {
+        clientLog.info("page hidden", {
+          streaming: streamingRef.current,
+          conversationId,
+        });
+      } else if (document.visibilityState === "visible") {
+        clientLog.info("page visible", {
+          streaming: streamingRef.current,
+          conversationId,
+          willReload: !streamingRef.current && !!conversationId,
+        });
+        if (!streamingRef.current && conversationId) {
+          void loadMessages(conversationId);
+        }
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [loadMessages]);
 
   return {
     messages,

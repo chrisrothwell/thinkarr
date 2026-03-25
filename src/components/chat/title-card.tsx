@@ -66,10 +66,20 @@ export function TitleCard({ title }: TitleCardProps) {
         setErrorMsg(data.error ?? "Request failed");
         setRequestStatus("error");
       }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : "Network error";
-      clientLog.error("Title card request failed", { message: msg, title: title.title, overseerrId: title.overseerrId });
-      setErrorMsg("Network error");
+    } catch (e: unknown) {
+      const errMsg = e instanceof Error ? e.message : "Unknown error";
+      clientLog.error("Title card request failed", {
+        errorName: e instanceof Error ? e.name : "UnknownError",
+        errorMessage: errMsg,
+        online: typeof navigator !== "undefined" ? navigator.onLine : null,
+        title: title.title,
+        overseerrId: title.overseerrId,
+      });
+      setErrorMsg(
+        errMsg === "Failed to fetch" || errMsg === "NetworkError when attempting to fetch resource."
+          ? "Network error — could not reach the server"
+          : errMsg,
+      );
       setRequestStatus("error");
     } finally {
       setRequesting(false);

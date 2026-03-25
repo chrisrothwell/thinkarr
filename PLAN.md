@@ -1087,6 +1087,20 @@ running container without needing a Plex session or shell access.
 | `GET` | `/api/settings/internal-api-key` | Admin session | Fetch current key for UI display |
 | `POST` | `/api/settings/internal-api-key` | Admin session | Regenerate and return new key |
 
+### Phase 37b: Internal Logs API — efficiency improvements
+
+#### Features
+- **Newest-first file iteration with early exit** — `GET /api/internal/logs` now reads log files from newest to oldest and stops as soon as the unfiltered tail quota is met. A routine `tail=300` call no longer reads days-old files when the current log file already contains enough lines.
+- **`?level=<error|warn|info>` filter** — Callers can scope results to a single log severity. The filter matches the JSON field `"level":"<value>"` case-insensitively. `tail` applies to the filtered result set.
+- **`?conversationId=<id>` filter** — Callers can scope results to a single conversation session. Combinable with `?level=`.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/app/api/internal/logs/route.ts` | Newest-first iteration, early exit when quota met, `level` and `conversationId` query filters |
+| `src/__tests__/api/internal-logs.test.ts` | 6 new tests — early-exit optimisation, level filter, conversationId filter, combined filter, empty-result case, tail-on-filtered-lines |
+
 ### Phase 38: Report Issue Feature (issue #159)
 
 #### Features
@@ -1158,3 +1172,122 @@ Admin can now configure GitHub issue reporting credentials directly in **Setting
 |------|--------|
 | `src/lib/auth/session.ts` | Import `logger`; add `logger.warn("Session expired or not found", { sessionId })` before the existing `return null` at line 75 |
 | `src/__tests__/api/session.test.ts` | Add `logWarnSpy`; new test case: expired session cookie returns 401 and logs the warning with the sessionId |
+
+### Phase 41: Fix Overseerr search — parentheses in query cause HTTP 400
+
+#### Bug
+Log analysis of conversation `81f6c0cd` revealed `overseerr_search` returning HTTP 400 when the user searched for titles like `"Star Trek (2009)"`. Overseerr validates the decoded query value server-side and rejects RFC 3986 reserved characters including `(` and `)`. The existing `encodeURIComponent` encoding is insufficient because Overseerr decodes the value before validation.
+
+#### Fix
+- Strip RFC 3986 reserved characters (`( ) [ ] { } ! $ & ' * + , ; = ? # @ / \`) from the query string before encoding, collapsing extra whitespace. The movie/show is still found correctly — e.g. `"Star Trek (2009)"` → `"Star Trek 2009"`.
+
+#### Test
+- Added regression test: `"Star Trek (2009)"` must call `fetch` with a URL containing no `(` or `)` and must contain `Star%20Trek%202009`.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/services/overseerr.ts` | Strip reserved characters from query before `encodeURIComponent` in `search()` |
+| `src/__tests__/lib/overseerr.test.ts` | New test: parentheses stripped from query |
+
+### Phase 42: Fix stuck spinners and mobile SSE reconnection
+
+#### Bugs
+Two related issues observed in beta logs (conversation `81f6c0cd`):
+
+1. **Stuck spinner after SSE disconnect** — `buildHistoricalToolCalls` left incomplete tool calls with `status: "calling"` when rebuilding from the DB after a reload. Since `"calling"` renders a spinner, any tool call that never completed (e.g. because the stream dropped) showed an infinite spinner after reconnecting.
+
+2. **Mobile backgrounding silently kills stream** — When Chrome on mobile is backgrounded, the browser can silently suspend the SSE stream without throwing an error. The `finally` block (which reloads messages and clears state) never fired until the user manually retried.
+
+#### Fix
+- `message-list.tsx`: change the fallback status in `buildHistoricalToolCalls` from `"calling"` to `"error"` with message `"Connection was lost"` for tool calls that have no result record in the DB.
+- `use-chat.ts`: add a `visibilitychange` listener. When the page becomes visible after being hidden for > 3 s while a stream is active, abort the stream. The existing `finally` block then fires, reloads messages, and clears spinners.
+- `buildHistoricalToolCalls` is exported so it can be unit-tested directly.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/components/chat/message-list.tsx` | Export `buildHistoricalToolCalls`; change fallback status from `"calling"` to `"error"` with "Connection was lost" |
+| `src/hooks/use-chat.ts` | Add `visibilitychange` listener to abort stale streams on mobile foreground |
+| `src/__tests__/lib/build-historical-tool-calls.test.ts` | New — 3 unit tests: done, interrupted (no result), and error result |
+
+### Phase 42 (addendum): Background SSE resilience
+
+#### Root cause
+When mobile Chrome backgrounds the app, the client TCP connection drops. This causes `controller.enqueue()` to throw (WHATWG streams cancel the controller when the consumer disconnects). That throw propagated through `for await (const event of orchestrate(...))` in `route.ts`, abandoning the generator mid-execution — before tool results were saved to DB.
+
+#### Fix
+- `src/app/api/chat/route.ts`: Introduced `enqueue()` helper that catches `controller.enqueue()` errors and sets `clientConnected = false`. The `for await` loop continues iterating the orchestrator generator regardless — tool calls execute to completion and results are saved to DB. `controller.close()` in the `finally` block is also wrapped since it may also throw on an already-cancelled stream.
+- `src/hooks/use-chat.ts`: Added `visibilitychange` listener (after all `useCallback` hooks so `loadMessages` is in scope). When the page becomes visible and no stream is active, reloads messages from DB so server-side results that completed while the page was backgrounded are immediately shown.
+
+### Phase 43: Lean overseerr_search — eliminate per-result detail fetches
+
+#### Problem
+Log analysis of conversation `81f6c0cd` showed that each `overseerr_search` tool call was firing up to 10 parallel `/movie|tv/{id}` requests (one per result) to retrieve `cast` and `imdbId`. With the LLM making 15 parallel search calls in a single turn, this produced ~150 supplementary Overseerr HTTP requests and caused the prompt token count to balloon from ~6k to ~16k (search result JSON accumulated in conversation history).
+
+#### Fix
+- Removed the `Promise.all` detail-fetch block from `search()` entirely.
+- All fields needed for title cards (`mediaStatus`, `summary`, `rating`, `thumbPath`, `seasonCount`) are already present in the TMDB search payload — no extra fetches required.
+- `cast`, `imdbId`, `genres`, `runtime`, per-season availability, and request history are now exclusively returned by `overseerr_get_details`, called on demand when the user asks for more information about a specific title.
+- Updated `OverseerrSearchResult` interface: removed `cast` and `imdbId`.
+- Updated tool descriptions to clearly document the search vs. get_details split.
+- Tests: replaced cast/imdbId-in-search tests with a "no extra fetches" assertion suite and new `getDetails` coverage.
+
+#### API call reduction
+| Before | After |
+|--------|-------|
+| 1 search + up to 10 detail fetches per tool call | 1 search fetch per tool call |
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/services/overseerr.ts` | Remove detail fetch loop from `search()`; drop `cast`/`imdbId` from `OverseerrSearchResult`; read `seasonCount` directly from `r.numberOfSeasons` |
+| `src/lib/tools/overseerr-tools.ts` | Update `overseerr_search` and `overseerr_get_details` descriptions |
+| `src/__tests__/lib/overseerr.test.ts` | Replace cast/request search tests with no-extra-fetch and `getDetails` test suites |
+
+### Phase 44: Fix repeated orphaned tool call repair on every request
+
+#### Root cause
+When the SSE stream dropped mid-tool-execution (mobile backgrounding / network flap), the tool call was saved to the `messages` table (as part of the assistant row's `toolCalls` JSON) but no corresponding tool result row was ever written. `loadHistory()` in `orchestrator.ts` correctly detected the orphan and injected a synthetic error result in memory, allowing the LLM to recover. However, the synthetic result was never persisted to the DB.
+
+**Observed impact (beta logs, conv `6913c98e`):** `sonarr_get_series_status` call `call_vd4Ydqzwy3WmiDZYYtdK2xYM` was repaired on 9 consecutive requests over 12 minutes. The same pattern occurred for a `display_titles` call after a second stream failure. Each repair logged a WARN, none visible as a user-facing error, but they polluted logs and wasted CPU.
+
+#### Fix
+Added a `saveMessage()` call inside the orphan repair branch of `loadHistory()`. The first request that encounters an orphaned call writes the synthetic result to DB. Every subsequent `loadHistory()` call finds the row, includes it in `seenToolResultIds`, and skips the repair entirely.
+
+#### Test
+New regression test in `orchestrator.test.ts`: seeds a conversation with an orphaned tool call, runs two consecutive `orchestrate()` calls, and asserts the synthetic row count is exactly 1 after both runs (not 2 or more).
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/llm/orchestrator.ts` | Add `saveMessage()` call inside orphan repair branch in `loadHistory()` |
+| `src/__tests__/lib/orchestrator.test.ts` | New regression test: synthetic result row count stays 1 across consecutive requests |
+
+### Phase 45: Sanitize LLM API errors before forwarding to client
+
+#### Bug
+Beta log analysis (conversation `df722f04`, March 25) showed raw OpenAI 429 quota errors being forwarded verbatim to the client UI:
+
+```
+ERROR [df722f04] [client] Server error event 429 You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.
+```
+
+These appeared as confusing "network error" glitches in the UI, exposing internal API details to end users.
+
+#### Fix
+Added `sanitizeLlmError()` helper in `orchestrator.ts`. Raw error is preserved in server-side logs; only a friendly message is yielded to the client:
+- 429 / quota / rate-limit → "The AI service is temporarily unavailable. Please try again in a moment."
+- 401 / 403 / unauthorized / forbidden → "The AI service is not properly configured. Please contact the administrator."
+- Everything else → "The AI service encountered an error. Please try again."
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/llm/orchestrator.ts` | Add `sanitizeLlmError()`; use it in the LLM catch block instead of forwarding raw error |
+| `src/__tests__/lib/orchestrator.test.ts` | 2 new tests: 429 yields friendly rate-limit message; generic error yields friendly fallback |
