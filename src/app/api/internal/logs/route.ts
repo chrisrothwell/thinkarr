@@ -27,24 +27,43 @@ export async function GET(request: Request) {
   const parsed = parseInt(tailParam ?? "", 10);
   const tail = Math.min(Math.max(1, isNaN(parsed) ? DEFAULT_TAIL : parsed), MAX_TAIL);
 
+  const levelFilter = searchParams.get("level")?.toLowerCase() ?? null;
+  const conversationFilter = searchParams.get("conversationId") ?? null;
+
   if (!fs.existsSync(LOGS_DIR)) {
     return NextResponse.json<ApiResponse>({ success: true, data: { lines: [], tail: 0 } });
   }
 
-  // Collect all log files in chronological order (lexicographic sort = date order for thinkarr-YYYY-MM-DD.log)
+  // Collect log files newest-first so we can stop reading once we have enough lines.
   const logFiles = fs
     .readdirSync(LOGS_DIR)
     .filter((f) => f.endsWith(".log"))
-    .sort();
+    .sort()
+    .reverse();
 
-  const allLines: string[] = [];
+  const collected: string[] = [];
+
   for (const filename of logFiles) {
     const content = fs.readFileSync(path.join(LOGS_DIR, filename), "utf-8");
     const lines = content.split("\n").filter((l) => l.trim() !== "");
-    allLines.push(...lines);
+    // Prepend in reverse so the final array stays chronological
+    collected.unshift(...lines);
+    if (collected.length >= tail && !levelFilter && !conversationFilter) {
+      // Enough raw lines — no need to read older files
+      break;
+    }
   }
 
-  const lines = allLines.slice(-tail);
+  // Apply filters before slicing so tail reflects filtered lines, not raw lines
+  let filtered = collected;
+  if (levelFilter) {
+    filtered = filtered.filter((l) => l.toLowerCase().includes(`"level":"${levelFilter}"`));
+  }
+  if (conversationFilter) {
+    filtered = filtered.filter((l) => l.includes(conversationFilter));
+  }
+
+  const lines = filtered.slice(-tail);
 
   return NextResponse.json<ApiResponse>({
     success: true,
