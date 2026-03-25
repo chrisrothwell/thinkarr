@@ -1475,3 +1475,13 @@ Only `summary` and `cast` are stripped from historical `display_titles` call arg
 | `src/lib/tools/overseerr-tools.ts` | Restore `thumbPath` to `overseerr_search` llmSummary; replace `availableSeasons` with all-status compact seasons string in `overseerr_get_details` llmSummary |
 | `src/lib/llm/orchestrator.ts` | Only strip `summary` and `cast` from `display_titles` history args; keep `thumbPath` |
 | `src/__tests__/lib/token-reduction.test.ts` | Update all affected tests to assert correct new behaviour |
+
+---
+
+## Phase 49 — Version bump to 1.1.3-beta.1
+
+Bumped `package.json` version from `1.1.2` to `1.1.3-beta.1` in preparation for the next beta release.
+
+| File | Change |
+|------|--------|
+| `package.json` | Version `1.1.2` → `1.1.3-beta.1` |
