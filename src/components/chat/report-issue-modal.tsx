@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { X } from "lucide-react";
+import { clientLog } from "@/lib/client-logger";
 
 interface ReportIssueModalProps {
   conversationId: string;
@@ -54,7 +55,13 @@ export function ReportIssueModal({ conversationId, onClose }: ReportIssueModalPr
 
       setIssueUrl(data.data?.issueUrl);
       setSubmitState("success");
-    } catch {
+    } catch (e: unknown) {
+      clientLog.error("Report issue network failure", {
+        errorName: e instanceof Error ? e.name : "UnknownError",
+        errorMessage: e instanceof Error ? e.message : "Unknown error",
+        online: typeof navigator !== "undefined" ? navigator.onLine : null,
+        conversationId,
+      });
       setErrorMsg("Network error. Please try again.");
       setSubmitState("error");
     }
