@@ -4,15 +4,15 @@ import * as plex from "@/lib/services/plex";
 
 const pageParam = z.number().int().min(1).optional().describe("Page number (1-based). Omit or use 1 for the first page. Use hasMore from the previous response to know whether a next page exists.");
 
-/** Compact history summary for a Plex result list — strips bulky fields (summary, thumbPath,
- *  secondary episode metadata) that are only needed in the current tool round when the LLM is
- *  constructing display_titles arguments. The full result is always used in-round; this summary
- *  is only loaded from DB for subsequent turns in the same conversation. */
+/** Compact history summary for a Plex result list — strips bulky fields (summary,
+ *  secondary episode metadata) not needed in subsequent turns, while keeping
+ *  thumbPath and plexKey so the LLM can generate correct display_titles calls
+ *  in follow-up turns without re-searching. */
 function plexResultsLlmSummary(result: unknown): unknown {
   const r = result as { results: plex.PlexSearchResult[]; hasMore: boolean };
   return {
-    results: r.results.map(({ title, year, mediaType, plexKey, rating, cast, showTitle, seasonNumber, episodeNumber }) => ({
-      title, year, mediaType, plexKey, rating, cast, showTitle, seasonNumber, episodeNumber,
+    results: r.results.map(({ title, year, mediaType, plexKey, thumbPath, rating, cast, showTitle, seasonNumber, episodeNumber }) => ({
+      title, year, mediaType, plexKey, thumbPath, rating, cast, showTitle, seasonNumber, episodeNumber,
     })),
     hasMore: r.hasMore,
   };
@@ -41,8 +41,8 @@ export function registerPlexTools() {
       const r = result as { available: boolean; results: plex.PlexSearchResult[] };
       return {
         available: r.available,
-        results: r.results.map(({ title, year, mediaType, plexKey, rating, cast, showTitle, seasonNumber, episodeNumber }) => ({
-          title, year, mediaType, plexKey, rating, cast, showTitle, seasonNumber, episodeNumber,
+        results: r.results.map(({ title, year, mediaType, plexKey, thumbPath, rating, cast, showTitle, seasonNumber, episodeNumber }) => ({
+          title, year, mediaType, plexKey, thumbPath, rating, cast, showTitle, seasonNumber, episodeNumber,
         })),
       };
     },
