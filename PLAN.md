@@ -1087,6 +1087,20 @@ running container without needing a Plex session or shell access.
 | `GET` | `/api/settings/internal-api-key` | Admin session | Fetch current key for UI display |
 | `POST` | `/api/settings/internal-api-key` | Admin session | Regenerate and return new key |
 
+### Phase 37b: Internal Logs API — efficiency improvements
+
+#### Features
+- **Newest-first file iteration with early exit** — `GET /api/internal/logs` now reads log files from newest to oldest and stops as soon as the unfiltered tail quota is met. A routine `tail=300` call no longer reads days-old files when the current log file already contains enough lines.
+- **`?level=<error|warn|info>` filter** — Callers can scope results to a single log severity. The filter matches the JSON field `"level":"<value>"` case-insensitively. `tail` applies to the filtered result set.
+- **`?conversationId=<id>` filter** — Callers can scope results to a single conversation session. Combinable with `?level=`.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/app/api/internal/logs/route.ts` | Newest-first iteration, early exit when quota met, `level` and `conversationId` query filters |
+| `src/__tests__/api/internal-logs.test.ts` | 6 new tests — early-exit optimisation, level filter, conversationId filter, combined filter, empty-result case, tail-on-filtered-lines |
+
 ### Phase 38: Report Issue Feature (issue #159)
 
 #### Features
@@ -1253,3 +1267,27 @@ New regression test in `orchestrator.test.ts`: seeds a conversation with an orph
 |------|--------|
 | `src/lib/llm/orchestrator.ts` | Add `saveMessage()` call inside orphan repair branch in `loadHistory()` |
 | `src/__tests__/lib/orchestrator.test.ts` | New regression test: synthetic result row count stays 1 across consecutive requests |
+
+### Phase 45: Sanitize LLM API errors before forwarding to client
+
+#### Bug
+Beta log analysis (conversation `df722f04`, March 25) showed raw OpenAI 429 quota errors being forwarded verbatim to the client UI:
+
+```
+ERROR [df722f04] [client] Server error event 429 You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.
+```
+
+These appeared as confusing "network error" glitches in the UI, exposing internal API details to end users.
+
+#### Fix
+Added `sanitizeLlmError()` helper in `orchestrator.ts`. Raw error is preserved in server-side logs; only a friendly message is yielded to the client:
+- 429 / quota / rate-limit → "The AI service is temporarily unavailable. Please try again in a moment."
+- 401 / 403 / unauthorized / forbidden → "The AI service is not properly configured. Please contact the administrator."
+- Everything else → "The AI service encountered an error. Please try again."
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/llm/orchestrator.ts` | Add `sanitizeLlmError()`; use it in the LLM catch block instead of forwarding raw error |
+| `src/__tests__/lib/orchestrator.test.ts` | 2 new tests: 429 yields friendly rate-limit message; generic error yields friendly fallback |

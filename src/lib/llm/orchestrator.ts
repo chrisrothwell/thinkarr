@@ -32,6 +32,17 @@ type ChatMessage = OpenAI.ChatCompletionMessageParam;
 
 const MAX_TOOL_ROUNDS = 5;
 
+/** Map raw LLM API errors to user-friendly messages. Raw error is preserved in server logs. */
+function sanitizeLlmError(raw: string): string {
+  if (/429|quota|rate.?limit/i.test(raw)) {
+    return "The AI service is temporarily unavailable. Please try again in a moment.";
+  }
+  if (/401|403|unauthorized|forbidden/i.test(raw)) {
+    return "The AI service is not properly configured. Please contact the administrator.";
+  }
+  return "The AI service encountered an error. Please try again.";
+}
+
 /** Load conversation history from DB, formatted for the OpenAI API. */
 function loadHistory(conversationId: string): ChatMessage[] {
   const db = getDb();
@@ -110,6 +121,7 @@ function loadHistory(conversationId: string): ChatMessage[] {
             conversationId,
             toolCallId: tc.id,
             toolName,
+            synthetic: true,
           });
         }
       }
@@ -256,8 +268,11 @@ export async function* orchestrate(
       }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "LLM request failed";
-      logger.error("LLM request failed", { conversationId, error: msg });
-      yield { type: "error", message: msg };
+      const errorCategory = /429|quota|rate.?limit/i.test(msg) ? "rate_limit"
+        : /401|403|unauthorized|forbidden/i.test(msg) ? "auth_error"
+        : "llm_error";
+      logger.error("LLM request failed", { conversationId, round, error: msg, errorCategory });
+      yield { type: "error", message: sanitizeLlmError(msg) };
       return;
     }
 
@@ -341,14 +356,13 @@ export async function* orchestrate(
       const durationMs = Date.now() - startedAt;
 
       // Save tool result to DB (even on error — ensures the API message sequence stays valid)
-      logger.info("Saving tool result", { conversationId, toolCallId: tc.id, toolName: tc.function.name, durationMs, isError });
       try {
         saveMessage(conversationId, "tool", result, {
           toolCallId: tc.id,
           toolName: tc.function.name,
           durationMs,
         });
-        logger.info("Tool result saved", { conversationId, toolCallId: tc.id, toolName: tc.function.name });
+        logger.info("Tool result saved", { conversationId, toolCallId: tc.id, toolName: tc.function.name, durationMs, isError });
       } catch (e: unknown) {
         logger.error("Failed to save tool result — conversation will be broken", {
           conversationId,

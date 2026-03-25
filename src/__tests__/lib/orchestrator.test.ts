@@ -336,3 +336,68 @@ describe("orchestrator — orphaned tool call repair (issue #151)", () => {
     expect(rowsAfterSecond).toHaveLength(1); // still exactly 1, not 2
   });
 });
+
+// ---------------------------------------------------------------------------
+// LLM error sanitization tests
+// ---------------------------------------------------------------------------
+
+describe("orchestrator — LLM error sanitization", () => {
+  it("yields a friendly message for a 429 quota error and does not expose the raw API error", async () => {
+    vi.doMock("@/lib/llm/client", () => ({
+      getLlmClient: () => ({
+        chat: {
+          completions: {
+            create: vi.fn().mockRejectedValue(
+              new Error("429 You exceeded your current quota, please check your plan and billing details."),
+            ),
+          },
+        },
+      }),
+      getLlmModel: () => "gpt-4o",
+      getLlmClientForEndpoint: vi.fn(),
+    }));
+
+    const userId = seedUser(testDb);
+    const conversationId = seedConversation(testDb, userId);
+
+    const { orchestrate } = await import("@/lib/llm/orchestrator");
+    const events = [];
+    for await (const event of orchestrate({ conversationId, userMessage: "Hello" })) {
+      events.push(event);
+    }
+
+    const errorEvent = events.find((e) => e.type === "error") as { type: string; message: string } | undefined;
+    expect(errorEvent).toBeDefined();
+    expect(errorEvent!.message).toBe("The AI service is temporarily unavailable. Please try again in a moment.");
+    expect(errorEvent!.message).not.toMatch(/quota/);
+    expect(errorEvent!.message).not.toMatch(/429/);
+  });
+
+  it("yields a friendly message for a generic LLM error and does not expose internal details", async () => {
+    vi.doMock("@/lib/llm/client", () => ({
+      getLlmClient: () => ({
+        chat: {
+          completions: {
+            create: vi.fn().mockRejectedValue(new Error("Connection reset by peer")),
+          },
+        },
+      }),
+      getLlmModel: () => "gpt-4o",
+      getLlmClientForEndpoint: vi.fn(),
+    }));
+
+    const userId = seedUser(testDb);
+    const conversationId = seedConversation(testDb, userId);
+
+    const { orchestrate } = await import("@/lib/llm/orchestrator");
+    const events = [];
+    for await (const event of orchestrate({ conversationId, userMessage: "Hello" })) {
+      events.push(event);
+    }
+
+    const errorEvent = events.find((e) => e.type === "error") as { type: string; message: string } | undefined;
+    expect(errorEvent).toBeDefined();
+    expect(errorEvent!.message).toBe("The AI service encountered an error. Please try again.");
+    expect(errorEvent!.message).not.toMatch(/Connection reset/);
+  });
+});
