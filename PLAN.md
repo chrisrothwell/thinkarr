@@ -1431,3 +1431,14 @@ In `loadHistory()`, after parsing stored `tool_calls`, `display_titles` call arg
 | `src/lib/tools/radarr-tools.ts` | Add `llmSummary` to `radarr_search_movie`; import `RadarrMovie` type |
 | `src/lib/llm/orchestrator.ts` | Compact `display_titles` tool call args in `loadHistory()` |
 | `src/__tests__/lib/token-reduction.test.ts` | 9 new tests (15 total) covering all new summaries and call-arg compression |
+
+
+---
+
+## Phase 49 — Version bump to 1.1.3-beta.1
+
+Bumped `package.json` version from `1.1.2` to `1.1.3-beta.1` in preparation for the next beta release.
+
+| File | Change |
+|------|--------|
+| `package.json` | Version `1.1.2` → `1.1.3-beta.1` |
