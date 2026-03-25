@@ -65,7 +65,37 @@ function loadHistory(conversationId: string): ChatMessage[] {
       if (row.content) msg.content = row.content;
       if (row.toolCalls) {
         try {
-          msg.tool_calls = JSON.parse(row.toolCalls);
+          const toolCalls = JSON.parse(row.toolCalls) as OpenAI.ChatCompletionMessageToolCall[];
+          // Compact display_titles call arguments: strip summary, thumbPath, and cast
+          // from each title entry. These are the bulky repeated fields (a 20-season show
+          // repeats a 300-char summary 20 times). The tool result (via llmSummary) already
+          // confirms which cards were shown, so the full args are not needed in history.
+          msg.tool_calls = toolCalls.map((tc) => {
+            if (
+              tc.type === "function" &&
+              tc.function.name === "display_titles" &&
+              tc.function.arguments
+            ) {
+              try {
+                const args = JSON.parse(tc.function.arguments) as {
+                  titles: Record<string, unknown>[];
+                };
+                const compacted = {
+                  titles: args.titles.map(
+                    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+                    ({ summary: _s, thumbPath: _t, cast: _c, ...rest }) => rest,
+                  ),
+                };
+                return {
+                  ...tc,
+                  function: { ...tc.function, arguments: JSON.stringify(compacted) },
+                };
+              } catch {
+                return tc;
+              }
+            }
+            return tc;
+          });
         } catch {
           // Skip malformed tool calls
         }

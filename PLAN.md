@@ -1375,3 +1375,59 @@ A conversation that had 3 prior searches now starts each new turn with ~3,250 fe
 | `src/lib/tools/plex-tools.ts` | Add `plexResultsLlmSummary` helper + `llmSummary` on all 6 Plex search tools |
 | `src/lib/tools/overseerr-tools.ts` | Add `llmSummary` on `overseerr_search` and `overseerr_list_requests`; import types |
 | `src/__tests__/lib/token-reduction.test.ts` | 6 new tests covering all four fixes |
+
+### Phase 48: Further TPM reduction — remaining tool payloads and multi-season call args
+
+#### Problem
+After Phase 47, the following sources of token bloat remained:
+
+1. **`overseerr_get_details` — no `llmSummary`**: Full response (cast × 10, all per-season statuses, all request history) went into every subsequent turn unchanged. A 10-season show alone contributes 10 season-status objects plus up to 10 request objects.
+
+2. **`plex_get_title_tags` — no `llmSummary`**: Returns full unbounded `directors[]` and `actors[]` arrays. A movie with many associated directors (e.g. anthology films) or large ensemble cast could send 20+ names into history.
+
+3. **`sonarr_search_series` / `radarr_search_movie` — no `llmSummary`**: 200-character `overview` fields × up to 10 results stay in conversation history as noise after the initial search is acted upon.
+
+4. **`sonarr_get_series_status` — no `llmSummary`**: Full per-season array (one object per season with `seasonNumber`, `totalEpisodes`, `downloadedEpisodes`, `monitored`) stays in history for all subsequent turns.
+
+5. **`display_titles` tool call arguments** — the assistant's own `tool_calls` message is replayed verbatim each turn. For a multi-season show (e.g. 20 seasons), the arguments include 20 entries each repeating the same 300-char `summary`, `thumbPath` URL, and `cast` array. This is the single largest remaining source of per-turn bloat.
+
+#### Fixes
+
+**Fix 1 — `overseerr_get_details` `llmSummary`** (`src/lib/tools/overseerr-tools.ts`)
+Compact form: `overseerrId`, `overseerrMediaType`, `title`, `year`, `imdbId`, `cast` (first 5 only, down from 10), `genres`, `runtime`/`episodeRuntime`, `seasonCount`. Seasons list replaced by `availableSeasons` (array of season numbers with "Available" status). `requests` array dropped entirely.
+
+**Fix 2 — `plex_get_title_tags` `llmSummary`** (`src/lib/tools/plex-tools.ts`)
+Compact form caps `directors` at 3 and `actors` at 5. All other fields (`genres`, `countries`, `studio`, `contentRating`, `labels`) are unchanged.
+
+**Fix 3 — `sonarr_search_series` `llmSummary`** (`src/lib/tools/sonarr-tools.ts`)
+Strips `overview` from each result. All identity and status fields preserved.
+
+**Fix 4 — `sonarr_get_series_status` `llmSummary`** (`src/lib/tools/sonarr-tools.ts`)
+Top-level stats (`totalEpisodes`, `downloadedEpisodes`, `missingEpisodes`, `nextAiring`) preserved. Per-season array compacted to a single string: `"S1:7/7 S2:13/13 S3:11/13"`.
+
+**Fix 5 — `radarr_search_movie` `llmSummary`** (`src/lib/tools/radarr-tools.ts`)
+Strips `overview` from each result. All identity and status fields preserved.
+
+**Fix 6 — `display_titles` tool call arg compression** (`src/lib/llm/orchestrator.ts`)
+In `loadHistory()`, after parsing stored `tool_calls`, `display_titles` call arguments are post-processed: `summary`, `thumbPath`, and `cast` are stripped from each title entry. The tool's `llmSummary` already confirms which cards were shown in the result message; the full per-entry media fields are not needed in the replayed call arguments.
+
+#### Token savings estimate (incremental over Phase 47)
+
+| Source | Approximate saving per historical turn |
+|--------|---------------------------------------|
+| `overseerr_get_details` (10-season show) | ~800 tokens |
+| `sonarr_get_series_status` (10 seasons) | ~200 tokens |
+| `display_titles` (20-season show, 1 prior call) | ~1,500 tokens |
+| `sonarr/radarr` search overviews (10 results each) | ~500 tokens |
+| `plex_get_title_tags` (large cast) | ~100 tokens |
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/tools/overseerr-tools.ts` | Add `llmSummary` to `overseerr_get_details`; import `OverseerrDetails` type |
+| `src/lib/tools/plex-tools.ts` | Add `llmSummary` to `plex_get_title_tags` |
+| `src/lib/tools/sonarr-tools.ts` | Add `llmSummary` to `sonarr_search_series` and `sonarr_get_series_status`; import types |
+| `src/lib/tools/radarr-tools.ts` | Add `llmSummary` to `radarr_search_movie`; import `RadarrMovie` type |
+| `src/lib/llm/orchestrator.ts` | Compact `display_titles` tool call args in `loadHistory()` |
+| `src/__tests__/lib/token-reduction.test.ts` | 9 new tests (15 total) covering all new summaries and call-arg compression |

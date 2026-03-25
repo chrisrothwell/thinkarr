@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { defineTool } from "./registry";
 import * as radarr from "@/lib/services/radarr";
+import type { RadarrMovie } from "@/lib/services/radarr";
 
 export function registerRadarrTools() {
   defineTool({
@@ -10,6 +11,14 @@ export function registerRadarrTools() {
       term: z.string().describe("Search term (movie title)"),
     }),
     handler: async (args) => radarr.searchMovie(args.term),
+    /** Strip overview from history — 200-char overview × 10 results is noise once the
+     *  LLM has already acted on the search. Keep all identity and status fields. */
+    llmSummary: (result: unknown) => {
+      return (result as RadarrMovie[]).map(
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        ({ overview: _ov, ...rest }) => rest,
+      );
+    },
   });
 
   defineTool({
