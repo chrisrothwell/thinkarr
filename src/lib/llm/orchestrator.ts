@@ -399,11 +399,17 @@ export async function* orchestrate(
       })),
     });
 
-    // 4. Execute each tool call
+    // 4. Execute tool calls in parallel — multiple tool calls in a single round
+    //    (e.g. 10 overseerr_get_details calls) run concurrently rather than
+    //    sequentially, reducing the total round-trip time significantly.
     const TOOL_TIMEOUT_MS = 30_000;
+
+    // Emit tool_call_start events immediately (before awaiting results)
+    const startedAts: Map<string, number> = new Map();
     for (const tc of toolCalls) {
-      logger.info("Tool call", { conversationId, toolName: tc.function.name, toolCallId: tc.id });
       const startedAt = Date.now();
+      startedAts.set(tc.id, startedAt);
+      logger.info("Tool call", { conversationId, toolName: tc.function.name, toolCallId: tc.id });
       yield {
         type: "tool_call_start",
         toolCallId: tc.id,
@@ -411,26 +417,35 @@ export async function* orchestrate(
         arguments: tc.function.arguments,
         startedAt,
       };
+    }
 
-      let result: string;
-      let isError = false;
-      try {
-        const timeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`Tool call timed out after ${TOOL_TIMEOUT_MS / 1000}s`)), TOOL_TIMEOUT_MS),
-        );
-        result = await Promise.race([
-          executeTool(tc.function.name, tc.function.arguments),
-          timeoutPromise,
-        ]);
-      } catch (e: unknown) {
-        isError = true;
-        const timedOut = e instanceof Error && e.message.startsWith("Tool call timed out");
-        result = JSON.stringify({ error: e instanceof Error ? e.message : "Tool execution failed" });
-        logger.warn("Tool call error", { conversationId, toolName: tc.function.name, toolCallId: tc.id, error: result, timedOut, durationMs: Date.now() - startedAt });
-      }
+    // Execute all tools concurrently
+    const toolResults = await Promise.all(
+      toolCalls.map(async (tc) => {
+        const startedAt = startedAts.get(tc.id) ?? Date.now();
+        let result: string;
+        let isError = false;
+        try {
+          const timeoutPromise = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`Tool call timed out after ${TOOL_TIMEOUT_MS / 1000}s`)), TOOL_TIMEOUT_MS),
+          );
+          result = await Promise.race([
+            executeTool(tc.function.name, tc.function.arguments),
+            timeoutPromise,
+          ]);
+        } catch (e: unknown) {
+          isError = true;
+          const timedOut = e instanceof Error && e.message.startsWith("Tool call timed out");
+          result = JSON.stringify({ error: e instanceof Error ? e.message : "Tool execution failed" });
+          logger.warn("Tool call error", { conversationId, toolName: tc.function.name, toolCallId: tc.id, error: result, timedOut, durationMs: Date.now() - startedAt });
+        }
+        const durationMs = Date.now() - startedAt;
+        return { tc, result: result!, isError, durationMs };
+      }),
+    );
 
-      const durationMs = Date.now() - startedAt;
-
+    // Save results and emit events in original tool_calls order
+    for (const { tc, result, isError, durationMs } of toolResults) {
       // Save tool result to DB (even on error — ensures the API message sequence stays valid)
       try {
         saveMessage(conversationId, "tool", result, {
