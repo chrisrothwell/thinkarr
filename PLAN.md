@@ -1627,3 +1627,20 @@ Token cost of history is now capped. A conversation with 35 tool-calling rounds 
 | `src/lib/llm/default-prompt.ts` | Redirect genre/trending queries to `overseerr_discover`; clarify `partial` status (#207) |
 | `src/__tests__/lib/plex.test.ts` | Tests for episode filtering and `/children` key stripping |
 | `src/__tests__/lib/overseerr.test.ts` | Tests for new `discover()` function |
+
+---
+
+### Phase N+1 — Bug fix: season-level plexKey returns no episodes (#211)
+
+#### Bug fixes
+
+- **#211 `plex_get_series_episodes` returns empty when AI reuses a season-level plexKey**: When `plex_get_series_episodes` is called with no `season` param it returns season cards whose `plexKey` values point to the season's `/children` endpoint (e.g. `/library/metadata/5532/children`). If the AI then re-calls the tool with one of those season-level keys *plus* a `season` number, the function was stripping `/children`, fetching that path's children (which are episodes, not seasons), filtering for `type === "season"` — getting an empty array — and returning no results.
+
+  **Fix**: after fetching children, detect whether the plexKey already points at a season (any child has `type === "episode"`). If so, return the episode list directly without trying to locate a sub-season. A `season` or `episode` filter param still narrows the result to a single episode as expected.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/services/plex.ts` | `getSeriesEpisodes` detects season-level key and returns episodes directly (#211) |
+| `src/__tests__/lib/plex.test.ts` | 3 new tests: season-level key with season param, season-level key with episode param, empty season (#211) |

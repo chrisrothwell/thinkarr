@@ -372,9 +372,28 @@ export async function getSeriesEpisodes(
   const normalizedKey = plexKey.replace(/\/children\/?$/, "");
   const showPath = normalizedKey.startsWith("/") ? normalizedKey : `/${normalizedKey}`;
 
-  // Fetch the show's direct children (seasons)
-  const seasonsData = await plexFetch(`${showPath}/children`);
-  const rawSeasons = ((seasonsData?.MediaContainer?.Metadata || []) as Record<string, unknown>[])
+  // Fetch the direct children of the given key
+  const childrenData = await plexFetch(`${showPath}/children`);
+  const allChildren = ((childrenData?.MediaContainer?.Metadata || []) as Record<string, unknown>[]);
+
+  // If the key already points at a season (its children are episodes), fetch episodes directly.
+  // This happens when the AI re-uses a season-level plexKey from a prior plex_get_series_episodes
+  // result and passes it back alongside a season number — issue #211.
+  const isSeasonKey = allChildren.some((c) => (c.type as string) === "episode");
+  if (isSeasonKey) {
+    const mapped: PlexSearchResult[] = allChildren
+      .filter((e) => (e.type as string) === "episode")
+      .sort((a, b) => (a.index as number) - (b.index as number))
+      .map((e) => mapMetadata(e, "episode"));
+
+    if (episode !== undefined) {
+      const single = mapped.find((e) => e.episodeNumber === episode);
+      return { results: single ? [single] : [], hasMore: false };
+    }
+    return { results: mapped, hasMore: false };
+  }
+
+  const rawSeasons = allChildren
     .filter((s) => (s.type as string) === "season" && (s.index as number) > 0)
     .sort((a, b) => (a.index as number) - (b.index as number));
 
