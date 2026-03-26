@@ -199,7 +199,67 @@ function loadHistory(conversationId: string): ChatMessage[] {
     }
   }
 
-  return repaired;
+  return trimToolHistory(repaired, conversationId);
+}
+
+export const MAX_TOOL_ROUNDS_IN_HISTORY = 5;
+
+/**
+ * Cap the number of tool-calling rounds kept in conversation history.
+ * For rounds beyond the most recent MAX_TOOL_ROUNDS_IN_HISTORY, the
+ * tool result messages are dropped and the assistant message's tool_calls
+ * array is replaced with a compact inline note (e.g. "[searched: plex_search_library]").
+ * This prevents unbounded token growth in long conversations while keeping
+ * all assistant text responses intact.
+ */
+export function trimToolHistory(messages: ChatMessage[], conversationId: string): ChatMessage[] {
+  // Find the index of every assistant message that has tool_calls
+  const toolRoundIndices: number[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (msg.role === "assistant" && "tool_calls" in msg && (msg as OpenAI.ChatCompletionAssistantMessageParam).tool_calls?.length) {
+      toolRoundIndices.push(i);
+    }
+  }
+
+  if (toolRoundIndices.length <= MAX_TOOL_ROUNDS_IN_HISTORY) return messages;
+
+  const dropCount = toolRoundIndices.length - MAX_TOOL_ROUNDS_IN_HISTORY;
+  const dropIndices = new Set(toolRoundIndices.slice(0, dropCount));
+
+  // Collect all tool_call_ids that belong to dropped rounds
+  const dropToolCallIds = new Set<string>();
+  for (const idx of dropIndices) {
+    const msg = messages[idx] as OpenAI.ChatCompletionAssistantMessageParam;
+    for (const tc of msg.tool_calls ?? []) dropToolCallIds.add(tc.id);
+  }
+
+  logger.info("Trimming old tool rounds from history", {
+    conversationId,
+    totalRounds: toolRoundIndices.length,
+    droppingRounds: dropCount,
+    keptRounds: MAX_TOOL_ROUNDS_IN_HISTORY,
+  });
+
+  return messages
+    .filter((msg) => {
+      // Drop tool result messages whose call was in a trimmed round
+      if (msg.role === "tool") {
+        const toolMsg = msg as OpenAI.ChatCompletionToolMessageParam;
+        return !dropToolCallIds.has(toolMsg.tool_call_id);
+      }
+      return true;
+    })
+    .map((msg) => {
+      // For assistant messages in trimmed rounds: replace tool_calls with an inline note
+      if (msg.role !== "assistant") return msg;
+      const assistantMsg = msg as OpenAI.ChatCompletionAssistantMessageParam;
+      if (!assistantMsg.tool_calls?.some((tc) => dropToolCallIds.has(tc.id))) return msg;
+      const toolNames = [...new Set(assistantMsg.tool_calls.map((tc) => tc.function.name))].join(", ");
+      const note = `[searched: ${toolNames}]`;
+      const content = assistantMsg.content ? `${assistantMsg.content} ${note}` : note;
+      return { role: "assistant" as const, content };
+    });
 }
 
 /** Save a message to the DB. */

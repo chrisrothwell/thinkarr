@@ -1529,3 +1529,35 @@ Bumped `package.json` version from `1.1.2` to `1.1.3-beta.1` in preparation for 
 | `src/app/api/chat/route.ts` | SSE heartbeat every 15s via `setInterval` (#195) |
 | `src/lib/llm/orchestrator.ts` | Parallel tool execution via `Promise.all` instead of sequential loop (#195) |
 | `src/__tests__/lib/plex.test.ts` | 7 new `getSeriesEpisodes` tests (#197) |
+
+### Phase 51: Tool History Trimming (token-bloat fix)
+
+#### Problem
+
+Long conversations accumulated tool-calling rounds unboundedly in the OpenAI message history. Even with `llmSummary` compressing individual tool results, each round added ~519 tokens (assistant tool-call message + compressed tool result). At 35+ turns, conversations reached 21k–27k tokens, approaching the TPM limit and causing 429 errors.
+
+#### Fix
+
+Added `trimToolHistory()` in `src/lib/llm/orchestrator.ts`, called from `loadHistory()` after the orphan-repair step.
+
+- Counts the number of assistant messages with `tool_calls` (= number of tool-calling rounds).
+- If the count exceeds `MAX_TOOL_ROUNDS_IN_HISTORY` (5), the oldest rounds are collapsed:
+  - `tool` result messages for dropped call IDs are removed entirely.
+  - The corresponding `assistant` message has its `tool_calls` array stripped and replaced with an inline text note: `[searched: plex_search_library]` (or a comma-separated list for multi-tool rounds).
+  - Any existing assistant text content is preserved prepended to the note.
+- All user messages and plain (non-tool-calling) assistant messages are kept intact.
+
+#### Effect
+
+Token cost of history is now capped. A conversation with 35 tool-calling rounds sends the same history size as one with 5, rather than growing linearly.
+
+#### Tests
+
+- [x] **`src/__tests__/lib/orchestrator.test.ts`** — 6 new `trimToolHistory — pure unit` tests covering: no-op under limit, trimming oldest rounds, `[searched:]` note injection, content preservation, user/plain-assistant survival count, boundary case at limit+1.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/llm/orchestrator.ts` | `trimToolHistory()` + `MAX_TOOL_ROUNDS_IN_HISTORY` exported; called from `loadHistory()` |
+| `src/__tests__/lib/orchestrator.test.ts` | 6 new pure unit tests for `trimToolHistory` |
