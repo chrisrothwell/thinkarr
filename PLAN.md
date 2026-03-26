@@ -1561,3 +1561,40 @@ Token cost of history is now capped. A conversation with 35 tool-calling rounds 
 |------|--------|
 | `src/lib/llm/orchestrator.ts` | `trimToolHistory()` + `MAX_TOOL_ROUNDS_IN_HISTORY` exported; called from `loadHistory()` |
 | `src/__tests__/lib/orchestrator.test.ts` | 6 new pure unit tests for `trimToolHistory` |
+
+
+---
+
+### Phase 52: Bug Fixes & UX Polish (#137, #166, #178, #192, #194)
+
+#### Bug Fixes
+
+- [x] **#137 — No trash icon on mobile** — The delete-chat button was only rendered when `hoveredId === conv.id` (JS hover state), which is never triggered on touch devices. Replaced the conditional render with always-visible rendering, using Tailwind responsive classes (`md:opacity-0 md:group-hover:opacity-100`) so the button is always shown on mobile and appears on hover on desktop. Removed the now-unused `hoveredId` state. — `src/components/chat/sidebar.tsx`
+
+- [x] **#194 — Request button drops to next line** — When the Request button changed from "Request" → "Requesting…" (with spinner) or "Requested", the wider content caused it to wrap below "More Info". Wrapped the More Info anchor and Request/Requested elements in a `flex flex-nowrap gap-2` sub-group so they stay on the same line. Added `whitespace-nowrap` to prevent individual button text from wrapping. — `src/components/chat/title-card.tsx`
+
+#### Features / Enhancements
+
+- [x] **#166 — Report Issue button moved to right side** — Moved the Report Issue button from the left of the top toolbar to the right, placing the model selector on the left. This ensures it doesn't overlap the sidebar toggle or model selector dropdown. — `src/app/chat/page.tsx`
+
+- [x] **#178 — LLM date awareness + Overseerr recent-release hints** — Injected the current date (`{{currentDate}}` placeholder, resolved at runtime via `buildCurrentDate()`) into both the text and realtime default system prompts. Added a guideline hint instructing the LLM to search Overseerr with the current year when users ask about new/recent releases, since Overseerr indexes TMDB and is the best source for titles not yet in Plex. — `src/lib/llm/system-prompt.ts`, `src/lib/llm/default-prompt.ts`
+
+- [x] **#192 (1) — Service status indicators update on model change** — `services/status/route.ts` now iterates all enabled LLM endpoints from `llm.endpoints` (one `ServiceStatus` entry per endpoint, named after the endpoint) instead of a single "LLM" entry from the legacy single-config keys. `ServiceStatus` component accepts a `selectedModel` prop and triggers an immediate re-poll via `useEffect` when the model changes. `Sidebar` forwards the new `selectedModel` prop to `ServiceStatus`. `ChatPage` passes `selectedModel` to `Sidebar`. — `src/app/api/services/status/route.ts`, `src/components/chat/service-status.tsx`, `src/components/chat/sidebar.tsx`, `src/app/chat/page.tsx`
+
+- [x] **#192 (2) — Per-endpoint test result state** — In settings, testing one LLM endpoint was storing the result under the shared key `"llm"`, causing both endpoints' UI to show the same result. Changed to use a per-endpoint key `"llm-{endpointId}"` in `testResults` state, and updated the endpoint card UI to read from `testResults[\`llm-${ep.id}\`]`. — `src/app/settings/page.tsx`
+
+- [x] **#192 (3) — Test connection logging** — Added `logger.info` / `logger.warn` calls in the `POST /api/setup/test-connection` route so every test attempt is written to the application log with endpoint URL, service type, model, endpointId, hasApiKey, success, and message fields for troubleshooting failures. — `src/app/api/setup/test-connection/route.ts`
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/components/chat/sidebar.tsx` | Always-visible delete button via CSS opacity; removed `hoveredId` state; new `selectedModel` prop forwarded to `ServiceStatus` (#137, #192) |
+| `src/components/chat/title-card.tsx` | More Info + Request/Requested buttons grouped in `flex-nowrap` sub-container (#194) |
+| `src/app/chat/page.tsx` | Model selector moved left, Report Issue button moved right; `selectedModel` passed to `Sidebar` (#166, #192) |
+| `src/lib/llm/system-prompt.ts` | `buildCurrentDate()` helper; `{{currentDate}}` substitution in `buildSystemPrompt` and `buildRealtimeSystemPrompt` (#178) |
+| `src/lib/llm/default-prompt.ts` | `{{currentDate}}` placeholder added; Overseerr recent-release discovery hint added to both prompts (#178) |
+| `src/app/api/services/status/route.ts` | `checkLlmEndpoints()` checks all enabled endpoints from `llm.endpoints`; returns one entry per endpoint; legacy single-config fallback retained (#192) |
+| `src/components/chat/service-status.tsx` | New `selectedModel` prop; immediate re-poll on model change via `useEffect` (#192) |
+| `src/app/settings/page.tsx` | Per-endpoint test result key `"llm-{endpointId}"`; UI reads from endpoint-specific slot (#192) |
+| `src/app/api/setup/test-connection/route.ts` | `logger.info` / `logger.warn` on test outcome with endpoint/model/result details (#192) |

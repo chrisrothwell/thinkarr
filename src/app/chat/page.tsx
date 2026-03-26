@@ -170,6 +170,7 @@ export default function ChatPage() {
         onDelete={handleDeleteConversation}
         collapsed={sidebarCollapsed}
         onToggle={() => setSidebarCollapsed(true)}
+        selectedModel={selectedModel}
       />
 
       {sidebarCollapsed && <SidebarToggle onClick={() => setSidebarCollapsed(false)} />}
@@ -177,25 +178,11 @@ export default function ChatPage() {
       <main className="flex flex-1 flex-col min-w-0">
         <PwaInstallBanner />
 
-        {/* Top toolbar: model selector + report issue button */}
+        {/* Top toolbar: model selector (left) + report issue button (right) */}
         {(canChangeModel && models.length > 1) || activeConversationId ? (
           <div className="flex items-center justify-between border-b px-4 py-1.5">
-            {/* Report Issue button — only shown when a conversation is active */}
-            {activeConversationId ? (
-              <button
-                onClick={() => setReportIssueOpen(true)}
-                className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                title="Report an issue with this conversation"
-              >
-                <Flag size={13} />
-                Report Issue
-              </button>
-            ) : (
-              <span />
-            )}
-
-            {/* Model selector */}
-            {canChangeModel && models.length > 1 && (
+            {/* Model selector — left side */}
+            {canChangeModel && models.length > 1 ? (
               <label className="flex items-center gap-2 text-xs text-muted-foreground">
                 Model:
                 <select
@@ -225,6 +212,22 @@ export default function ChatPage() {
                   ))}
                 </select>
               </label>
+            ) : (
+              <span />
+            )}
+
+            {/* Report Issue button — right side, only shown when a conversation is active */}
+            {activeConversationId ? (
+              <button
+                onClick={() => setReportIssueOpen(true)}
+                className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                title="Report an issue with this conversation"
+              >
+                <Flag size={13} />
+                Report Issue
+              </button>
+            ) : (
+              <span />
             )}
           </div>
         ) : null}

@@ -3,6 +3,7 @@ import { getSession } from "@/lib/auth/session";
 import { testConnection } from "@/lib/services/test-connection";
 import { getConfig } from "@/lib/config";
 import { validateServiceUrl } from "@/lib/security/url-validation";
+import { logger } from "@/lib/logger";
 import type { TestConnectionRequest, TestConnectionResponse, ApiResponse } from "@/types/api";
 
 const MASK = "••••••••";
@@ -81,6 +82,22 @@ export async function POST(request: Request) {
   }
 
   const result: TestConnectionResponse = await testConnection({ ...body, apiKey });
+
+  // Log the outcome so failures are diagnosable from the logs
+  const logMeta = {
+    type: body.type,
+    endpoint: body.url,
+    model: body.model ?? null,
+    endpointId: body.endpointId ?? null,
+    hasApiKey: !!apiKey,
+    success: result.success,
+    message: result.message,
+  };
+  if (result.success) {
+    logger.info("Test connection succeeded", logMeta);
+  } else {
+    logger.warn("Test connection failed", logMeta);
+  }
 
   return NextResponse.json<ApiResponse<TestConnectionResponse>>({
     success: result.success,
