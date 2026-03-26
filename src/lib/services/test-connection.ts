@@ -57,7 +57,7 @@ async function probeRealtimeSupport(url: string, apiKey: string): Promise<string
 
 async function testLlm(url: string, apiKey: string, model?: string): Promise<TestConnectionResponse> {
   try {
-    const { default: OpenAI } = await import("openai");
+    const { default: OpenAI, APIError } = await import("openai");
     const client = new OpenAI({ baseURL: url, apiKey });
     if (model) {
       // Quick completion test — some non-OpenAI endpoints reject max_tokens,
@@ -68,7 +68,11 @@ async function testLlm(url: string, apiKey: string, model?: string): Promise<Tes
           messages: [{ role: "user", content: "Hi" }],
           max_tokens: 1,
         });
-      } catch {
+      } catch (inner: unknown) {
+        // If the first attempt failed with a non-HTTP-error (e.g. network, max_tokens
+        // rejection), try again without max_tokens. Re-throw HTTP errors immediately so
+        // the outer catch can format them with full diagnostic detail.
+        if (inner instanceof APIError && inner.status !== undefined) throw inner;
         await client.chat.completions.create({
           model,
           messages: [{ role: "user", content: "Hi" }],
@@ -94,6 +98,22 @@ async function testLlm(url: string, apiKey: string, model?: string): Promise<Tes
       capabilities: { supportsVoice, realtimeModel },
     };
   } catch (e: unknown) {
+    const { APIError } = await import("openai");
+    // Extract rich diagnostic detail from OpenAI SDK API errors
+    if (e instanceof APIError) {
+      const endpoint = model
+        ? `POST ${url.replace(/\/$/, "")}/chat/completions`
+        : `GET ${url.replace(/\/$/, "")}/models`;
+      const status = e.status != null ? ` HTTP ${e.status}` : "";
+      const body = e.error != null ? ` — ${JSON.stringify(e.error)}` : e.message ? ` — ${e.message}` : "";
+      const hdrs = e.headers
+        ? ` | headers: ${JSON.stringify(Object.fromEntries(Object.entries(e.headers)))}`
+        : "";
+      return {
+        success: false,
+        message: `LLM connection failed:${status}${body} | request: ${endpoint}${hdrs}`,
+      };
+    }
     const msg = e instanceof Error ? e.message : "Unknown error";
     return { success: false, message: `LLM connection failed: ${msg}` };
   }

@@ -294,6 +294,73 @@ export async function listRequests(page = 1): Promise<{ results: OverseerrReques
   return { results: results.slice(llmOffset, llmOffset + 10), hasMore };
 }
 
+export interface OverseerrDiscoverResult {
+  overseerrId: number;
+  overseerrMediaType: string;
+  title: string;
+  year?: string;
+  summary?: string;
+  rating?: number;
+  mediaStatus: string;
+  thumbPath?: string;
+  seasonCount?: number;
+}
+
+export async function discover(
+  mediaType: "movie" | "tv",
+  genre?: string,
+  category: "trending" | "upcoming" = "trending",
+  page = 1,
+): Promise<{ results: OverseerrDiscoverResult[]; hasMore: boolean }> {
+  // Overseerr uses "movies" (plural) for movie discover endpoints but "movie" (singular)
+  // for the genre list endpoint, and "tv" for both TV endpoints.
+  const discoverSegment = mediaType === "movie" ? "movies" : "tv";
+
+  // Resolve genre name to a TMDB genre ID when provided
+  let genreId: number | undefined;
+  if (genre) {
+    const genresData = await overseerrFetch(`/discover/genres/${mediaType}`);
+    const genres = (genresData as Array<{ id: number; name: string }>) ?? [];
+    const match = genres.find((g) => g.name.toLowerCase() === genre.toLowerCase());
+    genreId = match?.id;
+  }
+
+  let path: string;
+  if (category === "upcoming") {
+    path = `/discover/${discoverSegment}/upcoming?page=${page}`;
+  } else {
+    path = `/discover/${discoverSegment}?page=${page}`;
+  }
+  if (genreId != null) {
+    path += `&genreIds=${genreId}`;
+  }
+
+  const data = await overseerrFetch(path);
+  const raw = (data?.results || []) as Record<string, unknown>[];
+  const totalPages = (data?.totalPages as number | undefined) ?? 1;
+  const hasMore = raw.length > 10 || page < totalPages;
+  const page10 = raw.slice(0, 10);
+
+  const results: OverseerrDiscoverResult[] = page10.map((r) => {
+    const mediaInfo = r.mediaInfo as Record<string, unknown> | undefined;
+    const isTV = r.mediaType === "tv" || mediaType === "tv";
+    const posterPath = r.posterPath as string | undefined;
+    return {
+      overseerrId: (r.id || r.tmdbId) as number,
+      overseerrMediaType: mediaType,
+      title: (r.title || r.name) as string,
+      year: ((r.releaseDate || r.firstAirDate) as string | undefined)?.substring(0, 4),
+      summary: (r.overview as string | undefined)?.substring(0, 300),
+      rating: r.voteAverage as number | undefined,
+      mediaStatus: mediaStatusLabel(mediaInfo),
+      thumbPath: posterPath ? `https://image.tmdb.org/t/p/w300${posterPath}` : undefined,
+      seasonCount: isTV ? (r.numberOfSeasons as number | undefined) : undefined,
+    };
+  });
+
+  return { results, hasMore };
+}
+
 function requestStatusLabel(status: number): string {
   switch (status) {
     case 1: return "Pending Approval";

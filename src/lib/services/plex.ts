@@ -131,7 +131,10 @@ export async function searchLibrary(query: string, page = 1): Promise<{ results:
   const all: PlexSearchResult[] = [];
   for (const hub of data?.MediaContainer?.Hub || []) {
     for (const item of hub.Metadata || []) {
-      all.push(mapMetadata(item, hub.type || item.type));
+      const resolvedType = hub.type || item.type;
+      // Skip individual episodes — callers should use plex_get_series_episodes for those
+      if (resolvedType === "episode") continue;
+      all.push(mapMetadata(item, resolvedType));
     }
   }
   const hasMore = all.length > llmOffset + 10;
@@ -364,7 +367,10 @@ export async function getSeriesEpisodes(
   season?: number,
   episode?: number,
 ): Promise<PlexSeriesEpisodesResult> {
-  const showPath = plexKey.startsWith("/") ? plexKey : `/${plexKey}`;
+  // Plex hub search returns show keys with a trailing /children suffix.
+  // Strip it so we can append /children ourselves without double-pathing.
+  const normalizedKey = plexKey.replace(/\/children\/?$/, "");
+  const showPath = normalizedKey.startsWith("/") ? normalizedKey : `/${normalizedKey}`;
 
   // Fetch the show's direct children (seasons)
   const seasonsData = await plexFetch(`${showPath}/children`);

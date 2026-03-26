@@ -1,16 +1,16 @@
 import { z } from "zod";
 import { defineTool } from "./registry";
 import * as overseerr from "@/lib/services/overseerr";
-import type { OverseerrSearchResult, OverseerrRequest, OverseerrDetails } from "@/lib/services/overseerr";
+import type { OverseerrSearchResult, OverseerrRequest, OverseerrDetails, OverseerrDiscoverResult } from "@/lib/services/overseerr";
 
 const pageParam = z.number().int().min(1).optional().describe("Page number (1-based). Omit or use 1 for the first page. Use hasMore from the previous response to know whether a next page exists.");
 
 export function registerOverseerrTools() {
   defineTool({
     name: "overseerr_search",
-    description: "Search for movies or TV shows on Overseerr. Returns mediaStatus, summary, rating, thumbPath, overseerrId, overseerrMediaType, and seasonCount. NOTE: seasonCount is sourced from the TMDB search API which does not include it for untracked shows — it may be 0 or missing. For TV shows always call overseerr_get_details to get the accurate season count before display_titles. Returns up to 10 results per page with a hasMore flag.",
+    description: "Search for a specific movie or TV show by title on Overseerr. IMPORTANT: The query MUST be a title (e.g. 'Breaking Bad', 'The Dark Knight'). Do NOT search by year, genre, actor, or keyword — use overseerr_discover for genre/trending browsing. Returns mediaStatus, summary, rating, thumbPath, overseerrId, overseerrMediaType, and seasonCount. NOTE: seasonCount is sourced from the TMDB search API which does not include it for untracked shows — it may be 0 or missing. For TV shows always call overseerr_get_details to get the accurate season count before display_titles. Returns up to 10 results per page with a hasMore flag.",
     schema: z.object({
-      query: z.string().describe("Search query (movie or TV show title)"),
+      query: z.string().describe("The exact or approximate title to search for (e.g. 'Inception', 'The Office'). Must be a title — not a year, genre, or keyword."),
       page: pageParam,
     }),
     handler: async (args) => overseerr.search(args.query, args.page ?? 1),
@@ -84,6 +84,27 @@ export function registerOverseerrTools() {
       return {
         results: r.results.map(({ mediaType, title, year, status, mediaStatus, requestedBy, overseerrId, seasonsRequested }) => ({
           mediaType, title, year, status, mediaStatus, requestedBy, overseerrId, seasonsRequested,
+        })),
+        hasMore: r.hasMore,
+      };
+    },
+  });
+
+  defineTool({
+    name: "overseerr_discover",
+    description: "Discover movies or TV shows from Overseerr/TMDB without a specific title. Use this when the user asks for trending content, popular titles, upcoming releases, or wants to browse by genre (e.g. 'what movies are trending', 'show me upcoming movies', 'find some action movies'). For TV shows always call overseerr_get_details before display_titles. Returns up to 10 results per page with a hasMore flag.",
+    schema: z.object({
+      mediaType: z.enum(["movie", "tv"]).describe("Whether to discover movies or TV shows"),
+      genre: z.string().optional().describe("Genre name to filter by (e.g. 'Action', 'Comedy', 'Drama'). Omit for general trending results."),
+      category: z.enum(["trending", "upcoming"]).optional().describe("'trending' for popular titles (default), 'upcoming' for titles not yet released"),
+      page: pageParam,
+    }),
+    handler: async (args) => overseerr.discover(args.mediaType, args.genre, args.category ?? "trending", args.page ?? 1),
+    llmSummary: (result: unknown) => {
+      const r = result as { results: OverseerrDiscoverResult[]; hasMore: boolean };
+      return {
+        results: r.results.map(({ overseerrId, overseerrMediaType, title, year, rating, mediaStatus, seasonCount, thumbPath }) => ({
+          overseerrId, overseerrMediaType, title, year, rating, mediaStatus, seasonCount, thumbPath,
         })),
         hasMore: r.hasMore,
       };
