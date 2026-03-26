@@ -113,6 +113,12 @@ export async function POST(request: Request) {
         }
       };
 
+      // Send an SSE comment every 15 seconds so the client stays connected
+      // while the backend is waiting for the LLM or tool execution to finish.
+      const heartbeat = setInterval(() => {
+        enqueue(encoder.encode(": heartbeat\n\n"));
+      }, 15000);
+
       try {
         for await (const event of orchestrate({
           conversationId: body.conversationId,
@@ -137,6 +143,7 @@ export async function POST(request: Request) {
         const msg = e instanceof Error ? e.message : "Stream error";
         enqueue(encoder.encode(`data: ${JSON.stringify({ type: "error", message: msg })}\n\n`));
       } finally {
+        clearInterval(heartbeat);
         try { controller.close(); } catch { /* already closed by client disconnect */ }
       }
     },

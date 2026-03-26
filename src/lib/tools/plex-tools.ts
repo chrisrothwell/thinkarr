@@ -102,6 +102,44 @@ export function registerPlexTools() {
   });
 
   defineTool({
+    name: "plex_get_series_episodes",
+    description:
+      "Get season or episode data for a specific Plex TV series. " +
+      "Pass the show-level plexKey from a previous plex_search_library result. " +
+      "If neither season nor episode is provided: returns one card per season (ordered by season number) with episode counts — use this to show an overview of all seasons. " +
+      "If season is provided: returns all episodes from that season ordered by episode number. " +
+      "If season and episode are both provided: returns the single matching episode. " +
+      "Use this tool instead of plex_search_library when the user asks about a specific season or episode of a show.",
+    schema: z.object({
+      plexKey: z
+        .string()
+        .describe("Plex metadata key for the TV show (e.g. '/library/metadata/123' from a prior search result)"),
+      season: z
+        .number()
+        .int()
+        .min(1)
+        .optional()
+        .describe("Season number (1-based). Omit to get an overview of all seasons."),
+      episode: z
+        .number()
+        .int()
+        .min(1)
+        .optional()
+        .describe("Episode number within the season (1-based). Requires season to be set."),
+    }),
+    handler: async (args) => plex.getSeriesEpisodes(args.plexKey, args.season, args.episode),
+    llmSummary: (result: unknown) => {
+      const r = result as { results: plex.PlexSearchResult[]; hasMore: boolean };
+      return {
+        results: r.results.map(({ title, year, mediaType, plexKey, thumbPath, rating, showTitle, seasonNumber, episodeNumber, totalEpisodes, watchedEpisodes }) => ({
+          title, year, mediaType, plexKey, thumbPath, rating, showTitle, seasonNumber, episodeNumber, totalEpisodes, watchedEpisodes,
+        })),
+        hasMore: r.hasMore,
+      };
+    },
+  });
+
+  defineTool({
     name: "plex_get_title_tags",
     description:
       "Retrieve all tags associated with a specific Plex title (genres, directors, actors, countries, studio, content rating, labels). " +

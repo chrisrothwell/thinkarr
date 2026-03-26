@@ -21,7 +21,7 @@ async function radarrFetch(path: string) {
     throw new Error(`Radarr API error: HTTP ${res.status}`);
   }
   const data = await res.json();
-  logger.info("Radarr API response", { url: fullUrl, status: res.status, body: JSON.stringify(data).slice(0, 5000) });
+  logger.info("Radarr API response", { url: fullUrl, status: res.status });
   return data;
 }
 
