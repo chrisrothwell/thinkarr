@@ -1644,3 +1644,10 @@ Token cost of history is now capped. A conversation with 35 tool-calling rounds 
 |------|--------|
 | `src/lib/services/plex.ts` | `getSeriesEpisodes` detects season-level key and returns episodes directly (#211) |
 | `src/__tests__/lib/plex.test.ts` | 3 new tests: season-level key with season param, season-level key with episode param, empty season (#211) |
+
+
+---
+
+### Phase N+2 — Release 1.1.3
+
+Bumped `package.json` version from `1.1.3-beta.1` to `1.1.3` for stable release.
