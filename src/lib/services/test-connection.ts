@@ -101,17 +101,36 @@ async function testLlm(url: string, apiKey: string, model?: string): Promise<Tes
     const { APIError } = await import("openai");
     // Extract rich diagnostic detail from OpenAI SDK API errors
     if (e instanceof APIError) {
-      const endpoint = model
-        ? `POST ${url.replace(/\/$/, "")}/chat/completions`
-        : `GET ${url.replace(/\/$/, "")}/models`;
-      const status = e.status != null ? ` HTTP ${e.status}` : "";
-      const body = e.error != null ? ` — ${JSON.stringify(e.error)}` : e.message ? ` — ${e.message}` : "";
-      const hdrs = e.headers
-        ? ` | headers: ${JSON.stringify(Object.fromEntries(Object.entries(e.headers)))}`
-        : "";
+      const baseUrl = url.replace(/\/$/, "");
+      const isCompletion = model != null;
+      const reqMethod = isCompletion ? "POST" : "GET";
+      const reqUrl = isCompletion ? `${baseUrl}/chat/completions` : `${baseUrl}/models`;
+      const reqHeaders: Record<string, string> = {
+        "Authorization": `Bearer ${apiKey.length > 8 ? `${apiKey.substring(0, 4)}...${apiKey.slice(-4)}` : "***"}`,
+        "Content-Type": "application/json",
+      };
+      const reqBody = isCompletion
+        ? JSON.stringify({ model, messages: [{ role: "user", content: "Hi" }], max_tokens: 1 })
+        : undefined;
+
+      const resStatus = e.status != null ? e.status : "unknown";
+      const resHeaders = e.headers
+        ? Object.fromEntries(Object.entries(e.headers))
+        : undefined;
+      const resBody = e.error != null ? e.error : e.message;
+
+      const parts = [
+        `REQUEST: ${reqMethod} ${reqUrl}`,
+        `Request-Headers: ${JSON.stringify(reqHeaders)}`,
+        ...(reqBody ? [`Request-Body: ${reqBody}`] : []),
+        `RESPONSE: HTTP ${resStatus}`,
+        ...(resHeaders ? [`Response-Headers: ${JSON.stringify(resHeaders)}`] : []),
+        `Response-Body: ${typeof resBody === "string" ? resBody : JSON.stringify(resBody)}`,
+      ];
+
       return {
         success: false,
-        message: `LLM connection failed:${status}${body} | request: ${endpoint}${hdrs}`,
+        message: `LLM connection failed\n${parts.join("\n")}`,
       };
     }
     const msg = e instanceof Error ? e.message : "Unknown error";
