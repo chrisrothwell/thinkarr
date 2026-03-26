@@ -632,3 +632,89 @@ describe("listRequests — issue #89: titles should not return Unknown", () => {
     expect(results[0].title).toBeDefined();
   });
 });
+
+describe("discover — issue #207", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  const TRENDING_MOVIES = [
+    { id: 1, mediaType: "movie", title: "Film A", releaseDate: "2024-05-01", posterPath: "/a.jpg", overview: "A film.", voteAverage: 7.5, mediaInfo: { status: 5 } },
+    { id: 2, mediaType: "movie", title: "Film B", releaseDate: "2024-06-01", posterPath: "/b.jpg", overview: "B film.", voteAverage: 6.0, mediaInfo: undefined },
+  ];
+
+  it("returns trending movies from /discover/movies", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ results: TRENDING_MOVIES, totalPages: 1 }),
+    }));
+
+    const { discover } = await import("@/lib/services/overseerr");
+    const { results, hasMore } = await discover("movie");
+    expect(results).toHaveLength(2);
+    expect(results[0].title).toBe("Film A");
+    expect(results[0].mediaStatus).toBe("Available");
+    expect(results[1].mediaStatus).toBe("Not Requested");
+    expect(hasMore).toBe(false);
+  });
+
+  it("includes genreIds param when genre resolves to a known ID", async () => {
+    const fetchMock = vi.fn()
+      // First call: genre list
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ([{ id: 28, name: "Action" }, { id: 35, name: "Comedy" }]),
+      })
+      // Second call: discover results
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ results: TRENDING_MOVIES, totalPages: 1 }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { discover } = await import("@/lib/services/overseerr");
+    await discover("movie", "Action");
+
+    const discoverUrl = fetchMock.mock.calls[1][0] as string;
+    expect(discoverUrl).toContain("genreIds=28");
+  });
+
+  it("skips genreIds when genre name not found in genre list", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ([{ id: 28, name: "Action" }]),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ results: TRENDING_MOVIES, totalPages: 1 }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { discover } = await import("@/lib/services/overseerr");
+    await discover("movie", "UnknownGenre");
+
+    const discoverUrl = fetchMock.mock.calls[1][0] as string;
+    expect(discoverUrl).not.toContain("genreIds");
+  });
+
+  it("uses /discover/movies/upcoming for upcoming category", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ results: TRENDING_MOVIES, totalPages: 1 }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { discover } = await import("@/lib/services/overseerr");
+    await discover("movie", undefined, "upcoming");
+
+    const url = fetchMock.mock.calls[0][0] as string;
+    expect(url).toContain("/discover/movies/upcoming");
+  });
+});

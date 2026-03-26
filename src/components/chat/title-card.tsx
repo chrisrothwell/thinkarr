@@ -86,8 +86,10 @@ export function TitleCard({ title }: TitleCardProps) {
     }
   }
 
+  // "partial" means the show is already in Overseerr (fully requested, new episodes pending).
+  // Never offer a request button for partial — only for truly not-yet-requested titles.
   const showRequestButton =
-    (title.mediaStatus === "not_requested" || title.mediaStatus === "partial") &&
+    title.mediaStatus === "not_requested" &&
     title.overseerrId != null &&
     title.overseerrMediaType != null;
 

@@ -710,4 +710,92 @@ describe("getSeriesEpisodes — issue #197", () => {
     const secondUrl = fetchMock.mock.calls[1][0] as string;
     expect(secondUrl).toContain("/library/metadata/200/children");
   });
+
+  it("strips /children suffix from plexKey before appending /children — issue #204", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ MediaContainer: { Metadata: SEASON_CHILDREN } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ MediaContainer: { Metadata: SEASON1_EPISODES } }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { getSeriesEpisodes } = await import("@/lib/services/plex");
+    // Pass the key with /children as Plex hub search returns it
+    await getSeriesEpisodes("/library/metadata/100/children");
+
+    // First fetch should call /library/metadata/100/children (the normalised key + /children)
+    const firstUrl = fetchMock.mock.calls[0][0] as string;
+    expect(firstUrl).toContain("/library/metadata/100/children");
+    // Must NOT double-up to /library/metadata/100/children/children
+    expect(firstUrl).not.toContain("/children/children");
+  });
+});
+
+describe("searchLibrary — episode filtering — issue #206", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("excludes episode items from search results", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        MediaContainer: {
+          Hub: [
+            {
+              type: "show",
+              Metadata: [
+                { title: "Breaking Bad", type: "show", year: 2008, key: "/library/metadata/1", thumb: "/thumb/1" },
+              ],
+            },
+            {
+              type: "episode",
+              Metadata: [
+                { title: "Pilot", type: "episode", grandparentTitle: "Breaking Bad", parentIndex: 1, index: 1, key: "/library/metadata/100", thumb: "/thumb/100" },
+              ],
+            },
+          ],
+        },
+      }),
+    }));
+
+    const { searchLibrary } = await import("@/lib/services/plex");
+    const { results } = await searchLibrary("Breaking Bad");
+    // Show should be present; individual episode should be filtered out
+    expect(results.some((r) => r.mediaType === "tv" && r.title === "Breaking Bad")).toBe(true);
+    expect(results.some((r) => r.mediaType === "episode")).toBe(false);
+  });
+
+  it("returns movies alongside shows, never episodes", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        MediaContainer: {
+          Hub: [
+            {
+              type: "movie",
+              Metadata: [
+                { title: "The Matrix", type: "movie", year: 1999, key: "/library/metadata/5", thumb: "/thumb/5" },
+              ],
+            },
+            {
+              type: "episode",
+              Metadata: [
+                { title: "Some Episode", type: "episode", key: "/library/metadata/99", thumb: "/thumb/99" },
+              ],
+            },
+          ],
+        },
+      }),
+    }));
+
+    const { searchLibrary } = await import("@/lib/services/plex");
+    const { results } = await searchLibrary("Matrix");
+    expect(results.some((r) => r.mediaType === "movie")).toBe(true);
+    expect(results.some((r) => r.mediaType === "episode")).toBe(false);
+  });
 });
