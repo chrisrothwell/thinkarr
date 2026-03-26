@@ -255,7 +255,13 @@ export function trimToolHistory(messages: ChatMessage[], conversationId: string)
       if (msg.role !== "assistant") return msg;
       const assistantMsg = msg as OpenAI.ChatCompletionAssistantMessageParam;
       if (!assistantMsg.tool_calls?.some((tc) => dropToolCallIds.has(tc.id))) return msg;
-      const toolNames = [...new Set(assistantMsg.tool_calls.map((tc) => tc.function.name))].join(", ");
+      const toolNames = [
+        ...new Set(
+          assistantMsg.tool_calls
+            .filter((tc): tc is OpenAI.ChatCompletionMessageToolCall & { type: "function" } => tc.type === "function")
+            .map((tc) => tc.function.name),
+        ),
+      ].join(", ");
       const note = `[searched: ${toolNames}]`;
       const content = assistantMsg.content ? `${assistantMsg.content} ${note}` : note;
       return { role: "assistant" as const, content };
