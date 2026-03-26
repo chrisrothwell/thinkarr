@@ -2,6 +2,16 @@ import { getConfig } from "@/lib/config";
 import { DEFAULT_SYSTEM_PROMPT, DEFAULT_REALTIME_SYSTEM_PROMPT } from "./default-prompt";
 export { DEFAULT_SYSTEM_PROMPT, DEFAULT_REALTIME_SYSTEM_PROMPT };
 
+/** Return the current date formatted as a readable string (e.g. "Thursday, 26 March 2026"). */
+function buildCurrentDate(): string {
+  return new Date().toLocaleDateString("en-GB", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+}
+
 /** Build the live {{serviceList}} block based on currently-configured services. */
 function buildServiceList(): string {
   const services: string[] = [];
@@ -23,7 +33,9 @@ function buildServiceList(): string {
  */
 export function buildSystemPrompt(customPrompt?: string): string {
   const template = customPrompt?.trim() || DEFAULT_SYSTEM_PROMPT;
-  return template.replace("{{serviceList}}", buildServiceList());
+  return template
+    .replace("{{serviceList}}", buildServiceList())
+    .replace("{{currentDate}}", buildCurrentDate());
 }
 
 /**
@@ -32,5 +44,7 @@ export function buildSystemPrompt(customPrompt?: string): string {
  */
 export function buildRealtimeSystemPrompt(customPrompt?: string): string {
   const template = customPrompt?.trim() || DEFAULT_REALTIME_SYSTEM_PROMPT;
-  return template.replace("{{serviceList}}", buildServiceList());
+  return template
+    .replace("{{serviceList}}", buildServiceList())
+    .replace("{{currentDate}}", buildCurrentDate());
 }

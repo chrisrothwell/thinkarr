@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 
 interface ServiceStatusItem {
@@ -21,9 +21,14 @@ async function fetchServiceStatus(): Promise<ServiceStatusItem[]> {
   return data.success ? data.data.services : [];
 }
 
-export function ServiceStatus() {
+interface ServiceStatusProps {
+  selectedModel?: string;
+}
+
+export function ServiceStatus({ selectedModel }: ServiceStatusProps) {
   const [services, setServices] = useState<ServiceStatusItem[]>([]);
   const [expanded, setExpanded] = useState(false);
+  const prevModelRef = useRef<string | undefined>(selectedModel);
 
   useEffect(() => {
     const poll = () => fetchServiceStatus().then(setServices).catch(() => {});
@@ -31,6 +36,14 @@ export function ServiceStatus() {
     const interval = setInterval(poll, 60000); // Poll every 60s
     return () => clearInterval(interval);
   }, []);
+
+  // Immediately re-poll when selected model changes
+  useEffect(() => {
+    if (prevModelRef.current !== selectedModel) {
+      prevModelRef.current = selectedModel;
+      fetchServiceStatus().then(setServices).catch(() => {});
+    }
+  }, [selectedModel]);
 
   if (services.length === 0) return null;
 

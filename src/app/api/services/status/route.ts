@@ -11,15 +11,12 @@ export interface ServiceStatus {
   message: string;
 }
 
-async function checkLlm(): Promise<ServiceStatus> {
-  const baseUrl = getConfig("llm.baseUrl");
-  const apiKey = getConfig("llm.apiKey");
-  const model = getConfig("llm.model");
-
-  if (!baseUrl || !apiKey) {
-    return { name: "LLM", status: "red", message: "Not configured" };
-  }
-
+async function checkSingleLlmEndpoint(
+  name: string,
+  baseUrl: string,
+  apiKey: string,
+  model: string | undefined,
+): Promise<ServiceStatus> {
   try {
     const { default: OpenAI } = await import("openai");
     const client = new OpenAI({ baseURL: baseUrl, apiKey });
@@ -37,14 +34,50 @@ async function checkLlm(): Promise<ServiceStatus> {
           messages: [{ role: "user", content: "Hi" }],
         });
       }
-      return { name: "LLM", status: "green", message: `Connected (${model})` };
+      return { name, status: "green", message: `Connected (${model})` };
     }
     const models = await client.models.list();
     const count = (await Array.fromAsync(models)).length;
-    return { name: "LLM", status: "green", message: `Connected (${count} models)` };
+    return { name, status: "green", message: `Connected (${count} models)` };
   } catch {
-    return { name: "LLM", status: "amber", message: "Reachable but request failed" };
+    return { name, status: "amber", message: "Reachable but request failed" };
   }
+}
+
+async function checkLlmEndpoints(): Promise<ServiceStatus[]> {
+  // Multi-endpoint config
+  const raw = getConfig("llm.endpoints");
+  if (raw) {
+    try {
+      const endpoints: Array<{
+        id: string;
+        name: string;
+        baseUrl: string;
+        apiKey: string;
+        model: string;
+        enabled: boolean;
+      }> = JSON.parse(raw);
+      const enabled = endpoints.filter((ep) => ep.enabled && ep.baseUrl && ep.apiKey);
+      if (enabled.length > 0) {
+        return Promise.all(
+          enabled.map((ep) =>
+            checkSingleLlmEndpoint(ep.name || "LLM", ep.baseUrl, ep.apiKey, ep.model || undefined),
+          ),
+        );
+      }
+    } catch {
+      // Fall through to legacy single-endpoint check
+    }
+  }
+
+  // Legacy single-endpoint fallback
+  const baseUrl = getConfig("llm.baseUrl");
+  const apiKey = getConfig("llm.apiKey");
+  const model = getConfig("llm.model");
+  if (!baseUrl || !apiKey) {
+    return [{ name: "LLM", status: "red", message: "Not configured" }];
+  }
+  return [await checkSingleLlmEndpoint("LLM", baseUrl, apiKey, model || undefined)];
 }
 
 async function checkPlex(): Promise<ServiceStatus> {
@@ -109,8 +142,8 @@ export async function GET() {
     );
   }
 
-  const [llm, plex, sonarr, radarr, overseerr] = await Promise.all([
-    checkLlm(),
+  const [llmStatuses, plex, sonarr, radarr, overseerr] = await Promise.all([
+    checkLlmEndpoints(),
     checkPlex(),
     checkArr("Sonarr", "sonarr.url", "sonarr.apiKey"),
     checkArr("Radarr", "radarr.url", "radarr.apiKey"),
@@ -119,6 +152,6 @@ export async function GET() {
 
   return NextResponse.json<ApiResponse>({
     success: true,
-    data: { services: [llm, plex, sonarr, radarr, overseerr] },
+    data: { services: [...llmStatuses, plex, sonarr, radarr, overseerr] },
   });
 }
