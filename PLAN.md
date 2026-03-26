@@ -1598,3 +1598,32 @@ Token cost of history is now capped. A conversation with 35 tool-calling rounds 
 | `src/components/chat/service-status.tsx` | New `selectedModel` prop; immediate re-poll on model change via `useEffect` (#192) |
 | `src/app/settings/page.tsx` | Per-endpoint test result key `"llm-{endpointId}"`; UI reads from endpoint-specific slot (#192) |
 | `src/app/api/setup/test-connection/route.ts` | `logger.info` / `logger.warn` on test outcome with endpoint/model/result details (#192) |
+
+### Phase 53: Bug Fixes — Issues #203–#207
+
+#### Bug Fixes
+
+- **#203 LLM test diagnostics**: `testLlm` now extracts rich detail from `APIError` (HTTP status, response body, request endpoint, response headers) so failed LLM connection tests surface actionable information instead of just the SDK message string.
+- **#204 Plex 404 on series episodes**: `getSeriesEpisodes` now strips a trailing `/children` suffix from the passed `plexKey` before appending its own `/children`. Plex hub search returns show keys as `/library/metadata/{id}/children`; without the strip the fetch path was `/library/metadata/{id}/children/children` → HTTP 404.
+- **#205 Request button on partial series**: `showRequestButton` in `TitleCard` no longer includes `mediaStatus === "partial"`. Partial means the show is already tracked in Overseerr with new episodes incoming — there is nothing to request.
+- **#206 Episode results in plex_search_library**: `searchLibrary` now skips hub items whose resolved type is `episode`. Individual episodes should be fetched via `plex_get_series_episodes`, not via the search tool.
+
+#### Enhancements
+
+- **#207 Overseerr tool improvements**:
+  - `overseerr_search` description updated: the query must be a specific title — never a year, genre, or keyword.
+  - New `overseerr_discover` tool added: browses trending/upcoming movies or TV by genre via Overseerr's `/discover/movies` and `/discover/tv` endpoints. Accepts `mediaType`, optional `genre` (resolved to TMDB genre ID), and `category` ("trending" or "upcoming").
+  - System prompt updated: direct the LLM to use `overseerr_discover` for genre/trending queries instead of forcing a year/keyword into `overseerr_search`. Clarify that `partial` status means no request button.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/services/test-connection.ts` | Richer `APIError` diagnostic in `testLlm` failure path (#203) |
+| `src/lib/services/plex.ts` | Strip `/children` suffix in `getSeriesEpisodes` (#204); filter episode items in `searchLibrary` (#206) |
+| `src/components/chat/title-card.tsx` | `showRequestButton` no longer true for `partial` status (#205) |
+| `src/lib/services/overseerr.ts` | New `OverseerrDiscoverResult` type + `discover()` function (#207) |
+| `src/lib/tools/overseerr-tools.ts` | Updated `overseerr_search` description; new `overseerr_discover` tool registered (#207) |
+| `src/lib/llm/default-prompt.ts` | Redirect genre/trending queries to `overseerr_discover`; clarify `partial` status (#207) |
+| `src/__tests__/lib/plex.test.ts` | Tests for episode filtering and `/children` key stripping |
+| `src/__tests__/lib/overseerr.test.ts` | Tests for new `discover()` function |
