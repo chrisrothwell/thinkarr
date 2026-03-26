@@ -131,7 +131,10 @@ export async function searchLibrary(query: string, page = 1): Promise<{ results:
   const all: PlexSearchResult[] = [];
   for (const hub of data?.MediaContainer?.Hub || []) {
     for (const item of hub.Metadata || []) {
-      all.push(mapMetadata(item, hub.type || item.type));
+      const resolvedType = hub.type || item.type;
+      // Skip individual episodes — callers should use plex_get_series_episodes for those
+      if (resolvedType === "episode") continue;
+      all.push(mapMetadata(item, resolvedType));
     }
   }
   const hasMore = all.length > llmOffset + 10;
@@ -344,6 +347,84 @@ export interface PlexTitleTags {
  * When a season or episode key is passed, this function automatically fetches
  * the parent show's metadata instead.
  */
+export interface PlexSeriesEpisodesResult {
+  results: PlexSearchResult[];
+  hasMore: boolean;
+}
+
+/**
+ * Return season or episode data for a Plex TV series.
+ *
+ * - No season/episode: returns one card per season ordered by season number.
+ *   Each card has totalEpisodes and watchedEpisodes from the season metadata.
+ * - season only: returns episodes from that season ordered by episode number.
+ * - season + episode: returns a single matching episode.
+ *
+ * plexKey must be the show-level metadata key (e.g. "/library/metadata/123").
+ */
+export async function getSeriesEpisodes(
+  plexKey: string,
+  season?: number,
+  episode?: number,
+): Promise<PlexSeriesEpisodesResult> {
+  // Plex hub search returns show keys with a trailing /children suffix.
+  // Strip it so we can append /children ourselves without double-pathing.
+  const normalizedKey = plexKey.replace(/\/children\/?$/, "");
+  const showPath = normalizedKey.startsWith("/") ? normalizedKey : `/${normalizedKey}`;
+
+  // Fetch the direct children of the given key
+  const childrenData = await plexFetch(`${showPath}/children`);
+  const allChildren = ((childrenData?.MediaContainer?.Metadata || []) as Record<string, unknown>[]);
+
+  // If the key already points at a season (its children are episodes), fetch episodes directly.
+  // This happens when the AI re-uses a season-level plexKey from a prior plex_get_series_episodes
+  // result and passes it back alongside a season number — issue #211.
+  const isSeasonKey = allChildren.some((c) => (c.type as string) === "episode");
+  if (isSeasonKey) {
+    const mapped: PlexSearchResult[] = allChildren
+      .filter((e) => (e.type as string) === "episode")
+      .sort((a, b) => (a.index as number) - (b.index as number))
+      .map((e) => mapMetadata(e, "episode"));
+
+    if (episode !== undefined) {
+      const single = mapped.find((e) => e.episodeNumber === episode);
+      return { results: single ? [single] : [], hasMore: false };
+    }
+    return { results: mapped, hasMore: false };
+  }
+
+  const rawSeasons = allChildren
+    .filter((s) => (s.type as string) === "season" && (s.index as number) > 0)
+    .sort((a, b) => (a.index as number) - (b.index as number));
+
+  if (season === undefined) {
+    // Return one card per season ordered by season number
+    return { results: rawSeasons.map((s) => mapMetadata(s, "season")), hasMore: false };
+  }
+
+  // Find the matching season
+  const matchingSeason = rawSeasons.find((s) => (s.index as number) === season);
+  if (!matchingSeason) {
+    return { results: [], hasMore: false };
+  }
+
+  // The season's ratingKey lets us fetch its children (episodes)
+  const seasonRatingKey = matchingSeason.ratingKey as string | number;
+  const seasonPath = `/library/metadata/${seasonRatingKey}/children`;
+  const episodesData = await plexFetch(seasonPath);
+  const mapped: PlexSearchResult[] = ((episodesData?.MediaContainer?.Metadata || []) as Record<string, unknown>[])
+    .filter((e) => (e.type as string) === "episode")
+    .sort((a, b) => (a.index as number) - (b.index as number))
+    .map((e) => mapMetadata(e, "episode"));
+
+  if (episode !== undefined) {
+    const single = mapped.find((e) => e.episodeNumber === episode);
+    return { results: single ? [single] : [], hasMore: false };
+  }
+
+  return { results: mapped, hasMore: false };
+}
+
 export async function getTagsForTitle(metadataKey: string): Promise<PlexTitleTags> {
   // Plex metadata keys start with /library/metadata/ — strip leading slash for fetch
   const path = metadataKey.startsWith("/") ? metadataKey : `/${metadataKey}`;

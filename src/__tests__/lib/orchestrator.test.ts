@@ -401,3 +401,247 @@ describe("orchestrator — LLM error sanitization", () => {
     expect(errorEvent!.message).not.toMatch(/Connection reset/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// trimToolHistory — pure unit tests (no DB or LLM mock needed)
+// ---------------------------------------------------------------------------
+
+import type OpenAI from "openai";
+
+type AssistantMsg = OpenAI.ChatCompletionAssistantMessageParam;
+type ToolMsg = OpenAI.ChatCompletionToolMessageParam;
+type UserMsg = OpenAI.ChatCompletionUserMessageParam;
+
+/** Build a minimal assistant message that has tool_calls. */
+function assistantWithCalls(id: string, toolName: string, content?: string): AssistantMsg {
+  const msg: AssistantMsg = {
+    role: "assistant",
+    tool_calls: [{ id, type: "function", function: { name: toolName, arguments: "{}" } }],
+  };
+  if (content) msg.content = content;
+  return msg;
+}
+
+/** Build a tool result message. */
+function toolResult(toolCallId: string): ToolMsg {
+  return { role: "tool", tool_call_id: toolCallId, content: '{"ok":true}' };
+}
+
+/** Build a plain user message. */
+function userMsg(text: string): UserMsg {
+  return { role: "user", content: text };
+}
+
+/** Build N rounds of: user → assistant(tool_calls) → tool(result) → assistant(text). */
+function buildRounds(n: number) {
+  const msgs: (AssistantMsg | ToolMsg | UserMsg)[] = [];
+  for (let i = 0; i < n; i++) {
+    msgs.push(userMsg(`query ${i}`));
+    msgs.push(assistantWithCalls(`call_${i}`, "plex_search_library"));
+    msgs.push(toolResult(`call_${i}`));
+    msgs.push({ role: "assistant", content: `Response ${i}` });
+  }
+  return msgs;
+}
+
+describe("trimToolHistory — pure unit", () => {
+  // Import under test — no mocking needed for the pure function
+  let trim: typeof import("@/lib/llm/orchestrator").trimToolHistory;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ trimToolHistory: trim } = await import("@/lib/llm/orchestrator"));
+  });
+
+  it("returns messages unchanged when rounds ≤ MAX_TOOL_ROUNDS_IN_HISTORY", async () => {
+    const msgs = buildRounds(5);
+    const result = trim(msgs, "conv-1");
+    expect(result).toHaveLength(msgs.length);
+    const toolMsgs = result.filter((m) => m.role === "tool");
+    expect(toolMsgs).toHaveLength(5);
+    const assistantWithCalls = result.filter(
+      (m) => m.role === "assistant" && "tool_calls" in m && (m as AssistantMsg).tool_calls != null,
+    );
+    expect(assistantWithCalls).toHaveLength(5);
+  });
+
+  it("trims oldest rounds when count exceeds MAX_TOOL_ROUNDS_IN_HISTORY", async () => {
+    const msgs = buildRounds(7);
+    const result = trim(msgs, "conv-2");
+
+    // Only 5 tool messages should remain (2 oldest dropped)
+    const toolMsgs = result.filter((m) => m.role === "tool");
+    expect(toolMsgs).toHaveLength(5);
+
+    // Only 5 assistant messages with tool_calls should remain
+    const withCalls = result.filter(
+      (m) => m.role === "assistant" && "tool_calls" in m && (m as AssistantMsg).tool_calls != null,
+    );
+    expect(withCalls).toHaveLength(5);
+  });
+
+  it("replaces trimmed assistant tool_calls with a [searched: ...] note", async () => {
+    const msgs = buildRounds(6); // round 0 will be trimmed
+    const result = trim(msgs, "conv-3");
+
+    // Round 0's assistant message should have become plain text with a note
+    const trimmedAssistant = result.find(
+      (m) => m.role === "assistant" && typeof (m as AssistantMsg).content === "string" &&
+        ((m as AssistantMsg).content as string).includes("[searched:"),
+    ) as AssistantMsg | undefined;
+
+    expect(trimmedAssistant).toBeDefined();
+    expect(trimmedAssistant!.content).toContain("plex_search_library");
+    expect(trimmedAssistant!.tool_calls).toBeUndefined();
+  });
+
+  it("preserves existing assistant text content when replacing tool_calls", async () => {
+    const msgs: (AssistantMsg | ToolMsg | UserMsg)[] = [
+      userMsg("hi"),
+      assistantWithCalls("call_0", "plex_search_library", "Let me check that for you!"),
+      toolResult("call_0"),
+      { role: "assistant", content: "Found nothing." },
+      ...buildRounds(5), // push total tool rounds to 6, trimming round 0
+    ];
+
+    const result = trim(msgs, "conv-4");
+
+    const trimmedMsg = result.find(
+      (m) => m.role === "assistant" &&
+        typeof (m as AssistantMsg).content === "string" &&
+        ((m as AssistantMsg).content as string).includes("Let me check that for you!"),
+    ) as AssistantMsg | undefined;
+
+    expect(trimmedMsg).toBeDefined();
+    expect(trimmedMsg!.content).toBe("Let me check that for you! [searched: plex_search_library]");
+    expect(trimmedMsg!.tool_calls).toBeUndefined();
+  });
+
+  it("keeps all user and plain assistant messages when trimming", async () => {
+    const msgs = buildRounds(7);
+    const result = trim(msgs, "conv-5");
+
+    // All 7 user messages should survive
+    const userMsgs = result.filter((m) => m.role === "user");
+    expect(userMsgs).toHaveLength(7);
+
+    // All 7 plain-text assistant responses + 2 converted tool-calling messages = 9 plain assistants
+    const plainAssistant = result.filter(
+      (m) => m.role === "assistant" && !("tool_calls" in m && (m as AssistantMsg).tool_calls),
+    );
+    expect(plainAssistant).toHaveLength(9);
+  });
+
+  it("handles exactly MAX_TOOL_ROUNDS_IN_HISTORY+1 rounds (boundary case)", async () => {
+    const { MAX_TOOL_ROUNDS_IN_HISTORY } = await import("@/lib/llm/orchestrator");
+    const msgs = buildRounds(MAX_TOOL_ROUNDS_IN_HISTORY + 1);
+    const result = trim(msgs, "conv-6");
+
+    const toolMsgs = result.filter((m) => m.role === "tool");
+    expect(toolMsgs).toHaveLength(MAX_TOOL_ROUNDS_IN_HISTORY);
+  });
+});
+
+describe("orchestrator — 429 rate-limit retry", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    sqlite = new Database(":memory:");
+    testDb = drizzle(sqlite, { schema });
+    migrate(testDb, { migrationsFolder: path.resolve(process.cwd(), "drizzle") });
+  });
+  afterEach(() => {
+    sqlite.close();
+  });
+
+  it("retries on 429 and succeeds when second attempt works", async () => {
+    let callCount = 0;
+
+    vi.doMock("@/lib/llm/client", () => ({
+      getLlmClient: () => ({
+        chat: {
+          completions: {
+            create: vi.fn(async () => {
+              callCount++;
+              if (callCount === 1) {
+                throw new Error("429 Rate limit reached for gpt-4.1 on tokens per min (TPM). Please try again in 50ms.");
+              }
+              return (async function* () {
+                yield { choices: [{ delta: { content: "Retry succeeded." } }], usage: null };
+                yield { choices: [{ delta: {} }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } };
+              })();
+            }),
+          },
+        },
+      }),
+      getLlmModel: () => "gpt-4o",
+      getLlmClientForEndpoint: vi.fn(),
+    }));
+
+    // Make timer delays instant so the retry doesn't block the test
+    const origSetTimeout = globalThis.setTimeout;
+    (globalThis as unknown as { setTimeout: (fn: () => void) => number }).setTimeout =
+      (fn: () => void) => { Promise.resolve().then(fn); return 0; };
+
+    try {
+      const userId = seedUser(testDb);
+      const conversationId = seedConversation(testDb, userId);
+      const { orchestrate } = await import("@/lib/llm/orchestrator");
+
+      const events: unknown[] = [];
+      for await (const event of orchestrate({ conversationId, userMessage: "Hello" })) {
+        events.push(event);
+      }
+
+      expect(callCount).toBe(2);
+      expect(events.some((e) => (e as { type: string }).type === "text_delta")).toBe(true);
+      expect(events.some((e) => (e as { type: string }).type === "error")).toBe(false);
+    } finally {
+      globalThis.setTimeout = origSetTimeout;
+    }
+  });
+
+  it("surfaces a friendly error after all retries are exhausted", async () => {
+    vi.doMock("@/lib/llm/client", () => ({
+      getLlmClient: () => ({
+        chat: {
+          completions: {
+            create: vi.fn().mockRejectedValue(
+              new Error("429 Rate limit reached. Please try again in 50ms."),
+            ),
+          },
+        },
+      }),
+      getLlmModel: () => "gpt-4o",
+      getLlmClientForEndpoint: vi.fn(),
+    }));
+
+    // Make timer delays instant
+    const origSetTimeout = globalThis.setTimeout;
+    (globalThis as unknown as { setTimeout: (fn: () => void) => number }).setTimeout =
+      (fn: () => void) => { Promise.resolve().then(fn); return 0; };
+
+    try {
+      const userId = seedUser(testDb);
+      const conversationId = seedConversation(testDb, userId);
+      const { orchestrate } = await import("@/lib/llm/orchestrator");
+
+      const events: unknown[] = [];
+      for await (const event of orchestrate({ conversationId, userMessage: "Hello" })) {
+        events.push(event);
+      }
+
+      const errorEvents = events.filter(
+        (e) => (e as { type: string }).type === "error",
+      ) as { type: string; message: string }[];
+      expect(errorEvents.length).toBeGreaterThan(0);
+      expect(errorEvents[0].message).toBe(
+        "The AI service is temporarily unavailable. Please try again in a moment.",
+      );
+      // No raw API details leaked
+      expect(errorEvents[0].message).not.toMatch(/429/);
+      expect(errorEvents[0].message).not.toMatch(/TPM/);
+    } finally {
+      globalThis.setTimeout = origSetTimeout;
+    }
+  });
+});

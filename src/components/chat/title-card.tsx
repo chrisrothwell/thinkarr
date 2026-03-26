@@ -86,8 +86,10 @@ export function TitleCard({ title }: TitleCardProps) {
     }
   }
 
+  // "partial" means the show is already in Overseerr (fully requested, new episodes pending).
+  // Never offer a request button for partial — only for truly not-yet-requested titles.
   const showRequestButton =
-    (title.mediaStatus === "not_requested" || title.mediaStatus === "partial") &&
+    title.mediaStatus === "not_requested" &&
     title.overseerrId != null &&
     title.overseerrMediaType != null;
 
@@ -154,47 +156,52 @@ export function TitleCard({ title }: TitleCardProps) {
             </a>
           )}
 
-          {showRequestButton && (title.imdbId || (title.overseerrId && title.overseerrMediaType)) && (
-            <a
-              href={
-                title.imdbId
-                  ? `https://www.imdb.com/title/${title.imdbId}`
-                  : `https://www.themoviedb.org/${title.overseerrMediaType === "movie" ? "movie" : "tv"}/${title.overseerrId}`
-              }
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs px-3 py-1 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors font-medium"
-            >
-              More Info
-            </a>
-          )}
-
-          {showRequestButton && requestStatus === "idle" && (
-            <button
-              onClick={handleRequest}
-              disabled={requesting}
-              className="text-xs px-3 py-1 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors font-medium disabled:opacity-50 flex items-center gap-1"
-              data-testid="request-button"
-            >
-              {requesting ? (
-                <>
-                  <span className="inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
-                  Requesting…
-                </>
-              ) : (
-                "Request"
+          {/* More Info + Request/Requested kept together so they never split across lines */}
+          {showRequestButton && (
+            <div className="flex gap-2 flex-nowrap">
+              {(title.imdbId || (title.overseerrId && title.overseerrMediaType)) && (
+                <a
+                  href={
+                    title.imdbId
+                      ? `https://www.imdb.com/title/${title.imdbId}`
+                      : `https://www.themoviedb.org/${title.overseerrMediaType === "movie" ? "movie" : "tv"}/${title.overseerrId}`
+                  }
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs px-3 py-1 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors font-medium whitespace-nowrap"
+                >
+                  More Info
+                </a>
               )}
-            </button>
-          )}
 
-          {requestStatus === "success" && (
-            <span className="text-xs px-3 py-1 rounded-lg bg-green-500/20 text-green-400 border border-green-500/30 font-medium" data-testid="request-success">
-              Requested
-            </span>
-          )}
+              {requestStatus === "idle" && (
+                <button
+                  onClick={handleRequest}
+                  disabled={requesting}
+                  className="text-xs px-3 py-1 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors font-medium disabled:opacity-50 flex items-center gap-1 whitespace-nowrap"
+                  data-testid="request-button"
+                >
+                  {requesting ? (
+                    <>
+                      <span className="inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                      Requesting…
+                    </>
+                  ) : (
+                    "Request"
+                  )}
+                </button>
+              )}
 
-          {requestStatus === "error" && (
-            <span className="text-xs text-destructive">{errorMsg}</span>
+              {requestStatus === "success" && (
+                <span className="text-xs px-3 py-1 rounded-lg bg-green-500/20 text-green-400 border border-green-500/30 font-medium whitespace-nowrap" data-testid="request-success">
+                  Requested
+                </span>
+              )}
+
+              {requestStatus === "error" && (
+                <span className="text-xs text-destructive whitespace-nowrap">{errorMsg}</span>
+              )}
+            </div>
           )}
         </div>
       </div>

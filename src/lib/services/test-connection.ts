@@ -57,7 +57,7 @@ async function probeRealtimeSupport(url: string, apiKey: string): Promise<string
 
 async function testLlm(url: string, apiKey: string, model?: string): Promise<TestConnectionResponse> {
   try {
-    const { default: OpenAI } = await import("openai");
+    const { default: OpenAI, APIError } = await import("openai");
     const client = new OpenAI({ baseURL: url, apiKey });
     if (model) {
       // Quick completion test — some non-OpenAI endpoints reject max_tokens,
@@ -68,7 +68,11 @@ async function testLlm(url: string, apiKey: string, model?: string): Promise<Tes
           messages: [{ role: "user", content: "Hi" }],
           max_tokens: 1,
         });
-      } catch {
+      } catch (inner: unknown) {
+        // If the first attempt failed with a non-HTTP-error (e.g. network, max_tokens
+        // rejection), try again without max_tokens. Re-throw HTTP errors immediately so
+        // the outer catch can format them with full diagnostic detail.
+        if (inner instanceof APIError && inner.status !== undefined) throw inner;
         await client.chat.completions.create({
           model,
           messages: [{ role: "user", content: "Hi" }],
@@ -94,6 +98,41 @@ async function testLlm(url: string, apiKey: string, model?: string): Promise<Tes
       capabilities: { supportsVoice, realtimeModel },
     };
   } catch (e: unknown) {
+    const { APIError } = await import("openai");
+    // Extract rich diagnostic detail from OpenAI SDK API errors
+    if (e instanceof APIError) {
+      const baseUrl = url.replace(/\/$/, "");
+      const isCompletion = model != null;
+      const reqMethod = isCompletion ? "POST" : "GET";
+      const reqUrl = isCompletion ? `${baseUrl}/chat/completions` : `${baseUrl}/models`;
+      const reqHeaders: Record<string, string> = {
+        "Authorization": `Bearer ${apiKey.length > 8 ? `${apiKey.substring(0, 4)}...${apiKey.slice(-4)}` : "***"}`,
+        "Content-Type": "application/json",
+      };
+      const reqBody = isCompletion
+        ? JSON.stringify({ model, messages: [{ role: "user", content: "Hi" }], max_tokens: 1 })
+        : undefined;
+
+      const resStatus = e.status != null ? e.status : "unknown";
+      const resHeaders = e.headers
+        ? Object.fromEntries(Object.entries(e.headers))
+        : undefined;
+      const resBody = e.error != null ? e.error : e.message;
+
+      const parts = [
+        `REQUEST: ${reqMethod} ${reqUrl}`,
+        `Request-Headers: ${JSON.stringify(reqHeaders)}`,
+        ...(reqBody ? [`Request-Body: ${reqBody}`] : []),
+        `RESPONSE: HTTP ${resStatus}`,
+        ...(resHeaders ? [`Response-Headers: ${JSON.stringify(resHeaders)}`] : []),
+        `Response-Body: ${typeof resBody === "string" ? resBody : JSON.stringify(resBody)}`,
+      ];
+
+      return {
+        success: false,
+        message: `LLM connection failed\n${parts.join("\n")}`,
+      };
+    }
     const msg = e instanceof Error ? e.message : "Unknown error";
     return { success: false, message: `LLM connection failed: ${msg}` };
   }

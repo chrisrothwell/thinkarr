@@ -24,9 +24,9 @@ test.describe("Chat interface", () => {
   test("send button is disabled when the input is empty", async ({ page }) => {
     await page.goto("/chat");
     // The send button is only enabled when there is text in the textarea.
-    // It renders as an icon-only button, so we check its disabled state.
-    const sendBtn = page.locator("button[disabled]").last();
+    const sendBtn = page.getByRole("button", { name: "Send" });
     await expect(sendBtn).toBeVisible();
+    await expect(sendBtn).toBeDisabled();
   });
 });
 

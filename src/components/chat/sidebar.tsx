@@ -19,6 +19,7 @@ interface SidebarProps {
   onDelete: (id: string) => void;
   collapsed: boolean;
   onToggle: () => void;
+  selectedModel?: string;
 }
 
 export function Sidebar({
@@ -30,9 +31,9 @@ export function Sidebar({
   onDelete,
   collapsed,
   onToggle,
+  selectedModel,
 }: SidebarProps) {
   const router = useRouter();
-  const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [publicIp, setPublicIp] = useState<string | null>(null);
 
   useEffect(() => {
@@ -108,21 +109,18 @@ export function Sidebar({
                     : "text-sidebar-foreground hover:bg-accent/50",
                 )}
                 onClick={() => onSelect(conv.id)}
-                onMouseEnter={() => setHoveredId(conv.id)}
-                onMouseLeave={() => setHoveredId(null)}
               >
                 <span className="flex-1 truncate">{conv.title || "New Chat"}</span>
-                {hoveredId === conv.id && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onDelete(conv.id);
-                    }}
-                    className="ml-1 rounded p-1 text-muted-foreground hover:text-destructive"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                )}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDelete(conv.id);
+                  }}
+                  className="ml-1 rounded p-1 text-muted-foreground hover:text-destructive md:opacity-0 md:group-hover:opacity-100 transition-opacity"
+                  aria-label="Delete chat"
+                >
+                  <Trash2 size={14} />
+                </button>
               </div>
             ))}
           </div>
@@ -130,7 +128,7 @@ export function Sidebar({
       </div>
 
       {/* Service status traffic lights */}
-      <ServiceStatus />
+      <ServiceStatus selectedModel={selectedModel} />
 
       {/* Version */}
       {process.env.NEXT_PUBLIC_APP_VERSION && (

@@ -367,9 +367,11 @@ export default function SettingsPage() {
       });
       const data = await res.json();
       const result = data.data;
+      // Use a per-endpoint key for LLM results so each endpoint shows its own test outcome
+      const resultKey = sectionKey === "llm" && endpointId ? `llm-${endpointId}` : sectionKey;
       setTestResults((prev) => ({
         ...prev,
-        [sectionKey]: {
+        [resultKey]: {
           success: result?.success ?? false,
           message: result?.message || data.error,
         },
@@ -892,8 +894,8 @@ export default function SettingsPage() {
                   >
                     Test
                   </Button>
-                  {testResults.llm && (
-                    <TestResult result={testResults.llm} />
+                  {testResults[`llm-${ep.id}`] && (
+                    <TestResult result={testResults[`llm-${ep.id}`]} />
                   )}
                 </CardFooter>
               </Card>

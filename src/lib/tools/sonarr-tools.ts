@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { defineTool } from "./registry";
 import * as sonarr from "@/lib/services/sonarr";
+import type { SonarrSeries, SonarrSeriesStatus } from "@/lib/services/sonarr";
 
 export function registerSonarrTools() {
   defineTool({
@@ -10,6 +11,14 @@ export function registerSonarrTools() {
       term: z.string().describe("Search term (TV show title)"),
     }),
     handler: async (args) => sonarr.searchSeries(args.term),
+    /** Strip overview from history — 200-char overview × 10 results is noise once the
+     *  LLM has already acted on the search. Keep all identity and status fields. */
+    llmSummary: (result: unknown) => {
+      return (result as SonarrSeries[]).map(
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        ({ overview: _ov, ...rest }) => rest,
+      );
+    },
   });
 
   defineTool({
@@ -19,6 +28,26 @@ export function registerSonarrTools() {
       title: z.string().describe("Title of the TV series to look up"),
     }),
     handler: async (args) => sonarr.getSeriesStatus(args.title),
+    /** Compact history summary: keep top-level totals and nextAiring; compress the
+     *  per-season array (which can be 10+ objects) to a single compact string like
+     *  "S1:10/10 S2:5/8 S3:0/12" so subsequent turns don't carry the full breakdown. */
+    llmSummary: (result: unknown) => {
+      if (!result) return null;
+      const r = result as SonarrSeriesStatus;
+      return {
+        title: r.title,
+        year: r.year,
+        networkStatus: r.networkStatus,
+        monitored: r.monitored,
+        totalEpisodes: r.totalEpisodes,
+        downloadedEpisodes: r.downloadedEpisodes,
+        missingEpisodes: r.missingEpisodes,
+        nextAiring: r.nextAiring,
+        seasons: r.seasons
+          .map((s) => `S${s.seasonNumber}:${s.downloadedEpisodes}/${s.totalEpisodes}`)
+          .join(" "),
+      };
+    },
   });
 
   defineTool({

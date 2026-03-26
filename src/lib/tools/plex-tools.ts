@@ -4,6 +4,20 @@ import * as plex from "@/lib/services/plex";
 
 const pageParam = z.number().int().min(1).optional().describe("Page number (1-based). Omit or use 1 for the first page. Use hasMore from the previous response to know whether a next page exists.");
 
+/** Compact history summary for a Plex result list — strips bulky fields (summary,
+ *  secondary episode metadata) not needed in subsequent turns, while keeping
+ *  thumbPath and plexKey so the LLM can generate correct display_titles calls
+ *  in follow-up turns without re-searching. */
+function plexResultsLlmSummary(result: unknown): unknown {
+  const r = result as { results: plex.PlexSearchResult[]; hasMore: boolean };
+  return {
+    results: r.results.map(({ title, year, mediaType, plexKey, thumbPath, rating, cast, showTitle, seasonNumber, episodeNumber }) => ({
+      title, year, mediaType, plexKey, thumbPath, rating, cast, showTitle, seasonNumber, episodeNumber,
+    })),
+    hasMore: r.hasMore,
+  };
+}
+
 export function registerPlexTools() {
   defineTool({
     name: "plex_search_library",
@@ -13,6 +27,7 @@ export function registerPlexTools() {
       page: pageParam,
     }),
     handler: async (args) => plex.searchLibrary(args.query, args.page ?? 1),
+    llmSummary: plexResultsLlmSummary,
   });
 
   defineTool({
@@ -22,6 +37,15 @@ export function registerPlexTools() {
       title: z.string().describe("Title of the movie or TV show to check"),
     }),
     handler: async (args) => plex.checkAvailability(args.title),
+    llmSummary: (result: unknown) => {
+      const r = result as { available: boolean; results: plex.PlexSearchResult[] };
+      return {
+        available: r.available,
+        results: r.results.map(({ title, year, mediaType, plexKey, thumbPath, rating, cast, showTitle, seasonNumber, episodeNumber }) => ({
+          title, year, mediaType, plexKey, thumbPath, rating, cast, showTitle, seasonNumber, episodeNumber,
+        })),
+      };
+    },
   });
 
   defineTool({
@@ -31,6 +55,7 @@ export function registerPlexTools() {
       page: pageParam,
     }),
     handler: async (args) => plex.getOnDeck(args.page ?? 1),
+    llmSummary: plexResultsLlmSummary,
   });
 
   defineTool({
@@ -40,6 +65,7 @@ export function registerPlexTools() {
       page: pageParam,
     }),
     handler: async (args) => plex.getRecentlyAdded(args.page ?? 1),
+    llmSummary: plexResultsLlmSummary,
   });
 
   defineTool({
@@ -50,6 +76,7 @@ export function registerPlexTools() {
       page: pageParam,
     }),
     handler: async (args) => plex.searchCollections(args.collectionName, args.page ?? 1),
+    llmSummary: plexResultsLlmSummary,
   });
 
   defineTool({
@@ -71,6 +98,45 @@ export function registerPlexTools() {
       page: pageParam,
     }),
     handler: async (args) => plex.searchByTag(args.tag, args.tagType ?? "genre", args.page ?? 1),
+    llmSummary: plexResultsLlmSummary,
+  });
+
+  defineTool({
+    name: "plex_get_series_episodes",
+    description:
+      "Get season or episode data for a specific Plex TV series. " +
+      "Pass the show-level plexKey from a previous plex_search_library result. " +
+      "If neither season nor episode is provided: returns one card per season (ordered by season number) with episode counts — use this to show an overview of all seasons. " +
+      "If season is provided: returns all episodes from that season ordered by episode number. " +
+      "If season and episode are both provided: returns the single matching episode. " +
+      "Use this tool instead of plex_search_library when the user asks about a specific season or episode of a show.",
+    schema: z.object({
+      plexKey: z
+        .string()
+        .describe("Plex metadata key for the TV show (e.g. '/library/metadata/123' from a prior search result)"),
+      season: z
+        .number()
+        .int()
+        .min(1)
+        .optional()
+        .describe("Season number (1-based). Omit to get an overview of all seasons."),
+      episode: z
+        .number()
+        .int()
+        .min(1)
+        .optional()
+        .describe("Episode number within the season (1-based). Requires season to be set."),
+    }),
+    handler: async (args) => plex.getSeriesEpisodes(args.plexKey, args.season, args.episode),
+    llmSummary: (result: unknown) => {
+      const r = result as { results: plex.PlexSearchResult[]; hasMore: boolean };
+      return {
+        results: r.results.map(({ title, year, mediaType, plexKey, thumbPath, rating, showTitle, seasonNumber, episodeNumber, totalEpisodes, watchedEpisodes }) => ({
+          title, year, mediaType, plexKey, thumbPath, rating, showTitle, seasonNumber, episodeNumber, totalEpisodes, watchedEpisodes,
+        })),
+        hasMore: r.hasMore,
+      };
+    },
   });
 
   defineTool({
@@ -85,5 +151,21 @@ export function registerPlexTools() {
         .describe("Plex metadata key for the title (e.g. '/library/metadata/123' from a search result's 'key' field)"),
     }),
     handler: async (args) => plex.getTagsForTitle(args.metadataKey),
+    /** Compact history summary: limit directors to 3 and actors to 5 to avoid
+     *  large uncapped arrays bloating subsequent turns. */
+    llmSummary: (result: unknown) => {
+      const r = result as plex.PlexTitleTags;
+      return {
+        key: r.key,
+        title: r.title,
+        genres: r.genres,
+        directors: r.directors.slice(0, 3),
+        actors: r.actors.slice(0, 5),
+        countries: r.countries,
+        studio: r.studio,
+        contentRating: r.contentRating,
+        labels: r.labels,
+      };
+    },
   });
 }

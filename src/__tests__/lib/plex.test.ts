@@ -551,3 +551,292 @@ describe("getTagsForTitle — issue #15", () => {
     expect(tags.contentRating).toBeUndefined();
   });
 });
+
+describe("getSeriesEpisodes — issue #197", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  const SEASON_CHILDREN = [
+    {
+      type: "season",
+      index: 1,
+      ratingKey: "200",
+      key: "/library/metadata/200/children",
+      parentTitle: "Breaking Bad",
+      title: "Season 1",
+      leafCount: 7,
+      viewedLeafCount: 3,
+      thumb: "/thumb/200",
+    },
+    {
+      type: "season",
+      index: 2,
+      ratingKey: "201",
+      key: "/library/metadata/201/children",
+      parentTitle: "Breaking Bad",
+      title: "Season 2",
+      leafCount: 13,
+      viewedLeafCount: 0,
+      thumb: "/thumb/201",
+    },
+  ];
+
+  const SEASON1_EPISODES = [
+    { type: "episode", index: 1, parentIndex: 1, ratingKey: "301", key: "/library/metadata/301", grandparentTitle: "Breaking Bad", title: "Pilot", thumb: "/thumb/301" },
+    { type: "episode", index: 2, parentIndex: 1, ratingKey: "302", key: "/library/metadata/302", grandparentTitle: "Breaking Bad", title: "Cat's in the Bag", thumb: "/thumb/302" },
+    { type: "episode", index: 3, parentIndex: 1, ratingKey: "303", key: "/library/metadata/303", grandparentTitle: "Breaking Bad", title: "And the Bag's in the River", thumb: "/thumb/303" },
+  ];
+
+  it("returns one card per season ordered by season number when no season given", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ MediaContainer: { Metadata: SEASON_CHILDREN } }),
+    }));
+
+    const { getSeriesEpisodes } = await import("@/lib/services/plex");
+    const { results, hasMore } = await getSeriesEpisodes("/library/metadata/100");
+    expect(results).toHaveLength(2);
+    expect(results[0].seasonNumber).toBe(1);
+    expect(results[1].seasonNumber).toBe(2);
+    expect(results[0].totalEpisodes).toBe(7);
+    expect(results[0].watchedEpisodes).toBe(3);
+    expect(results[0].mediaType).toBe("tv");
+    expect(hasMore).toBe(false);
+  });
+
+  it("excludes season 0 (specials) when no season given", async () => {
+    const withSpecials = [
+      { type: "season", index: 0, ratingKey: "199", key: "/library/metadata/199/children", parentTitle: "BB", title: "Specials", leafCount: 2, viewedLeafCount: 0 },
+      ...SEASON_CHILDREN,
+    ];
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ MediaContainer: { Metadata: withSpecials } }),
+    }));
+
+    const { getSeriesEpisodes } = await import("@/lib/services/plex");
+    const { results } = await getSeriesEpisodes("/library/metadata/100");
+    expect(results).toHaveLength(2);
+    expect(results.every((r) => (r.seasonNumber ?? 0) > 0)).toBe(true);
+  });
+
+  it("returns episodes from the requested season ordered by episode number", async () => {
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce({
+        // GET /library/metadata/100/children → seasons
+        ok: true,
+        json: async () => ({ MediaContainer: { Metadata: SEASON_CHILDREN } }),
+      })
+      .mockResolvedValueOnce({
+        // GET /library/metadata/200/children → season 1 episodes
+        ok: true,
+        json: async () => ({ MediaContainer: { Metadata: SEASON1_EPISODES } }),
+      }));
+
+    const { getSeriesEpisodes } = await import("@/lib/services/plex");
+    const { results } = await getSeriesEpisodes("/library/metadata/100", 1);
+    expect(results).toHaveLength(3);
+    expect(results[0].title).toBe("Pilot");
+    expect(results[0].episodeNumber).toBe(1);
+    expect(results[1].episodeNumber).toBe(2);
+    expect(results[2].episodeNumber).toBe(3);
+    expect(results[0].mediaType).toBe("episode");
+    expect(results[0].showTitle).toBe("Breaking Bad");
+    expect(results[0].seasonNumber).toBe(1);
+  });
+
+  it("returns a single episode when both season and episode are given", async () => {
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ MediaContainer: { Metadata: SEASON_CHILDREN } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ MediaContainer: { Metadata: SEASON1_EPISODES } }),
+      }));
+
+    const { getSeriesEpisodes } = await import("@/lib/services/plex");
+    const { results } = await getSeriesEpisodes("/library/metadata/100", 1, 2);
+    expect(results).toHaveLength(1);
+    expect(results[0].title).toBe("Cat's in the Bag");
+    expect(results[0].episodeNumber).toBe(2);
+  });
+
+  it("returns empty array when episode number not found", async () => {
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ MediaContainer: { Metadata: SEASON_CHILDREN } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ MediaContainer: { Metadata: SEASON1_EPISODES } }),
+      }));
+
+    const { getSeriesEpisodes } = await import("@/lib/services/plex");
+    const { results } = await getSeriesEpisodes("/library/metadata/100", 1, 99);
+    expect(results).toHaveLength(0);
+  });
+
+  it("returns empty array when requested season not found", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ MediaContainer: { Metadata: SEASON_CHILDREN } }),
+    }));
+
+    const { getSeriesEpisodes } = await import("@/lib/services/plex");
+    const { results } = await getSeriesEpisodes("/library/metadata/100", 5);
+    expect(results).toHaveLength(0);
+  });
+
+  it("uses ratingKey to fetch season episodes", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ MediaContainer: { Metadata: SEASON_CHILDREN } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ MediaContainer: { Metadata: SEASON1_EPISODES } }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { getSeriesEpisodes } = await import("@/lib/services/plex");
+    await getSeriesEpisodes("/library/metadata/100", 1);
+
+    // Second fetch should use ratingKey=200 to get episodes
+    const secondUrl = fetchMock.mock.calls[1][0] as string;
+    expect(secondUrl).toContain("/library/metadata/200/children");
+  });
+
+  it("strips /children suffix from plexKey before appending /children — issue #204", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ MediaContainer: { Metadata: SEASON_CHILDREN } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ MediaContainer: { Metadata: SEASON1_EPISODES } }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { getSeriesEpisodes } = await import("@/lib/services/plex");
+    // Pass the key with /children as Plex hub search returns it
+    await getSeriesEpisodes("/library/metadata/100/children");
+
+    // First fetch should call /library/metadata/100/children (the normalised key + /children)
+    const firstUrl = fetchMock.mock.calls[0][0] as string;
+    expect(firstUrl).toContain("/library/metadata/100/children");
+    // Must NOT double-up to /library/metadata/100/children/children
+    expect(firstUrl).not.toContain("/children/children");
+  });
+
+  it("returns episodes when a season-level plexKey is passed with a season number — issue #211", async () => {
+    // Simulates the AI reusing the season plexKey (/library/metadata/200/children)
+    // from a prior plex_get_series_episodes result and calling again with season=1.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ MediaContainer: { Metadata: SEASON1_EPISODES } }),
+    }));
+
+    const { getSeriesEpisodes } = await import("@/lib/services/plex");
+    const { results } = await getSeriesEpisodes("/library/metadata/200/children", 1);
+    expect(results).toHaveLength(3);
+    expect(results[0].title).toBe("Pilot");
+    expect(results[0].episodeNumber).toBe(1);
+    expect(results[0].mediaType).toBe("episode");
+  });
+
+  it("returns empty array when season-level plexKey is passed but no episodes present — issue #211", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ MediaContainer: { Metadata: [] } }),
+    }));
+
+    const { getSeriesEpisodes } = await import("@/lib/services/plex");
+    // Empty season — should fall through to normal show path and return empty seasons
+    const { results } = await getSeriesEpisodes("/library/metadata/200", 1);
+    expect(results).toHaveLength(0);
+  });
+
+  it("returns single episode when season-level plexKey is passed with season and episode — issue #211", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ MediaContainer: { Metadata: SEASON1_EPISODES } }),
+    }));
+
+    const { getSeriesEpisodes } = await import("@/lib/services/plex");
+    const { results } = await getSeriesEpisodes("/library/metadata/200/children", 1, 2);
+    expect(results).toHaveLength(1);
+    expect(results[0].title).toBe("Cat's in the Bag");
+    expect(results[0].episodeNumber).toBe(2);
+  });
+});
+
+describe("searchLibrary — episode filtering — issue #206", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("excludes episode items from search results", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        MediaContainer: {
+          Hub: [
+            {
+              type: "show",
+              Metadata: [
+                { title: "Breaking Bad", type: "show", year: 2008, key: "/library/metadata/1", thumb: "/thumb/1" },
+              ],
+            },
+            {
+              type: "episode",
+              Metadata: [
+                { title: "Pilot", type: "episode", grandparentTitle: "Breaking Bad", parentIndex: 1, index: 1, key: "/library/metadata/100", thumb: "/thumb/100" },
+              ],
+            },
+          ],
+        },
+      }),
+    }));
+
+    const { searchLibrary } = await import("@/lib/services/plex");
+    const { results } = await searchLibrary("Breaking Bad");
+    // Show should be present; individual episode should be filtered out
+    expect(results.some((r) => r.mediaType === "tv" && r.title === "Breaking Bad")).toBe(true);
+    expect(results.some((r) => r.mediaType === "episode")).toBe(false);
+  });
+
+  it("returns movies alongside shows, never episodes", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        MediaContainer: {
+          Hub: [
+            {
+              type: "movie",
+              Metadata: [
+                { title: "The Matrix", type: "movie", year: 1999, key: "/library/metadata/5", thumb: "/thumb/5" },
+              ],
+            },
+            {
+              type: "episode",
+              Metadata: [
+                { title: "Some Episode", type: "episode", key: "/library/metadata/99", thumb: "/thumb/99" },
+              ],
+            },
+          ],
+        },
+      }),
+    }));
+
+    const { searchLibrary } = await import("@/lib/services/plex");
+    const { results } = await searchLibrary("Matrix");
+    expect(results.some((r) => r.mediaType === "movie")).toBe(true);
+    expect(results.some((r) => r.mediaType === "episode")).toBe(false);
+  });
+});

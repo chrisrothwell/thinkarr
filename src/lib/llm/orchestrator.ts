@@ -32,6 +32,41 @@ type ChatMessage = OpenAI.ChatCompletionMessageParam;
 
 const MAX_TOOL_ROUNDS = 5;
 
+/**
+ * Retry an LLM API call on 429 rate-limit responses with exponential backoff.
+ * The OpenAI TPM limit resets on a sliding window — a short wait is usually
+ * enough (e.g. the API itself says "retry in 50ms" for brief spikes).
+ * Two retries: 1 s then 3 s. On any other error, throws immediately.
+ */
+async function callWithRateLimitRetry<T>(
+  fn: () => Promise<T>,
+  conversationId: string,
+  round: number,
+): Promise<T> {
+  const delays = [1000, 3000];
+  for (let attempt = 0; attempt <= delays.length; attempt++) {
+    try {
+      return await fn();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "";
+      if (/429|rate.?limit/i.test(msg) && attempt < delays.length) {
+        const delayMs = delays[attempt];
+        logger.warn("LLM rate limit hit, retrying after delay", {
+          conversationId,
+          round,
+          attempt: attempt + 1,
+          delayMs,
+        });
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        continue;
+      }
+      throw e;
+    }
+  }
+  // Unreachable, but TypeScript requires it
+  throw new Error("Rate limit retry exhausted");
+}
+
 /** Map raw LLM API errors to user-friendly messages. Raw error is preserved in server logs. */
 function sanitizeLlmError(raw: string): string {
   if (/429|quota|rate.?limit/i.test(raw)) {
@@ -65,7 +100,43 @@ function loadHistory(conversationId: string): ChatMessage[] {
       if (row.content) msg.content = row.content;
       if (row.toolCalls) {
         try {
-          msg.tool_calls = JSON.parse(row.toolCalls);
+          const toolCalls = JSON.parse(row.toolCalls) as OpenAI.ChatCompletionMessageToolCall[];
+          // Compact display_titles call arguments: strip summary, thumbPath, and cast
+          // from each title entry. These are the bulky repeated fields (a 20-season show
+          // repeats a 300-char summary 20 times). The tool result (via llmSummary) already
+          // confirms which cards were shown, so the full args are not needed in history.
+          msg.tool_calls = toolCalls.map((tc) => {
+            if (
+              tc.type === "function" &&
+              tc.function.name === "display_titles" &&
+              tc.function.arguments
+            ) {
+              try {
+                const args = JSON.parse(tc.function.arguments) as {
+                  titles: Record<string, unknown>[];
+                };
+                // Strip only decorative fields (summary, cast) — NOT thumbPath.
+                // thumbPath is needed so the LLM can reuse the poster URL in
+                // follow-up display_titles calls without re-searching.
+                // seasonNumber, overseerrId, overseerrMediaType, plexKey and
+                // mediaStatus are all preserved so season-specific request and
+                // watch buttons remain functional.
+                const compacted = {
+                  titles: args.titles.map(
+                    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+                    ({ summary: _s, cast: _c, ...rest }) => rest,
+                  ),
+                };
+                return {
+                  ...tc,
+                  function: { ...tc.function, arguments: JSON.stringify(compacted) },
+                };
+              } catch {
+                return tc;
+              }
+            }
+            return tc;
+          });
         } catch {
           // Skip malformed tool calls
         }
@@ -128,7 +199,73 @@ function loadHistory(conversationId: string): ChatMessage[] {
     }
   }
 
-  return repaired;
+  return trimToolHistory(repaired, conversationId);
+}
+
+export const MAX_TOOL_ROUNDS_IN_HISTORY = 5;
+
+/**
+ * Cap the number of tool-calling rounds kept in conversation history.
+ * For rounds beyond the most recent MAX_TOOL_ROUNDS_IN_HISTORY, the
+ * tool result messages are dropped and the assistant message's tool_calls
+ * array is replaced with a compact inline note (e.g. "[searched: plex_search_library]").
+ * This prevents unbounded token growth in long conversations while keeping
+ * all assistant text responses intact.
+ */
+export function trimToolHistory(messages: ChatMessage[], conversationId: string): ChatMessage[] {
+  // Find the index of every assistant message that has tool_calls
+  const toolRoundIndices: number[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (msg.role === "assistant" && "tool_calls" in msg && (msg as OpenAI.ChatCompletionAssistantMessageParam).tool_calls?.length) {
+      toolRoundIndices.push(i);
+    }
+  }
+
+  if (toolRoundIndices.length <= MAX_TOOL_ROUNDS_IN_HISTORY) return messages;
+
+  const dropCount = toolRoundIndices.length - MAX_TOOL_ROUNDS_IN_HISTORY;
+  const dropIndices = new Set(toolRoundIndices.slice(0, dropCount));
+
+  // Collect all tool_call_ids that belong to dropped rounds
+  const dropToolCallIds = new Set<string>();
+  for (const idx of dropIndices) {
+    const msg = messages[idx] as OpenAI.ChatCompletionAssistantMessageParam;
+    for (const tc of msg.tool_calls ?? []) dropToolCallIds.add(tc.id);
+  }
+
+  logger.info("Trimming old tool rounds from history", {
+    conversationId,
+    totalRounds: toolRoundIndices.length,
+    droppingRounds: dropCount,
+    keptRounds: MAX_TOOL_ROUNDS_IN_HISTORY,
+  });
+
+  return messages
+    .filter((msg) => {
+      // Drop tool result messages whose call was in a trimmed round
+      if (msg.role === "tool") {
+        const toolMsg = msg as OpenAI.ChatCompletionToolMessageParam;
+        return !dropToolCallIds.has(toolMsg.tool_call_id);
+      }
+      return true;
+    })
+    .map((msg) => {
+      // For assistant messages in trimmed rounds: replace tool_calls with an inline note
+      if (msg.role !== "assistant") return msg;
+      const assistantMsg = msg as OpenAI.ChatCompletionAssistantMessageParam;
+      if (!assistantMsg.tool_calls?.some((tc) => dropToolCallIds.has(tc.id))) return msg;
+      const toolNames = [
+        ...new Set(
+          assistantMsg.tool_calls
+            .filter((tc): tc is OpenAI.ChatCompletionMessageToolCall & { type: "function" } => tc.type === "function")
+            .map((tc) => tc.function.name),
+        ),
+      ].join(", ");
+      const note = `[searched: ${toolNames}]`;
+      const content = assistantMsg.content ? `${assistantMsg.content} ${note}` : note;
+      return { role: "assistant" as const, content };
+    });
 }
 
 /** Save a message to the DB. */
@@ -210,13 +347,18 @@ export async function* orchestrate(
 
     try {
       const llmStart = Date.now();
-      const stream = await client.chat.completions.create({
-        model,
-        messages: apiMessages,
-        stream: true,
-        stream_options: { include_usage: true },
-        ...(tools && tools.length > 0 ? { tools } : {}),
-      });
+      const stream = await callWithRateLimitRetry(
+        () =>
+          client.chat.completions.create({
+            model,
+            messages: apiMessages,
+            stream: true,
+            stream_options: { include_usage: true },
+            ...(tools && tools.length > 0 ? { tools } : {}),
+          }),
+        conversationId,
+        round,
+      );
 
       // Accumulate streaming chunks
       const toolCallDeltas: Map<number, { id: string; name: string; args: string }> = new Map();
@@ -323,11 +465,17 @@ export async function* orchestrate(
       })),
     });
 
-    // 4. Execute each tool call
+    // 4. Execute tool calls in parallel — multiple tool calls in a single round
+    //    (e.g. 10 overseerr_get_details calls) run concurrently rather than
+    //    sequentially, reducing the total round-trip time significantly.
     const TOOL_TIMEOUT_MS = 30_000;
+
+    // Emit tool_call_start events immediately (before awaiting results)
+    const startedAts: Map<string, number> = new Map();
     for (const tc of toolCalls) {
-      logger.info("Tool call", { conversationId, toolName: tc.function.name, toolCallId: tc.id });
       const startedAt = Date.now();
+      startedAts.set(tc.id, startedAt);
+      logger.info("Tool call", { conversationId, toolName: tc.function.name, toolCallId: tc.id });
       yield {
         type: "tool_call_start",
         toolCallId: tc.id,
@@ -335,26 +483,35 @@ export async function* orchestrate(
         arguments: tc.function.arguments,
         startedAt,
       };
+    }
 
-      let result: string;
-      let isError = false;
-      try {
-        const timeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`Tool call timed out after ${TOOL_TIMEOUT_MS / 1000}s`)), TOOL_TIMEOUT_MS),
-        );
-        result = await Promise.race([
-          executeTool(tc.function.name, tc.function.arguments),
-          timeoutPromise,
-        ]);
-      } catch (e: unknown) {
-        isError = true;
-        const timedOut = e instanceof Error && e.message.startsWith("Tool call timed out");
-        result = JSON.stringify({ error: e instanceof Error ? e.message : "Tool execution failed" });
-        logger.warn("Tool call error", { conversationId, toolName: tc.function.name, toolCallId: tc.id, error: result, timedOut, durationMs: Date.now() - startedAt });
-      }
+    // Execute all tools concurrently
+    const toolResults = await Promise.all(
+      toolCalls.map(async (tc) => {
+        const startedAt = startedAts.get(tc.id) ?? Date.now();
+        let result: string;
+        let isError = false;
+        try {
+          const timeoutPromise = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`Tool call timed out after ${TOOL_TIMEOUT_MS / 1000}s`)), TOOL_TIMEOUT_MS),
+          );
+          result = await Promise.race([
+            executeTool(tc.function.name, tc.function.arguments),
+            timeoutPromise,
+          ]);
+        } catch (e: unknown) {
+          isError = true;
+          const timedOut = e instanceof Error && e.message.startsWith("Tool call timed out");
+          result = JSON.stringify({ error: e instanceof Error ? e.message : "Tool execution failed" });
+          logger.warn("Tool call error", { conversationId, toolName: tc.function.name, toolCallId: tc.id, error: result, timedOut, durationMs: Date.now() - startedAt });
+        }
+        const durationMs = Date.now() - startedAt;
+        return { tc, result: result!, isError, durationMs };
+      }),
+    );
 
-      const durationMs = Date.now() - startedAt;
-
+    // Save results and emit events in original tool_calls order
+    for (const { tc, result, isError, durationMs } of toolResults) {
       // Save tool result to DB (even on error — ensures the API message sequence stays valid)
       try {
         saveMessage(conversationId, "tool", result, {
@@ -373,11 +530,13 @@ export async function* orchestrate(
       }
 
       // Add to conversation for next round — the LLM needs a tool message for every tool_calls entry.
-      // Use the compact LLM summary so large tool results don't bloat the context window.
+      // Use the full result here so the LLM can read all fields (e.g. summary, thumbPath) to pass to
+      // display_titles. The compact llmSummary is only used when loading historical messages (loadHistory),
+      // where the LLM only needs a brief reminder of what was found, not the full payload.
       apiMessages.push({
         role: "tool",
         tool_call_id: tc.id,
-        content: getToolLlmContent(tc.function.name, result),
+        content: result,
       });
 
       yield {

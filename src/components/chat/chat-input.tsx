@@ -141,6 +141,7 @@ export function ChatInput({
                 size="icon"
                 onClick={handleSubmit}
                 disabled={disabled || !value.trim()}
+                aria-label="Send"
                 className="shrink-0"
               >
                 <SendHorizontal size={16} />

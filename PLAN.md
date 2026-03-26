@@ -1329,3 +1329,325 @@ New unit test suite `src/__tests__/api/client-log.test.ts` covering:
 |------|--------|
 | `src/app/api/client-log/route.ts` | Replace `logger[level](...)` with explicit `if/else if/else` dispatch |
 | `src/__tests__/api/client-log.test.ts` | New unit test suite (10 tests) |
+
+### Phase 47: Reduce OpenAI token consumption to prevent TPM rate-limit exhaustion
+
+#### Problem
+A handful of queries was hitting the OpenAI tokens-per-minute (TPM) rate limit, even on tier 1 (30,000 TPM). Root-cause analysis identified three compounding sources of token bloat:
+
+1. **`overseerr.search()` — unbounded summary field**: `r.overview` was mapped directly from the TMDB payload with no length cap. TMDB overviews can be 500–1,000+ characters. With 10 results per page, a single `overseerr_search` call could inject up to ~10,000 characters of synopsis text into the prompt.
+
+2. **No `llmSummary` on Plex or Overseerr tools**: The `llmSummary` mechanism (used by `display_titles` since Phase 43) compresses tool results stored in conversation history — `loadHistory()` calls `getToolLlmContent()` which substitutes a compact form when the tool defines one. Without it on Plex/Overseerr tools, every turn in a multi-turn conversation re-sent full JSON blobs (summaries, thumbnail paths, episode counts) accumulated from all previous searches.
+
+3. **Architectural conflict — `getToolLlmContent` used for both in-round and history**: The orchestrator called `getToolLlmContent()` both when appending a fresh tool result to `apiMessages` (in-round) and when `loadHistory()` loaded old results from the DB. An aggressive `llmSummary` on Plex tools (stripping `summary` and `thumbPath`) would have broken `display_titles` because the LLM needs those fields from the in-round result to construct its `display_titles` arguments.
+
+#### Fixes
+
+**Fix 1 — Truncate Overseerr summary at source** (`src/lib/services/overseerr.ts`)  
+Added `.substring(0, 300)` to `r.overview` in `search()`. TMDB overviews are already truncated at 300 chars in Plex results; this makes both data sources consistent. Directly reduces in-round prompt tokens for every `overseerr_search` call.
+
+**Fix 2 — Decouple in-round vs history usage** (`src/lib/llm/orchestrator.ts`)  
+Changed the in-round `apiMessages.push` to pass `result` directly (full JSON) instead of `getToolLlmContent(name, result)`. The `loadHistory()` function continues to use `getToolLlmContent()` for its DB-loaded messages. This decoupling means `llmSummary` functions now only affect conversation history, not the current tool round — so they can safely strip any field without breaking subsequent tool calls.
+
+**Fix 3 — Add `llmSummary` to all Plex search tools** (`src/lib/tools/plex-tools.ts`)  
+Added a shared `plexResultsLlmSummary()` helper used by `plex_search_library`, `plex_get_on_deck`, `plex_get_recently_added`, `plex_search_collection`, and `plex_search_by_tag`. The `plex_check_availability` tool gets an inline variant preserving the `available` flag. The compact form retains: `title`, `year`, `mediaType`, `plexKey`, `rating`, `cast`, `showTitle`, `seasonNumber`, `episodeNumber`. Stripped from history: `summary`, `thumbPath`, `seasons`, `totalEpisodes`, `watchedEpisodes`, `dateAdded`.
+
+**Fix 4 — Add `llmSummary` to Overseerr tools** (`src/lib/tools/overseerr-tools.ts`)  
+- `overseerr_search`: compact form retains `overseerrId`, `overseerrMediaType`, `title`, `year`, `rating`, `mediaStatus`, `seasonCount`. Strips `summary` and `thumbPath`.  
+- `overseerr_list_requests`: compact form retains `mediaType`, `title`, `year`, `status`, `mediaStatus`, `requestedBy`, `overseerrId`, `seasonsRequested`. Strips `id`, `requestedAt`, `tmdbId`, `thumbPath`.
+
+#### Token savings estimate (per turn in a multi-turn conversation)
+
+| Source | Before | After (history) | Saving |
+|--------|--------|-----------------|--------|
+| `overseerr_search` (10 results) | ~7,500 chars | ~1,000 chars | ~1,600 tokens |
+| `plex_search_library` (10 results) | ~5,500 chars | ~1,200 chars | ~1,075 tokens |
+| `overseerr_list_requests` (10 results) | ~3,000 chars | ~700 chars | ~575 tokens |
+
+A conversation that had 3 prior searches now starts each new turn with ~3,250 fewer tokens in its history — enough to prevent limit exhaustion at tier 1 (30,000 TPM).
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/services/overseerr.ts` | Truncate `summary` to 300 chars in `search()` |
+| `src/lib/llm/orchestrator.ts` | In-round tool messages use `result` (full); `loadHistory` uses `getToolLlmContent` (compact) |
+| `src/lib/tools/plex-tools.ts` | Add `plexResultsLlmSummary` helper + `llmSummary` on all 6 Plex search tools |
+| `src/lib/tools/overseerr-tools.ts` | Add `llmSummary` on `overseerr_search` and `overseerr_list_requests`; import types |
+| `src/__tests__/lib/token-reduction.test.ts` | 6 new tests covering all four fixes |
+
+### Phase 48: Further TPM reduction — remaining tool payloads and multi-season call args
+
+#### Problem
+After Phase 47, the following sources of token bloat remained:
+
+1. **`overseerr_get_details` — no `llmSummary`**: Full response (cast × 10, all per-season statuses, all request history) went into every subsequent turn unchanged. A 10-season show alone contributes 10 season-status objects plus up to 10 request objects.
+
+2. **`plex_get_title_tags` — no `llmSummary`**: Returns full unbounded `directors[]` and `actors[]` arrays. A movie with many associated directors (e.g. anthology films) or large ensemble cast could send 20+ names into history.
+
+3. **`sonarr_search_series` / `radarr_search_movie` — no `llmSummary`**: 200-character `overview` fields × up to 10 results stay in conversation history as noise after the initial search is acted upon.
+
+4. **`sonarr_get_series_status` — no `llmSummary`**: Full per-season array (one object per season with `seasonNumber`, `totalEpisodes`, `downloadedEpisodes`, `monitored`) stays in history for all subsequent turns.
+
+5. **`display_titles` tool call arguments** — the assistant's own `tool_calls` message is replayed verbatim each turn. For a multi-season show (e.g. 20 seasons), the arguments include 20 entries each repeating the same 300-char `summary`, `thumbPath` URL, and `cast` array. This is the single largest remaining source of per-turn bloat.
+
+#### Fixes
+
+**Fix 1 — `overseerr_get_details` `llmSummary`** (`src/lib/tools/overseerr-tools.ts`)
+Compact form: `overseerrId`, `overseerrMediaType`, `title`, `year`, `imdbId`, `cast` (first 5 only, down from 10), `genres`, `runtime`/`episodeRuntime`, `seasonCount`. Seasons list replaced by `availableSeasons` (array of season numbers with "Available" status). `requests` array dropped entirely.
+
+**Fix 2 — `plex_get_title_tags` `llmSummary`** (`src/lib/tools/plex-tools.ts`)
+Compact form caps `directors` at 3 and `actors` at 5. All other fields (`genres`, `countries`, `studio`, `contentRating`, `labels`) are unchanged.
+
+**Fix 3 — `sonarr_search_series` `llmSummary`** (`src/lib/tools/sonarr-tools.ts`)
+Strips `overview` from each result. All identity and status fields preserved.
+
+**Fix 4 — `sonarr_get_series_status` `llmSummary`** (`src/lib/tools/sonarr-tools.ts`)
+Top-level stats (`totalEpisodes`, `downloadedEpisodes`, `missingEpisodes`, `nextAiring`) preserved. Per-season array compacted to a single string: `"S1:7/7 S2:13/13 S3:11/13"`.
+
+**Fix 5 — `radarr_search_movie` `llmSummary`** (`src/lib/tools/radarr-tools.ts`)
+Strips `overview` from each result. All identity and status fields preserved.
+
+**Fix 6 — `display_titles` tool call arg compression** (`src/lib/llm/orchestrator.ts`)
+In `loadHistory()`, after parsing stored `tool_calls`, `display_titles` call arguments are post-processed: `summary`, `thumbPath`, and `cast` are stripped from each title entry. The tool's `llmSummary` already confirms which cards were shown in the result message; the full per-entry media fields are not needed in the replayed call arguments.
+
+#### Token savings estimate (incremental over Phase 47)
+
+| Source | Approximate saving per historical turn |
+|--------|---------------------------------------|
+| `overseerr_get_details` (10-season show) | ~800 tokens |
+| `sonarr_get_series_status` (10 seasons) | ~200 tokens |
+| `display_titles` (20-season show, 1 prior call) | ~1,500 tokens |
+| `sonarr/radarr` search overviews (10 results each) | ~500 tokens |
+| `plex_get_title_tags` (large cast) | ~100 tokens |
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/tools/overseerr-tools.ts` | Add `llmSummary` to `overseerr_get_details`; import `OverseerrDetails` type |
+| `src/lib/tools/plex-tools.ts` | Add `llmSummary` to `plex_get_title_tags` |
+| `src/lib/tools/sonarr-tools.ts` | Add `llmSummary` to `sonarr_search_series` and `sonarr_get_series_status`; import types |
+| `src/lib/tools/radarr-tools.ts` | Add `llmSummary` to `radarr_search_movie`; import `RadarrMovie` type |
+| `src/lib/llm/orchestrator.ts` | Compact `display_titles` tool call args in `loadHistory()` |
+| `src/__tests__/lib/token-reduction.test.ts` | 9 new tests (15 total) covering all new summaries and call-arg compression |
+
+### Phase 49: Fix season-specific request/watch functionality broken by token reduction (PRs 184–186)
+
+#### Problem
+PRs 184–186 inadvertently broke three critical behaviours that ensure season-level title cards work correctly:
+
+1. **`plex_search_library` / `plex_check_availability` `llmSummary`** stripped `thumbPath`. In follow-up turns the LLM had no poster URL for Plex results in history, causing title cards without thumbnails.
+
+2. **`overseerr_search` `llmSummary`** stripped `thumbPath`. Same issue: follow-up display calls lacked poster URLs.
+
+3. **`overseerr_get_details` `llmSummary`** replaced the seasons array with only `availableSeasons` (season numbers with "Available" status). Pending and not-requested seasons were invisible to the LLM in subsequent turns, causing it to assign `mediaStatus: "not_requested"` to pending seasons and show a fake Request button — which triggered an Overseerr API error when clicked.
+
+4. **`display_titles` call-arg compression** in `loadHistory()` stripped `thumbPath` along with `summary` and `cast`. Follow-up display calls generated by the LLM in subsequent turns lacked poster URLs even when the LLM had them from the tool result.
+
+#### Impact on season-specific UX
+Each season of a TV show must appear as its own tile with:
+- A working poster thumbnail
+- A Request button that targets only that season (via `overseerrId` + `seasonNumber`)
+- A Watch button that opens that season in Plex (via `plexKey` + `seasonNumber`)
+
+Stripping `thumbPath` prevented thumbnails; dropping pending/not-requested seasons caused incorrect `mediaStatus` and broken Request buttons.
+
+#### Fixes
+
+**Fix 1 — Restore `thumbPath` in Plex `llmSummary`** (`src/lib/tools/plex-tools.ts`)  
+`plexResultsLlmSummary` and `plex_check_availability` llmSummary now include `thumbPath`. Token saving is negligible (~50 chars per result vs. ~300 chars for summary).
+
+**Fix 2 — Restore `thumbPath` in `overseerr_search` `llmSummary`** (`src/lib/tools/overseerr-tools.ts`)  
+`thumbPath` preserved in compact form. Main savings still come from stripping `summary`.
+
+**Fix 3 — All-seasons compact string in `overseerr_get_details` `llmSummary`** (`src/lib/tools/overseerr-tools.ts`)  
+Replaced `availableSeasons: number[]` with `seasons: "S1:available S2:pending S3:not_requested"` compact string. This is slightly more compact than the original JSON array objects while preserving every season's status — the LLM can now set the correct `mediaStatus` per season card in follow-up turns.
+
+**Fix 4 — Keep `thumbPath` in `display_titles` call-arg compression** (`src/lib/llm/orchestrator.ts`)  
+Only `summary` and `cast` are stripped from historical `display_titles` call arguments. `thumbPath` is preserved so the LLM can reuse poster URLs in follow-up display calls without needing to re-search.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/tools/plex-tools.ts` | Restore `thumbPath` to `plexResultsLlmSummary` and `plex_check_availability` llmSummary |
+| `src/lib/tools/overseerr-tools.ts` | Restore `thumbPath` to `overseerr_search` llmSummary; replace `availableSeasons` with all-status compact seasons string in `overseerr_get_details` llmSummary |
+| `src/lib/llm/orchestrator.ts` | Only strip `summary` and `cast` from `display_titles` history args; keep `thumbPath` |
+| `src/__tests__/lib/token-reduction.test.ts` | Update all affected tests to assert correct new behaviour |
+
+---
+
+## Phase 49 — Version bump to 1.1.3-beta.1
+
+Bumped `package.json` version from `1.1.2` to `1.1.3-beta.1` in preparation for the next beta release.
+
+| File | Change |
+|------|--------|
+| `package.json` | Version `1.1.2` → `1.1.3-beta.1` |
+
+---
+
+### Phase 50: LLM Optimizations & Plex Series Episodes Tool (#195, #196, #197)
+
+#### Bug Fixes
+
+- [x] **#196 — Tool calls logging full API responses** — `sonarrFetch()` and `radarrFetch()` were logging `body: JSON.stringify(data).slice(0, 5000)` on every successful response, flooding the logs with large JSON payloads. Removed the `body` field from the `Sonarr API response` and `Radarr API response` info logs. Plex and Overseerr were already correct (no body in success path). — `src/lib/services/sonarr.ts`, `src/lib/services/radarr.ts`
+
+#### Features
+
+- [x] **#197 — Plex series episodes tool with season/episode params** — New `getSeriesEpisodes(plexKey, season?, episode?)` function in `plex.ts` that fetches season or episode data for a TV show:
+  - No season/episode → returns one card per season ordered by season number (with `totalEpisodes` and `watchedEpisodes`); season 0 (specials) excluded
+  - Season only → returns episodes from that season ordered by episode number
+  - Season + episode → returns a single matching episode
+  - Uses the show's `plexKey` (from a prior `plex_search_library` result), fetches `/children` for seasons, then uses the season's `ratingKey` to fetch `/library/metadata/{ratingKey}/children` for episodes.
+
+  New `plex_get_series_episodes` MCP tool registered with `llmSummary` that preserves `seasonNumber`, `episodeNumber`, `totalEpisodes`, and `watchedEpisodes`. Tool description guides the LLM to prefer this tool over `plex_search_library` when the user asks about specific seasons or episodes. — `src/lib/services/plex.ts`, `src/lib/tools/plex-tools.ts`
+
+- [x] **#195 — SSE heartbeat to prevent client disconnects** — Added a `setInterval` that sends `: heartbeat\n\n` (SSE comment) every 15 seconds in `POST /api/chat`. Prevents mobile browsers and proxies from closing the connection while the backend is waiting for the LLM to finish tool execution. Interval is cleared in the `finally` block whether the stream succeeds or errors. — `src/app/api/chat/route.ts`
+
+- [x] **#195 — Parallel tool execution (request batching)** — Changed the sequential `for...of` tool execution loop in `orchestrator.ts` to use `Promise.all`. All tool calls in a single LLM round now execute concurrently rather than one-by-one. For queries that trigger 10 `overseerr_get_details` calls in a single round, the wall-clock time drops from ~10× individual latency to ~1× the slowest call. `tool_call_start` events are emitted for all tools before awaiting results; `tool_result` events and DB saves happen in original order after all results are available. — `src/lib/llm/orchestrator.ts`
+
+#### Tests
+
+- [x] **`src/__tests__/lib/plex.test.ts`** — 7 new `getSeriesEpisodes` tests: season overview (ordered, specials excluded, totalEpisodes/watchedEpisodes populated), episodes from a season (ordered by episode number, showTitle/seasonNumber preserved), single episode lookup, not-found episode, not-found season, and ratingKey URL assertion.
+
+#### MCP Tools table update
+
+| Server | Tools |
+|--------|-------|
+| Plex | plex_search_library, plex_get_on_deck, plex_get_recently_added, plex_check_availability, plex_search_collection, plex_search_by_tag, plex_get_title_tags, **plex_get_series_episodes** |
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/services/sonarr.ts` | Remove `body` from `Sonarr API response` info log (#196) |
+| `src/lib/services/radarr.ts` | Remove `body` from `Radarr API response` info log (#196) |
+| `src/lib/services/plex.ts` | New `getSeriesEpisodes(plexKey, season?, episode?)` function (#197) |
+| `src/lib/tools/plex-tools.ts` | New `plex_get_series_episodes` tool with `llmSummary` (#197) |
+| `src/app/api/chat/route.ts` | SSE heartbeat every 15s via `setInterval` (#195) |
+| `src/lib/llm/orchestrator.ts` | Parallel tool execution via `Promise.all` instead of sequential loop (#195) |
+| `src/__tests__/lib/plex.test.ts` | 7 new `getSeriesEpisodes` tests (#197) |
+
+### Phase 51: Tool History Trimming (token-bloat fix)
+
+#### Problem
+
+Long conversations accumulated tool-calling rounds unboundedly in the OpenAI message history. Even with `llmSummary` compressing individual tool results, each round added ~519 tokens (assistant tool-call message + compressed tool result). At 35+ turns, conversations reached 21k–27k tokens, approaching the TPM limit and causing 429 errors.
+
+#### Fix
+
+Added `trimToolHistory()` in `src/lib/llm/orchestrator.ts`, called from `loadHistory()` after the orphan-repair step.
+
+- Counts the number of assistant messages with `tool_calls` (= number of tool-calling rounds).
+- If the count exceeds `MAX_TOOL_ROUNDS_IN_HISTORY` (5), the oldest rounds are collapsed:
+  - `tool` result messages for dropped call IDs are removed entirely.
+  - The corresponding `assistant` message has its `tool_calls` array stripped and replaced with an inline text note: `[searched: plex_search_library]` (or a comma-separated list for multi-tool rounds).
+  - Any existing assistant text content is preserved prepended to the note.
+- All user messages and plain (non-tool-calling) assistant messages are kept intact.
+
+#### Effect
+
+Token cost of history is now capped. A conversation with 35 tool-calling rounds sends the same history size as one with 5, rather than growing linearly.
+
+#### Tests
+
+- [x] **`src/__tests__/lib/orchestrator.test.ts`** — 6 new `trimToolHistory — pure unit` tests covering: no-op under limit, trimming oldest rounds, `[searched:]` note injection, content preservation, user/plain-assistant survival count, boundary case at limit+1.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/llm/orchestrator.ts` | `trimToolHistory()` + `MAX_TOOL_ROUNDS_IN_HISTORY` exported; called from `loadHistory()` |
+| `src/__tests__/lib/orchestrator.test.ts` | 6 new pure unit tests for `trimToolHistory` |
+
+
+---
+
+### Phase 52: Bug Fixes & UX Polish (#137, #166, #178, #192, #194)
+
+#### Bug Fixes
+
+- [x] **#137 — No trash icon on mobile** — The delete-chat button was only rendered when `hoveredId === conv.id` (JS hover state), which is never triggered on touch devices. Replaced the conditional render with always-visible rendering, using Tailwind responsive classes (`md:opacity-0 md:group-hover:opacity-100`) so the button is always shown on mobile and appears on hover on desktop. Removed the now-unused `hoveredId` state. — `src/components/chat/sidebar.tsx`
+
+- [x] **#194 — Request button drops to next line** — When the Request button changed from "Request" → "Requesting…" (with spinner) or "Requested", the wider content caused it to wrap below "More Info". Wrapped the More Info anchor and Request/Requested elements in a `flex flex-nowrap gap-2` sub-group so they stay on the same line. Added `whitespace-nowrap` to prevent individual button text from wrapping. — `src/components/chat/title-card.tsx`
+
+#### Features / Enhancements
+
+- [x] **#166 — Report Issue button moved to right side** — Moved the Report Issue button from the left of the top toolbar to the right, placing the model selector on the left. This ensures it doesn't overlap the sidebar toggle or model selector dropdown. — `src/app/chat/page.tsx`
+
+- [x] **#178 — LLM date awareness + Overseerr recent-release hints** — Injected the current date (`{{currentDate}}` placeholder, resolved at runtime via `buildCurrentDate()`) into both the text and realtime default system prompts. Added a guideline hint instructing the LLM to search Overseerr with the current year when users ask about new/recent releases, since Overseerr indexes TMDB and is the best source for titles not yet in Plex. — `src/lib/llm/system-prompt.ts`, `src/lib/llm/default-prompt.ts`
+
+- [x] **#192 (1) — Service status indicators update on model change** — `services/status/route.ts` now iterates all enabled LLM endpoints from `llm.endpoints` (one `ServiceStatus` entry per endpoint, named after the endpoint) instead of a single "LLM" entry from the legacy single-config keys. `ServiceStatus` component accepts a `selectedModel` prop and triggers an immediate re-poll via `useEffect` when the model changes. `Sidebar` forwards the new `selectedModel` prop to `ServiceStatus`. `ChatPage` passes `selectedModel` to `Sidebar`. — `src/app/api/services/status/route.ts`, `src/components/chat/service-status.tsx`, `src/components/chat/sidebar.tsx`, `src/app/chat/page.tsx`
+
+- [x] **#192 (2) — Per-endpoint test result state** — In settings, testing one LLM endpoint was storing the result under the shared key `"llm"`, causing both endpoints' UI to show the same result. Changed to use a per-endpoint key `"llm-{endpointId}"` in `testResults` state, and updated the endpoint card UI to read from `testResults[\`llm-${ep.id}\`]`. — `src/app/settings/page.tsx`
+
+- [x] **#192 (3) — Test connection logging** — Added `logger.info` / `logger.warn` calls in the `POST /api/setup/test-connection` route so every test attempt is written to the application log with endpoint URL, service type, model, endpointId, hasApiKey, success, and message fields for troubleshooting failures. — `src/app/api/setup/test-connection/route.ts`
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/components/chat/sidebar.tsx` | Always-visible delete button via CSS opacity; removed `hoveredId` state; new `selectedModel` prop forwarded to `ServiceStatus` (#137, #192) |
+| `src/components/chat/title-card.tsx` | More Info + Request/Requested buttons grouped in `flex-nowrap` sub-container (#194) |
+| `src/app/chat/page.tsx` | Model selector moved left, Report Issue button moved right; `selectedModel` passed to `Sidebar` (#166, #192) |
+| `src/lib/llm/system-prompt.ts` | `buildCurrentDate()` helper; `{{currentDate}}` substitution in `buildSystemPrompt` and `buildRealtimeSystemPrompt` (#178) |
+| `src/lib/llm/default-prompt.ts` | `{{currentDate}}` placeholder added; Overseerr recent-release discovery hint added to both prompts (#178) |
+| `src/app/api/services/status/route.ts` | `checkLlmEndpoints()` checks all enabled endpoints from `llm.endpoints`; returns one entry per endpoint; legacy single-config fallback retained (#192) |
+| `src/components/chat/service-status.tsx` | New `selectedModel` prop; immediate re-poll on model change via `useEffect` (#192) |
+| `src/app/settings/page.tsx` | Per-endpoint test result key `"llm-{endpointId}"`; UI reads from endpoint-specific slot (#192) |
+| `src/app/api/setup/test-connection/route.ts` | `logger.info` / `logger.warn` on test outcome with endpoint/model/result details (#192) |
+
+### Phase 53: Bug Fixes — Issues #203–#207
+
+#### Bug Fixes
+
+- **#203 LLM test diagnostics**: `testLlm` now extracts rich detail from `APIError` (HTTP status, response body, request endpoint, response headers) so failed LLM connection tests surface actionable information instead of just the SDK message string.
+- **#204 Plex 404 on series episodes**: `getSeriesEpisodes` now strips a trailing `/children` suffix from the passed `plexKey` before appending its own `/children`. Plex hub search returns show keys as `/library/metadata/{id}/children`; without the strip the fetch path was `/library/metadata/{id}/children/children` → HTTP 404.
+- **#205 Request button on partial series**: `showRequestButton` in `TitleCard` no longer includes `mediaStatus === "partial"`. Partial means the show is already tracked in Overseerr with new episodes incoming — there is nothing to request.
+- **#206 Episode results in plex_search_library**: `searchLibrary` now skips hub items whose resolved type is `episode`. Individual episodes should be fetched via `plex_get_series_episodes`, not via the search tool.
+
+#### Enhancements
+
+- **#207 Overseerr tool improvements**:
+  - `overseerr_search` description updated: the query must be a specific title — never a year, genre, or keyword.
+  - New `overseerr_discover` tool added: browses trending/upcoming movies or TV by genre via Overseerr's `/discover/movies` and `/discover/tv` endpoints. Accepts `mediaType`, optional `genre` (resolved to TMDB genre ID), and `category` ("trending" or "upcoming").
+  - System prompt updated: direct the LLM to use `overseerr_discover` for genre/trending queries instead of forcing a year/keyword into `overseerr_search`. Clarify that `partial` status means no request button.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/services/test-connection.ts` | Richer `APIError` diagnostic in `testLlm` failure path (#203) |
+| `src/lib/services/plex.ts` | Strip `/children` suffix in `getSeriesEpisodes` (#204); filter episode items in `searchLibrary` (#206) |
+| `src/components/chat/title-card.tsx` | `showRequestButton` no longer true for `partial` status (#205) |
+| `src/lib/services/overseerr.ts` | New `OverseerrDiscoverResult` type + `discover()` function (#207) |
+| `src/lib/tools/overseerr-tools.ts` | Updated `overseerr_search` description; new `overseerr_discover` tool registered (#207) |
+| `src/lib/llm/default-prompt.ts` | Redirect genre/trending queries to `overseerr_discover`; clarify `partial` status (#207) |
+| `src/__tests__/lib/plex.test.ts` | Tests for episode filtering and `/children` key stripping |
+| `src/__tests__/lib/overseerr.test.ts` | Tests for new `discover()` function |
+
+---
+
+### Phase N+1 — Bug fix: season-level plexKey returns no episodes (#211)
+
+#### Bug fixes
+
+- **#211 `plex_get_series_episodes` returns empty when AI reuses a season-level plexKey**: When `plex_get_series_episodes` is called with no `season` param it returns season cards whose `plexKey` values point to the season's `/children` endpoint (e.g. `/library/metadata/5532/children`). If the AI then re-calls the tool with one of those season-level keys *plus* a `season` number, the function was stripping `/children`, fetching that path's children (which are episodes, not seasons), filtering for `type === "season"` — getting an empty array — and returning no results.
+
+  **Fix**: after fetching children, detect whether the plexKey already points at a season (any child has `type === "episode"`). If so, return the episode list directly without trying to locate a sub-season. A `season` or `episode` filter param still narrows the result to a single episode as expected.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/services/plex.ts` | `getSeriesEpisodes` detects season-level key and returns episodes directly (#211) |
+| `src/__tests__/lib/plex.test.ts` | 3 new tests: season-level key with season param, season-level key with episode param, empty season (#211) |
+
+
+---
+
+### Phase N+2 — Release 1.1.3
+
+Bumped `package.json` version from `1.1.3-beta.1` to `1.1.3` for stable release.
