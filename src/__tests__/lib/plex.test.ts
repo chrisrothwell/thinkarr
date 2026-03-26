@@ -733,6 +733,47 @@ describe("getSeriesEpisodes — issue #197", () => {
     // Must NOT double-up to /library/metadata/100/children/children
     expect(firstUrl).not.toContain("/children/children");
   });
+
+  it("returns episodes when a season-level plexKey is passed with a season number — issue #211", async () => {
+    // Simulates the AI reusing the season plexKey (/library/metadata/200/children)
+    // from a prior plex_get_series_episodes result and calling again with season=1.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ MediaContainer: { Metadata: SEASON1_EPISODES } }),
+    }));
+
+    const { getSeriesEpisodes } = await import("@/lib/services/plex");
+    const { results } = await getSeriesEpisodes("/library/metadata/200/children", 1);
+    expect(results).toHaveLength(3);
+    expect(results[0].title).toBe("Pilot");
+    expect(results[0].episodeNumber).toBe(1);
+    expect(results[0].mediaType).toBe("episode");
+  });
+
+  it("returns empty array when season-level plexKey is passed but no episodes present — issue #211", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ MediaContainer: { Metadata: [] } }),
+    }));
+
+    const { getSeriesEpisodes } = await import("@/lib/services/plex");
+    // Empty season — should fall through to normal show path and return empty seasons
+    const { results } = await getSeriesEpisodes("/library/metadata/200", 1);
+    expect(results).toHaveLength(0);
+  });
+
+  it("returns single episode when season-level plexKey is passed with season and episode — issue #211", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ MediaContainer: { Metadata: SEASON1_EPISODES } }),
+    }));
+
+    const { getSeriesEpisodes } = await import("@/lib/services/plex");
+    const { results } = await getSeriesEpisodes("/library/metadata/200/children", 1, 2);
+    expect(results).toHaveLength(1);
+    expect(results[0].title).toBe("Cat's in the Bag");
+    expect(results[0].episodeNumber).toBe(2);
+  });
 });
 
 describe("searchLibrary — episode filtering — issue #206", () => {
