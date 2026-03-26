@@ -344,6 +344,62 @@ export interface PlexTitleTags {
  * When a season or episode key is passed, this function automatically fetches
  * the parent show's metadata instead.
  */
+export interface PlexSeriesEpisodesResult {
+  results: PlexSearchResult[];
+  hasMore: boolean;
+}
+
+/**
+ * Return season or episode data for a Plex TV series.
+ *
+ * - No season/episode: returns one card per season ordered by season number.
+ *   Each card has totalEpisodes and watchedEpisodes from the season metadata.
+ * - season only: returns episodes from that season ordered by episode number.
+ * - season + episode: returns a single matching episode.
+ *
+ * plexKey must be the show-level metadata key (e.g. "/library/metadata/123").
+ */
+export async function getSeriesEpisodes(
+  plexKey: string,
+  season?: number,
+  episode?: number,
+): Promise<PlexSeriesEpisodesResult> {
+  const showPath = plexKey.startsWith("/") ? plexKey : `/${plexKey}`;
+
+  // Fetch the show's direct children (seasons)
+  const seasonsData = await plexFetch(`${showPath}/children`);
+  const rawSeasons = ((seasonsData?.MediaContainer?.Metadata || []) as Record<string, unknown>[])
+    .filter((s) => (s.type as string) === "season" && (s.index as number) > 0)
+    .sort((a, b) => (a.index as number) - (b.index as number));
+
+  if (season === undefined) {
+    // Return one card per season ordered by season number
+    return { results: rawSeasons.map((s) => mapMetadata(s, "season")), hasMore: false };
+  }
+
+  // Find the matching season
+  const matchingSeason = rawSeasons.find((s) => (s.index as number) === season);
+  if (!matchingSeason) {
+    return { results: [], hasMore: false };
+  }
+
+  // The season's ratingKey lets us fetch its children (episodes)
+  const seasonRatingKey = matchingSeason.ratingKey as string | number;
+  const seasonPath = `/library/metadata/${seasonRatingKey}/children`;
+  const episodesData = await plexFetch(seasonPath);
+  const mapped: PlexSearchResult[] = ((episodesData?.MediaContainer?.Metadata || []) as Record<string, unknown>[])
+    .filter((e) => (e.type as string) === "episode")
+    .sort((a, b) => (a.index as number) - (b.index as number))
+    .map((e) => mapMetadata(e, "episode"));
+
+  if (episode !== undefined) {
+    const single = mapped.find((e) => e.episodeNumber === episode);
+    return { results: single ? [single] : [], hasMore: false };
+  }
+
+  return { results: mapped, hasMore: false };
+}
+
 export async function getTagsForTitle(metadataKey: string): Promise<PlexTitleTags> {
   // Plex metadata keys start with /library/metadata/ — strip leading slash for fetch
   const path = metadataKey.startsWith("/") ? metadataKey : `/${metadataKey}`;

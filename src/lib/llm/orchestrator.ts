@@ -199,7 +199,73 @@ function loadHistory(conversationId: string): ChatMessage[] {
     }
   }
 
-  return repaired;
+  return trimToolHistory(repaired, conversationId);
+}
+
+export const MAX_TOOL_ROUNDS_IN_HISTORY = 5;
+
+/**
+ * Cap the number of tool-calling rounds kept in conversation history.
+ * For rounds beyond the most recent MAX_TOOL_ROUNDS_IN_HISTORY, the
+ * tool result messages are dropped and the assistant message's tool_calls
+ * array is replaced with a compact inline note (e.g. "[searched: plex_search_library]").
+ * This prevents unbounded token growth in long conversations while keeping
+ * all assistant text responses intact.
+ */
+export function trimToolHistory(messages: ChatMessage[], conversationId: string): ChatMessage[] {
+  // Find the index of every assistant message that has tool_calls
+  const toolRoundIndices: number[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (msg.role === "assistant" && "tool_calls" in msg && (msg as OpenAI.ChatCompletionAssistantMessageParam).tool_calls?.length) {
+      toolRoundIndices.push(i);
+    }
+  }
+
+  if (toolRoundIndices.length <= MAX_TOOL_ROUNDS_IN_HISTORY) return messages;
+
+  const dropCount = toolRoundIndices.length - MAX_TOOL_ROUNDS_IN_HISTORY;
+  const dropIndices = new Set(toolRoundIndices.slice(0, dropCount));
+
+  // Collect all tool_call_ids that belong to dropped rounds
+  const dropToolCallIds = new Set<string>();
+  for (const idx of dropIndices) {
+    const msg = messages[idx] as OpenAI.ChatCompletionAssistantMessageParam;
+    for (const tc of msg.tool_calls ?? []) dropToolCallIds.add(tc.id);
+  }
+
+  logger.info("Trimming old tool rounds from history", {
+    conversationId,
+    totalRounds: toolRoundIndices.length,
+    droppingRounds: dropCount,
+    keptRounds: MAX_TOOL_ROUNDS_IN_HISTORY,
+  });
+
+  return messages
+    .filter((msg) => {
+      // Drop tool result messages whose call was in a trimmed round
+      if (msg.role === "tool") {
+        const toolMsg = msg as OpenAI.ChatCompletionToolMessageParam;
+        return !dropToolCallIds.has(toolMsg.tool_call_id);
+      }
+      return true;
+    })
+    .map((msg) => {
+      // For assistant messages in trimmed rounds: replace tool_calls with an inline note
+      if (msg.role !== "assistant") return msg;
+      const assistantMsg = msg as OpenAI.ChatCompletionAssistantMessageParam;
+      if (!assistantMsg.tool_calls?.some((tc) => dropToolCallIds.has(tc.id))) return msg;
+      const toolNames = [
+        ...new Set(
+          assistantMsg.tool_calls
+            .filter((tc): tc is OpenAI.ChatCompletionMessageToolCall & { type: "function" } => tc.type === "function")
+            .map((tc) => tc.function.name),
+        ),
+      ].join(", ");
+      const note = `[searched: ${toolNames}]`;
+      const content = assistantMsg.content ? `${assistantMsg.content} ${note}` : note;
+      return { role: "assistant" as const, content };
+    });
 }
 
 /** Save a message to the DB. */
@@ -399,11 +465,17 @@ export async function* orchestrate(
       })),
     });
 
-    // 4. Execute each tool call
+    // 4. Execute tool calls in parallel — multiple tool calls in a single round
+    //    (e.g. 10 overseerr_get_details calls) run concurrently rather than
+    //    sequentially, reducing the total round-trip time significantly.
     const TOOL_TIMEOUT_MS = 30_000;
+
+    // Emit tool_call_start events immediately (before awaiting results)
+    const startedAts: Map<string, number> = new Map();
     for (const tc of toolCalls) {
-      logger.info("Tool call", { conversationId, toolName: tc.function.name, toolCallId: tc.id });
       const startedAt = Date.now();
+      startedAts.set(tc.id, startedAt);
+      logger.info("Tool call", { conversationId, toolName: tc.function.name, toolCallId: tc.id });
       yield {
         type: "tool_call_start",
         toolCallId: tc.id,
@@ -411,26 +483,35 @@ export async function* orchestrate(
         arguments: tc.function.arguments,
         startedAt,
       };
+    }
 
-      let result: string;
-      let isError = false;
-      try {
-        const timeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`Tool call timed out after ${TOOL_TIMEOUT_MS / 1000}s`)), TOOL_TIMEOUT_MS),
-        );
-        result = await Promise.race([
-          executeTool(tc.function.name, tc.function.arguments),
-          timeoutPromise,
-        ]);
-      } catch (e: unknown) {
-        isError = true;
-        const timedOut = e instanceof Error && e.message.startsWith("Tool call timed out");
-        result = JSON.stringify({ error: e instanceof Error ? e.message : "Tool execution failed" });
-        logger.warn("Tool call error", { conversationId, toolName: tc.function.name, toolCallId: tc.id, error: result, timedOut, durationMs: Date.now() - startedAt });
-      }
+    // Execute all tools concurrently
+    const toolResults = await Promise.all(
+      toolCalls.map(async (tc) => {
+        const startedAt = startedAts.get(tc.id) ?? Date.now();
+        let result: string;
+        let isError = false;
+        try {
+          const timeoutPromise = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`Tool call timed out after ${TOOL_TIMEOUT_MS / 1000}s`)), TOOL_TIMEOUT_MS),
+          );
+          result = await Promise.race([
+            executeTool(tc.function.name, tc.function.arguments),
+            timeoutPromise,
+          ]);
+        } catch (e: unknown) {
+          isError = true;
+          const timedOut = e instanceof Error && e.message.startsWith("Tool call timed out");
+          result = JSON.stringify({ error: e instanceof Error ? e.message : "Tool execution failed" });
+          logger.warn("Tool call error", { conversationId, toolName: tc.function.name, toolCallId: tc.id, error: result, timedOut, durationMs: Date.now() - startedAt });
+        }
+        const durationMs = Date.now() - startedAt;
+        return { tc, result: result!, isError, durationMs };
+      }),
+    );
 
-      const durationMs = Date.now() - startedAt;
-
+    // Save results and emit events in original tool_calls order
+    for (const { tc, result, isError, durationMs } of toolResults) {
       // Save tool result to DB (even on error — ensures the API message sequence stays valid)
       try {
         saveMessage(conversationId, "tool", result, {

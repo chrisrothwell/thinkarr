@@ -21,7 +21,7 @@ async function sonarrFetch(path: string) {
     throw new Error(`Sonarr API error: HTTP ${res.status}`);
   }
   const data = await res.json();
-  logger.info("Sonarr API response", { url: fullUrl, status: res.status, body: JSON.stringify(data).slice(0, 5000) });
+  logger.info("Sonarr API response", { url: fullUrl, status: res.status });
   return data;
 }
 

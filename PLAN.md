@@ -1485,3 +1485,79 @@ Bumped `package.json` version from `1.1.2` to `1.1.3-beta.1` in preparation for 
 | File | Change |
 |------|--------|
 | `package.json` | Version `1.1.2` → `1.1.3-beta.1` |
+
+---
+
+### Phase 50: LLM Optimizations & Plex Series Episodes Tool (#195, #196, #197)
+
+#### Bug Fixes
+
+- [x] **#196 — Tool calls logging full API responses** — `sonarrFetch()` and `radarrFetch()` were logging `body: JSON.stringify(data).slice(0, 5000)` on every successful response, flooding the logs with large JSON payloads. Removed the `body` field from the `Sonarr API response` and `Radarr API response` info logs. Plex and Overseerr were already correct (no body in success path). — `src/lib/services/sonarr.ts`, `src/lib/services/radarr.ts`
+
+#### Features
+
+- [x] **#197 — Plex series episodes tool with season/episode params** — New `getSeriesEpisodes(plexKey, season?, episode?)` function in `plex.ts` that fetches season or episode data for a TV show:
+  - No season/episode → returns one card per season ordered by season number (with `totalEpisodes` and `watchedEpisodes`); season 0 (specials) excluded
+  - Season only → returns episodes from that season ordered by episode number
+  - Season + episode → returns a single matching episode
+  - Uses the show's `plexKey` (from a prior `plex_search_library` result), fetches `/children` for seasons, then uses the season's `ratingKey` to fetch `/library/metadata/{ratingKey}/children` for episodes.
+
+  New `plex_get_series_episodes` MCP tool registered with `llmSummary` that preserves `seasonNumber`, `episodeNumber`, `totalEpisodes`, and `watchedEpisodes`. Tool description guides the LLM to prefer this tool over `plex_search_library` when the user asks about specific seasons or episodes. — `src/lib/services/plex.ts`, `src/lib/tools/plex-tools.ts`
+
+- [x] **#195 — SSE heartbeat to prevent client disconnects** — Added a `setInterval` that sends `: heartbeat\n\n` (SSE comment) every 15 seconds in `POST /api/chat`. Prevents mobile browsers and proxies from closing the connection while the backend is waiting for the LLM to finish tool execution. Interval is cleared in the `finally` block whether the stream succeeds or errors. — `src/app/api/chat/route.ts`
+
+- [x] **#195 — Parallel tool execution (request batching)** — Changed the sequential `for...of` tool execution loop in `orchestrator.ts` to use `Promise.all`. All tool calls in a single LLM round now execute concurrently rather than one-by-one. For queries that trigger 10 `overseerr_get_details` calls in a single round, the wall-clock time drops from ~10× individual latency to ~1× the slowest call. `tool_call_start` events are emitted for all tools before awaiting results; `tool_result` events and DB saves happen in original order after all results are available. — `src/lib/llm/orchestrator.ts`
+
+#### Tests
+
+- [x] **`src/__tests__/lib/plex.test.ts`** — 7 new `getSeriesEpisodes` tests: season overview (ordered, specials excluded, totalEpisodes/watchedEpisodes populated), episodes from a season (ordered by episode number, showTitle/seasonNumber preserved), single episode lookup, not-found episode, not-found season, and ratingKey URL assertion.
+
+#### MCP Tools table update
+
+| Server | Tools |
+|--------|-------|
+| Plex | plex_search_library, plex_get_on_deck, plex_get_recently_added, plex_check_availability, plex_search_collection, plex_search_by_tag, plex_get_title_tags, **plex_get_series_episodes** |
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/services/sonarr.ts` | Remove `body` from `Sonarr API response` info log (#196) |
+| `src/lib/services/radarr.ts` | Remove `body` from `Radarr API response` info log (#196) |
+| `src/lib/services/plex.ts` | New `getSeriesEpisodes(plexKey, season?, episode?)` function (#197) |
+| `src/lib/tools/plex-tools.ts` | New `plex_get_series_episodes` tool with `llmSummary` (#197) |
+| `src/app/api/chat/route.ts` | SSE heartbeat every 15s via `setInterval` (#195) |
+| `src/lib/llm/orchestrator.ts` | Parallel tool execution via `Promise.all` instead of sequential loop (#195) |
+| `src/__tests__/lib/plex.test.ts` | 7 new `getSeriesEpisodes` tests (#197) |
+
+### Phase 51: Tool History Trimming (token-bloat fix)
+
+#### Problem
+
+Long conversations accumulated tool-calling rounds unboundedly in the OpenAI message history. Even with `llmSummary` compressing individual tool results, each round added ~519 tokens (assistant tool-call message + compressed tool result). At 35+ turns, conversations reached 21k–27k tokens, approaching the TPM limit and causing 429 errors.
+
+#### Fix
+
+Added `trimToolHistory()` in `src/lib/llm/orchestrator.ts`, called from `loadHistory()` after the orphan-repair step.
+
+- Counts the number of assistant messages with `tool_calls` (= number of tool-calling rounds).
+- If the count exceeds `MAX_TOOL_ROUNDS_IN_HISTORY` (5), the oldest rounds are collapsed:
+  - `tool` result messages for dropped call IDs are removed entirely.
+  - The corresponding `assistant` message has its `tool_calls` array stripped and replaced with an inline text note: `[searched: plex_search_library]` (or a comma-separated list for multi-tool rounds).
+  - Any existing assistant text content is preserved prepended to the note.
+- All user messages and plain (non-tool-calling) assistant messages are kept intact.
+
+#### Effect
+
+Token cost of history is now capped. A conversation with 35 tool-calling rounds sends the same history size as one with 5, rather than growing linearly.
+
+#### Tests
+
+- [x] **`src/__tests__/lib/orchestrator.test.ts`** — 6 new `trimToolHistory — pure unit` tests covering: no-op under limit, trimming oldest rounds, `[searched:]` note injection, content preservation, user/plain-assistant survival count, boundary case at limit+1.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/llm/orchestrator.ts` | `trimToolHistory()` + `MAX_TOOL_ROUNDS_IN_HISTORY` exported; called from `loadHistory()` |
+| `src/__tests__/lib/orchestrator.test.ts` | 6 new pure unit tests for `trimToolHistory` |
