@@ -1689,3 +1689,27 @@ Bumped `package.json` version from `1.1.3-beta.1` to `1.1.3` for stable release.
 | `playwright.docker.config.ts` | Added `title-cards` project (#146) |
 | `tests/e2e/global-setup-docker.ts` | Added `overseerr` to `POST /api/setup` payload; added `API_RATE_LIMIT_MAX=1000` env var to container (#146) |
 | `src/app/chat/page.tsx` | Toolbar left padding conditionally expands to `pl-12` when sidebar is collapsed (#217) |
+
+### Phase N+4 — Voice/Realtime diagnostics & SW phantom-GET fix (#119)
+
+Two connected issues investigated:
+
+- **#119 Realtime 'failed to fetch'**: Server log showed `REALTIME_SESSION_CREATED` but client received "failed to fetch" with no further detail. Root cause unknown without client-side logging. Added phase-tracked `clientLog.error` to `useRealtimeChat.connect()` covering four phases (`session`, `microphone`, `rtc-setup`, `sdp-exchange`). Also added `clientLog.error` for silent tool-call failures. Friendly "Failed to fetch" message handling mirrors `use-chat.ts`.
+
+- **Voice TTS audio not playing (#119)**: POST to `/api/voice/tts` returned 200 with 428 KB `audio/mpeg` but audio did not play; UI returned to idle after ~3 s (exactly the TTS download time). `audio.play()` rejection was silently swallowed — no logging. Most likely cause: browser autoplay policy (`NotAllowedError`) since TTS play is triggered asynchronously after LLM stream completes, not directly from a user gesture. Added `clientLog.error` to `play().catch()`, `audio.onerror`, empty-blob guard, and `!res.ok` path so the next failure will be logged and diagnosable.
+
+- **SW phantom GET → 405**: Browser DevTools showed `anonymous @ sw.js:8` issuing a GET to `/api/voice/tts` ~8 minutes after the TTS POST, returning 405. The service worker (`public/sw.js`) was unconditionally re-issuing every intercepted request via `fetch(event.request)`, including replayed navigations to previously-seen API URLs as GET. Fixed: SW now only intercepts `GET`/`HEAD` non-API requests — the minimum needed for PWA installability.
+
+- **DB data migration for `llm.endpoints`**: `ensureSchemaIntegrity` handles column-level drift but not JSON blob drift inside `app_config`. Endpoints saved before `supportsRealtime`/`supportsVoice`/`realtimeModel` fields were added had those fields missing, causing the realtime UI button to never appear. Added `migrateLlmEndpoints()` that runs at startup after `ensureSchemaIntegrity`, normalises missing fields, and enforces the invariant `supportsRealtime = (realtimeModel !== "")`. 8 unit tests added.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/hooks/use-realtime-chat.ts` | Added `clientLog` with phase tracking for `connect()` failures; added `clientLog.error` in tool-call catch |
+| `src/hooks/use-tts.ts` | Added `clientLog.error` to `play().catch()`, `audio.onerror`, empty-blob guard, and `!res.ok` path |
+| `public/sw.js` | SW now only intercepts `GET`/`HEAD` non-API requests — prevents phantom API replays |
+| `src/lib/db/index.ts` | Added exported `migrateLlmEndpoints()` — startup data migration for `llm.endpoints` JSON blob |
+| `src/__tests__/db/migrate-llm-endpoints.test.ts` | 8 unit tests for `migrateLlmEndpoints` |
+| `.gitignore` | Added `.claude/settings.json` (may contain internal API key) |
+| `package.json` | Version `1.1.4-beta.1` → `1.1.4-beta.2` |
