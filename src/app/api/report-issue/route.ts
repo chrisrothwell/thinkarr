@@ -162,6 +162,8 @@ export async function POST(request: Request) {
 
 **Reported by:** ${session.user.plexUsername}
 **Reported at:** ${reportedAt}
+**Version:** ${version}
+**Base URL:** ${baseUrl}
 **Conversation ID:** \`${conversationId}\`
 
 ---
@@ -179,8 +181,6 @@ ${description.trim()}
 | Title | ${conversation.title ?? "Untitled"} |
 | Created | ${conversation.createdAt instanceof Date ? conversation.createdAt.toISOString() : new Date(conversation.createdAt).toISOString()} |
 | Messages | ${nonSystemMessages.length} |
-| Version | ${version} |
-| Base URL | ${baseUrl} |
 
 ---
 
