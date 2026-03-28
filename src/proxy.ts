@@ -24,6 +24,16 @@ export function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
+  // PWA assets must be publicly accessible so browsers can validate installability
+  // without a session cookie (Chrome's background PWA checker runs unauthenticated)
+  if (
+    pathname === "/manifest.json" ||
+    pathname === "/sw.js" ||
+    /^\/icon[\w.-]*\.(png|svg)$/.test(pathname)
+  ) {
+    return NextResponse.next();
+  }
+
   // Check for session cookie on protected routes
   const hasSession = request.cookies.has(SESSION_COOKIE);
   if (!hasSession) {
