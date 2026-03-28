@@ -122,10 +122,12 @@ export default function ChatPage() {
   const handleNewChat = useCallback(() => {
     setActiveConversationId(null);
     clearMessages();
+    setChatMode("text");
   }, [clearMessages]);
 
   const handleSelectConversation = useCallback((id: string) => {
     setActiveConversationId(id);
+    setChatMode("text");
     if (window.innerWidth < 768) setSidebarCollapsed(true);
   }, []);
 
