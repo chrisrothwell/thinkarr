@@ -26,6 +26,7 @@ export interface TestConnectionResponse {
   message: string;
   capabilities?: {
     supportsVoice: boolean;
+    supportsTts: boolean;
     realtimeModel: string | null;
   };
 }

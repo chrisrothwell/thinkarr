@@ -19,6 +19,7 @@ interface ModelOption {
   label: string;
   supportsVoice?: boolean;
   supportsRealtime?: boolean;
+  ttsVoice?: string;
 }
 
 export default function ChatPage() {
@@ -37,7 +38,11 @@ export default function ChatPage() {
 
   // Chat mode (text / voice / realtime)
   const [chatMode, setChatMode] = useState<ChatMode>("text");
-  const [endpointCaps, setEndpointCaps] = useState({ supportsVoice: false, supportsRealtime: false });
+  const [endpointCaps, setEndpointCaps] = useState({
+    supportsVoice: false,
+    supportsRealtime: false,
+    ttsVoice: "alloy",
+  });
   const [reportIssueOpen, setReportIssueOpen] = useState(false);
 
   const {
@@ -88,6 +93,7 @@ export default function ChatPage() {
             setEndpointCaps({
               supportsVoice: defaultOpt.supportsVoice ?? false,
               supportsRealtime: defaultOpt.supportsRealtime ?? false,
+              ttsVoice: defaultOpt.ttsVoice ?? "alloy",
             });
           }
         }
@@ -116,10 +122,12 @@ export default function ChatPage() {
   const handleNewChat = useCallback(() => {
     setActiveConversationId(null);
     clearMessages();
+    setChatMode("text");
   }, [clearMessages]);
 
   const handleSelectConversation = useCallback((id: string) => {
     setActiveConversationId(id);
+    setChatMode("text");
     if (window.innerWidth < 768) setSidebarCollapsed(true);
   }, []);
 
@@ -180,7 +188,7 @@ export default function ChatPage() {
 
         {/* Top toolbar: model selector (left) + report issue button (right) */}
         {(canChangeModel && models.length > 1) || activeConversationId ? (
-          <div className="flex items-center justify-between border-b px-4 py-1.5">
+          <div className={`flex items-center justify-between border-b py-1.5 ${sidebarCollapsed ? "pl-12 pr-4" : "px-4"}`}>
             {/* Model selector — left side */}
             {canChangeModel && models.length > 1 ? (
               <label className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -194,6 +202,7 @@ export default function ChatPage() {
                     const caps = {
                       supportsVoice: opt?.supportsVoice ?? false,
                       supportsRealtime: opt?.supportsRealtime ?? false,
+                      ttsVoice: opt?.ttsVoice ?? "alloy",
                     };
                     setEndpointCaps(caps);
                     setChatMode((prev) => {
@@ -270,6 +279,8 @@ export default function ChatPage() {
           supportsVoice={endpointCaps.supportsVoice}
           supportsRealtime={endpointCaps.supportsRealtime}
           selectedModel={selectedModel}
+          ttsVoice={endpointCaps.ttsVoice}
+          lastResponse={messages.findLast((m) => m.role === "assistant")?.content ?? ""}
         />
       </main>
 
