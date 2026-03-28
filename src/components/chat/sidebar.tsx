@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -34,14 +34,6 @@ export function Sidebar({
   selectedModel,
 }: SidebarProps) {
   const router = useRouter();
-  const [publicIp, setPublicIp] = useState<string | null>(null);
-
-  useEffect(() => {
-    fetch("https://api.ipify.org?format=json")
-      .then((r) => r.json())
-      .then((d) => setPublicIp(d.ip))
-      .catch(() => {});
-  }, []);
 
   async function handleLogout() {
     await fetch("/api/auth/session", { method: "DELETE" });
@@ -139,7 +131,6 @@ export function Sidebar({
               BETA
             </Badge>
           )}
-          {publicIp && <span>on {publicIp}</span>}
         </div>
       )}
 
