@@ -79,7 +79,7 @@ export async function POST(request: Request) {
       },
       body: JSON.stringify({
         model: ep.realtimeModel,
-        voice: "alloy",
+        voice: ep.ttsVoice || "alloy",
         instructions,
         tools: realtimeTools,
         tool_choice: "auto",
