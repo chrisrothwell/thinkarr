@@ -202,6 +202,18 @@ Build an LLM-powered chat frontend for media management (*arr stack). Users log 
 - [x] **`src/__tests__/lib/plex.test.ts`** — Added tests for `searchByTag` with `tagType` (country, director, default genre) and `getTagsForTitle` (full extraction, empty fields)
 - [x] **`src/__tests__/lib/overseerr.test.ts`** — New: `listRequests` title resolution (movie, TV), seasons list, graceful fallback on fetch failure
 
+### Phase 22: PWA Installability Fixes
+
+#### Bug Fixes
+- [x] **Manifest syntax error blocking PWA install** — Chrome's background PWA installability checker fetches `/manifest.json` without session cookies (unauthenticated context). The auth middleware was intercepting it and redirecting to the login page, so Chrome received HTML instead of JSON and reported "Manifest: Line 1, column 1, Syntax error". `beforeinstallprompt` never fired as a result. Fixed: `/manifest.json`, `/sw.js`, and icon files are now allowed through the middleware without a session cookie. — `src/proxy.ts`
+
+- [x] **Service worker intercepting cross-origin requests** — The SW's fetch handler called `event.respondWith(fetch(event.request))` for all GET/HEAD requests, including cross-origin ones (e.g. `https://api.ipify.org`). When the browser's CSP blocked the re-issued fetch, the SW produced an unhandled rejection and a console error. Fixed: same-origin check added — the SW now only intercepts requests whose origin matches its own. — `public/sw.js`
+
+- [x] **Sidebar fetching public IP via `api.ipify.org`** — `sidebar.tsx` fetched the user's public IP on every page load to display in the footer. This hit the cross-origin SW bug above and is a privacy concern (exposing the user's NAT IP in the UI). Removed entirely; unused `useState`/`useEffect` imports cleaned up. — `src/components/chat/sidebar.tsx`
+
+#### Version
+- Bumped to `1.1.4-beta.4`
+
 ### Phase 19: Orphaned Tool Call Repair (issue #151)
 
 #### Bug Fix
