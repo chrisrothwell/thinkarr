@@ -38,6 +38,8 @@ interface LlmEndpoint {
   enabled: boolean;
   isDefault: boolean;
   supportsVoice: boolean;
+  supportsTts: boolean;
+  ttsVoice: string;
   supportsRealtime: boolean;
   realtimeModel: string;
   realtimeSystemPrompt: string;
@@ -174,6 +176,8 @@ export default function SettingsPage() {
               (d.llmEndpoints || []).map((ep: LlmEndpoint) => ({
                 ...ep,
                 supportsVoice: ep.supportsVoice ?? false,
+                supportsTts: ep.supportsTts ?? false,
+                ttsVoice: ep.ttsVoice ?? "alloy",
                 supportsRealtime: ep.supportsRealtime ?? false,
                 realtimeModel: ep.realtimeModel ?? "",
                 realtimeSystemPrompt: ep.realtimeSystemPrompt ?? "",
@@ -378,7 +382,11 @@ export default function SettingsPage() {
       }));
       // If LLM test succeeded and capabilities were detected, update the endpoint
       if (sectionKey === "llm" && endpointId && result?.success && result?.capabilities) {
-        const caps = result.capabilities as { supportsVoice: boolean; realtimeModel: string | null };
+        const caps = result.capabilities as {
+          supportsVoice: boolean;
+          supportsTts: boolean;
+          realtimeModel: string | null;
+        };
         setEndpoints((prev) =>
           prev.map((ep) => {
             if (ep.id !== endpointId) return ep;
@@ -386,6 +394,7 @@ export default function SettingsPage() {
             return {
               ...ep,
               supportsVoice: caps.supportsVoice,
+              supportsTts: caps.supportsTts,
               supportsRealtime: realtimeModel !== "",
               realtimeModel,
             };
@@ -416,6 +425,8 @@ export default function SettingsPage() {
         enabled: true,
         isDefault: prev.length === 0,
         supportsVoice: false,
+        supportsTts: false,
+        ttsVoice: "alloy",
         supportsRealtime: false,
         realtimeModel: "",
         realtimeSystemPrompt: "",
@@ -824,12 +835,32 @@ export default function SettingsPage() {
                       <span className={`rounded-full px-2 py-0.5 font-medium ${ep.supportsVoice ? "bg-green-500/15 text-green-600 dark:text-green-400" : "bg-muted text-muted-foreground"}`}>
                         {ep.supportsVoice ? "✓ Voice (Whisper)" : "✗ No voice"}
                       </span>
+                      <span className={`rounded-full px-2 py-0.5 font-medium ${ep.supportsTts ? "bg-green-500/15 text-green-600 dark:text-green-400" : "bg-muted text-muted-foreground"}`}>
+                        {ep.supportsTts ? "✓ TTS" : "✗ No TTS"}
+                      </span>
                       <span className={`rounded-full px-2 py-0.5 font-medium ${ep.supportsRealtime ? "bg-green-500/15 text-green-600 dark:text-green-400" : "bg-muted text-muted-foreground"}`}>
                         {ep.supportsRealtime ? `✓ Realtime (${ep.realtimeModel || "configured"})` : "✗ No realtime"}
                       </span>
                     </div>
                     <p className="text-xs text-muted-foreground">Click Test to auto-detect capabilities.</p>
                   </div>
+
+                  {/* TTS voice selector — only shown when TTS is supported */}
+                  {ep.supportsTts && (
+                    <div className="space-y-1.5">
+                      <Label>TTS Voice</Label>
+                      <select
+                        value={ep.ttsVoice || "alloy"}
+                        onChange={(e) => updateEndpoint(ep.id, "ttsVoice", e.target.value)}
+                        className="rounded border bg-background px-2 py-1.5 text-sm w-full"
+                      >
+                        {["alloy", "echo", "fable", "onyx", "nova", "shimmer"].map((v) => (
+                          <option key={v} value={v}>{v.charAt(0).toUpperCase() + v.slice(1)}</option>
+                        ))}
+                      </select>
+                      <p className="text-xs text-muted-foreground">Voice used when reading responses aloud in voice mode.</p>
+                    </div>
+                  )}
 
                   {/* Realtime model override */}
                   <div className="space-y-1.5">

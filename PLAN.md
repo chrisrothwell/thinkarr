@@ -245,6 +245,20 @@ Build an LLM-powered chat frontend for media management (*arr stack). Users log 
 - [x] **`src/__tests__/api/voice-transcribe.test.ts`** — Tests for 401 (unauth), 400 (missing audio), 200 (success with mocked Whisper), 500 (API error)
 - [x] **`src/__tests__/api/realtime-session.test.ts`** — Tests for 401 (unauth), 400 (no realtime support), 400 (unknown endpoint), 200 (success with mock fetch), 502 (OpenAI returns error)
 
+### Phase 20: Voice TTS Read-back (issue #120)
+
+#### Features
+- [x] **TTS read-back in voice mode (#120)** — Non-realtime voice mode now completes a full speak-listen loop: after the LLM response finishes streaming, the assistant's text is automatically read aloud using the OpenAI TTS API (`/v1/audio/speech`). Markdown is stripped before synthesis so asterisks, headings, code fences etc. are not spoken. Input is truncated to 4096 chars (OpenAI limit). `POST /api/voice/tts` mirrors the existing `/api/voice/transcribe` route: requires auth, checks rate limit, resolves the endpoint client via `getLlmClientForEndpoint(modelId)`, and returns raw `audio/mpeg` bytes. — `src/app/api/voice/tts/route.ts` (new)
+- [x] **`useTts` hook** — `speakText(text, voice)` fetches `/api/voice/tts`, decodes the blob to an object URL, plays it with `new Audio()`, and resolves the returned promise when playback ends (or errors). `stop()` immediately pauses and revokes the URL. `speaking: boolean` state lets the UI react to playback. — `src/hooks/use-tts.ts` (new)
+- [x] **`useAudioLevel` hook** — During recording, pipes the live `MediaStream` through a Web Audio `AnalyserNode` (fftSize 64) sampled at ~20 fps (every 3rd rAF frame). Returns an array of 7 normalised bar heights (0–1) for the real-time visualizer. — `src/hooks/use-audio-level.ts` (new)
+- [x] **`useVoiceInput` exposes live stream** — Added `stream: MediaStream | null` state field (set on recording start, cleared on stop) so `VoiceConversation` can pass it to `useAudioLevel`. — `src/hooks/use-voice-input.ts`
+- [x] **`VoiceConversation` component** — Replaces `VoiceInput` in voice mode. Owns a 4-state machine: `idle → listening → processing → speaking → idle`. `idle`: secondary mic button, "Tap to speak". `listening`: destructive mic button + `animate-ping` outer ring + 7 real-time audio level bars (CSS height driven by `useAudioLevel`). `processing`: spinner, "Thinking…". `speaking`: primary `Volume2` icon + `animate-ping` ring, "Speaking…" + "Ask again" button (stops TTS and restarts mic) + "Cancel" link (exits to text mode). No longer auto-switches to text mode after sending. — `src/components/chat/voice-conversation.tsx` (new)
+- [x] **`supportsTts` capability probe** — `probeTtsSupport()` sends `POST /audio/speech` with an empty `input` (triggers 400 from the endpoint, proving the route exists, without generating audio). Runs in parallel with existing `probeVoiceSupport` and `probeRealtimeSupport`. Settings UI shows a `✓ TTS` / `✗ No TTS` badge per endpoint; a TTS voice selector (Alloy/Echo/Fable/Onyx/Nova/Shimmer) is shown when `supportsTts` is true. — `src/lib/services/test-connection.ts`, `src/types/api.ts`, `src/app/settings/page.tsx`
+- [x] **`ttsVoice` field on endpoints** — `LlmEndpointConfig`, `/api/models`, and `endpointCaps` in `chat/page.tsx` all carry `ttsVoice` (default `"alloy"`). Passed through `ChatInput` → `VoiceConversation` → `useTts`. — `src/lib/llm/client.ts`, `src/app/api/models/route.ts`, `src/app/chat/page.tsx`, `src/components/chat/chat-input.tsx`
+
+#### Tests
+- [x] **`src/__tests__/api/voice-tts.test.ts`** — 9 tests: 401 (unauth), 400 (missing text), 400 (empty text), 400 (invalid JSON), 200 success with default voice, 200 success with specified voice, alloy fallback for invalid voice, markdown stripping, 500 on API error
+
 ### Phase 13: React 19 Upgrade Fix
 
 #### Bug Fixes
@@ -294,7 +308,8 @@ src/
 │   │   │   ├── session/route.ts     # POST create ephemeral OpenAI Realtime session (WebRTC)
 │   │   │   └── tool/route.ts        # POST execute tool server-side during realtime session
 │   │   ├── voice/
-│   │   │   └── transcribe/route.ts  # POST audio → Whisper STT → transcript
+│   │   │   ├── transcribe/route.ts  # POST audio → Whisper STT → transcript
+│   │   │   └── tts/route.ts         # POST text + voice → OpenAI TTS → audio/mpeg
 │   │   └── setup/
 │   │       ├── route.ts             # GET status + POST save config
 │   │       └── test-connection/
@@ -323,7 +338,8 @@ src/
 │   │   ├── title-card.tsx           # Rich title card (thumbnail, status, cast, Watch Now / Request / More Info buttons)
 │   │   ├── title-carousel.tsx       # Single card or horizontal snap-scroll carousel with arrow buttons
 │   │   ├── tool-call.tsx            # "Running {Action} on {Service}" + expandable details
-│   │   └── voice-input.tsx          # Mic record/transcribe UI (click-to-toggle, spinner)
+│   │   ├── voice-conversation.tsx   # 4-state voice loop (idle→listening→processing→speaking) with TTS read-back
+│   │   └── voice-input.tsx          # Mic record/transcribe UI (legacy, kept for reference)
 │   └── ui/
 │       ├── avatar.tsx               # Image/fallback avatar (sm/md/lg)
 │       ├── badge.tsx                # 4 variants
@@ -335,11 +351,14 @@ src/
 │       ├── tabs.tsx                 # Tabs/TabsList/TabsTrigger/TabsContent
 │       └── textarea.tsx             # Multi-line text input
 ├── hooks/
+│   ├── use-audio-level.ts           # Web Audio AnalyserNode → 7 normalised bar heights for visualizer
+│   ├── use-silence-detection.ts     # VAD: auto-stops recording on 1.5s silence or 60s hard timeout
 │   ├── use-auto-scroll.ts           # Auto-scroll on new messages, respects manual scroll
 │   ├── use-chat.ts                  # Messages state, SSE streaming, send/stop, model override
 │   ├── use-conversations.ts         # Conversation CRUD (list, create, delete, rename, viewAll)
 │   ├── use-realtime-chat.ts         # WebRTC realtime hook (connect, SDP, data channel, tool calls)
-│   └── use-voice-input.ts           # MediaRecorder hook (record, stop, POST to transcribe)
+│   ├── use-tts.ts                   # OpenAI TTS playback hook (speakText, stop, speaking state)
+│   └── use-voice-input.ts           # MediaRecorder hook (record, stop, POST to transcribe, exposes live stream)
 ├── lib/
 │   ├── auth/
 │   │   └── session.ts               # Session create/validate/destroy + cookie management
@@ -443,6 +462,7 @@ src/
 | GET | /api/settings/logs/[filename] | Read last 500 lines or full log; `?download=true` streams file (admin) |
 | POST | /api/request | Submit Overseerr media request (movie or TV with optional seasons array) |
 | POST | /api/voice/transcribe | Transcribe audio file via Whisper STT (auth required) |
+| POST | /api/voice/tts | Synthesise speech from text via OpenAI TTS (auth required) |
 | POST | /api/realtime/session | Create ephemeral OpenAI Realtime session token for WebRTC (auth required) |
 | POST | /api/realtime/tool | Execute a tool server-side during a realtime voice session (auth required) |
 | GET | /api/plex/avatar/[userId] | Server-side proxy for Plex user avatar images (auth required; fetches stored Plex.tv URL with token) |
