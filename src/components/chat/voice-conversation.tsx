@@ -9,7 +9,9 @@ import { useAudioLevel } from "@/hooks/use-audio-level";
 import { useSilenceDetection } from "@/hooks/use-silence-detection";
 import { useTts } from "@/hooks/use-tts";
 
-type VoicePhase = "idle" | "listening" | "processing" | "speaking";
+// "speaking" is derived from useTts rather than tracked as explicit phase state,
+// so the state machine only needs three stored values.
+type VoicePhase = "idle" | "listening" | "processing";
 
 interface VoiceConversationProps {
   modelId: string;
@@ -34,17 +36,26 @@ export function VoiceConversation({
 }: VoiceConversationProps) {
   const [phase, setPhase] = useState<VoicePhase>("idle");
 
-  const { recording, transcribing, startRecording, stopAndTranscribe, cancelRecording, error, stream } =
+  const { recording, startRecording, stopAndTranscribe, cancelRecording, error, stream } =
     useVoiceInput();
   const bars = useAudioLevel(recording ? stream : null);
   const { speaking, speakText, stop: stopTts } = useTts(modelId);
 
-  // Shared stop-listening logic used by both the manual button and auto-stop
+  // Derive the full 4-value phase for the UI without storing "speaking" in state.
+  // This avoids calling setPhase synchronously inside effects (react-hooks/set-state-in-effect).
+  const effectivePhase = speaking ? "speaking" : phase;
+
+  // Track what we've already spoken so we don't replay the same response
+  const lastSpokenRef = useRef<string>("");
+
+  // Shared stop-listening logic for both the manual button tap and silence-detection auto-stop.
+  // Sets phase to "processing" immediately (before the async transcription) so the UI
+  // transitions away from the listening state without needing a separate effect.
   const handleStopListening = useCallback(async () => {
+    setPhase("processing");
     const text = await stopAndTranscribe(modelId);
     if (text) {
       onSend(text);
-      // phase transitions to "processing" via the transcribing useEffect
     } else {
       setPhase("idle");
     }
@@ -55,17 +66,9 @@ export function VoiceConversation({
     onAutoStop: handleStopListening,
   });
 
-  // Track what we've already spoken so we don't replay the same response
-  const lastSpokenRef = useRef<string>("");
-  // Track previous speaking value to detect the natural end of playback
-  const prevSpeakingRef = useRef(false);
-
-  // Transition from listening → processing when transcription starts
-  useEffect(() => {
-    if (transcribing && phase === "listening") setPhase("processing");
-  }, [transcribing, phase]);
-
-  // When streaming ends and we're waiting for a response, trigger TTS
+  // When the LLM finishes streaming while we're waiting for a response, read it aloud.
+  // setPhase("idle") is called inside the promise .then() callback (async, not synchronous
+  // in the effect body) to satisfy react-hooks/set-state-in-effect.
   useEffect(() => {
     if (
       !streaming &&
@@ -74,18 +77,15 @@ export function VoiceConversation({
       lastResponse !== lastSpokenRef.current
     ) {
       lastSpokenRef.current = lastResponse;
-      setPhase("speaking");
-      speakText(lastResponse, ttsVoice);
+      let cancelled = false;
+      speakText(lastResponse, ttsVoice).then(() => {
+        if (!cancelled) setPhase("idle");
+      });
+      return () => {
+        cancelled = true;
+      };
     }
   }, [streaming, phase, lastResponse, ttsVoice, speakText]);
-
-  // When TTS finishes naturally, return to idle ready for next question
-  useEffect(() => {
-    if (prevSpeakingRef.current && !speaking && phase === "speaking") {
-      setPhase("idle");
-    }
-    prevSpeakingRef.current = speaking;
-  }, [speaking, phase]);
 
   const handleMicToggle = useCallback(async () => {
     if (phase === "idle") {
@@ -98,9 +98,8 @@ export function VoiceConversation({
 
   // Skip current TTS and start a new recording immediately
   const handleAskAgain = useCallback(async () => {
-    // Move phase first so the speaking-end effect doesn't fire and override
-    setPhase("listening");
-    stopTts();
+    setPhase("listening"); // show listening UI before mic opens
+    stopTts();             // sets speaking=false; effectivePhase becomes "listening"
     await startRecording();
   }, [stopTts, startRecording]);
 
@@ -110,9 +109,9 @@ export function VoiceConversation({
     onCancel();
   }, [recording, cancelRecording, stopTts, onCancel]);
 
-  const isListening = phase === "listening";
-  const isProcessing = phase === "processing";
-  const isSpeaking = phase === "speaking";
+  const isListening = effectivePhase === "listening";
+  const isProcessing = effectivePhase === "processing";
+  const isSpeaking = effectivePhase === "speaking";
 
   return (
     <div className="flex flex-col items-center gap-4 py-4">
@@ -158,14 +157,14 @@ export function VoiceConversation({
 
       {/* Status label */}
       <p className="text-sm text-muted-foreground">
-        {phase === "idle" && "Tap to speak"}
-        {phase === "listening" && (
+        {effectivePhase === "idle" && "Tap to speak"}
+        {effectivePhase === "listening" && (
           secondsRemaining !== null
             ? `Sending in ${secondsRemaining}s\u2026`
             : "Listening\u2026 tap to stop"
         )}
-        {phase === "processing" && "Thinking\u2026"}
-        {phase === "speaking" && "Speaking\u2026"}
+        {effectivePhase === "processing" && "Thinking\u2026"}
+        {effectivePhase === "speaking" && "Speaking\u2026"}
       </p>
 
       {/* Action buttons */}

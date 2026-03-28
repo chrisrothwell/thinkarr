@@ -16,10 +16,7 @@ export function useAudioLevel(stream: MediaStream | null): number[] {
   const frameCountRef = useRef(0);
 
   useEffect(() => {
-    if (!stream) {
-      setBars(Array(BAR_COUNT).fill(0));
-      return;
-    }
+    if (!stream) return;
 
     const ctx = new AudioContext();
     const analyser = ctx.createAnalyser();
@@ -57,5 +54,6 @@ export function useAudioLevel(stream: MediaStream | null): number[] {
     };
   }, [stream]);
 
-  return bars;
+  // When stream is null return flat bars directly — avoids setState in effect body
+  return stream ? bars : (Array(BAR_COUNT).fill(0) as number[]);
 }
