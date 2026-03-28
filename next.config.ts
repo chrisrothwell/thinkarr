@@ -26,7 +26,11 @@ const securityHeaders = [
       "script-src 'self' 'unsafe-inline'",
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: https:",
-      "connect-src 'self'",
+      // blob: required for TTS audio (URL.createObjectURL) and voice input (MediaRecorder)
+      // https: required for WebRTC SDP exchange (realtime mode, OpenAI endpoint)
+      "connect-src 'self' blob: https:",
+      // blob: required for TTS audio playback via new Audio(objectUrl)
+      "media-src 'self' blob:",
       "font-src 'self'",
       "frame-ancestors 'none'",
     ].join("; "),

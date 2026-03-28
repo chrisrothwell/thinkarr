@@ -327,5 +327,10 @@ describe("POST /api/report-issue — GitHub integration", () => {
     expect(typeof meta.issueBody).toBe("string");
     expect((meta.issueBody as string)).toContain("What is 2+2?");
     expect((meta.issueBody as string)).toContain(convId);
+    // version and baseUrl must appear in log metadata and issue body
+    expect(typeof meta.version).toBe("string");
+    expect(typeof meta.baseUrl).toBe("string");
+    expect((meta.issueBody as string)).toContain("Version");
+    expect((meta.issueBody as string)).toContain("Base URL");
   });
 });
