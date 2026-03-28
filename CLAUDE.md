@@ -55,6 +55,29 @@ Only the human manages the release flow. All version bumps go through PRs — ne
 7. Merge `dev` → `beta` → `main` via PRs
 8. Apply `v1.1.0` tag to `main` → CI publishes `:latest` Docker image
 
+## Rule: version bump on every release PR
+
+**Always check and bump `package.json` before opening a `dev → beta` or `beta → main` PR.**
+
+### Version bump logic
+
+| Situation | Example current | Bump to |
+|-----------|----------------|---------|
+| Starting a new beta cycle | `1.1.3` | `1.1.4-beta.1` |
+| Additional beta iteration | `1.1.4-beta.1` | `1.1.4-beta.2` |
+| Full release (beta → main) | `1.1.4-beta.2` | `1.1.4` |
+
+### Workflow
+
+1. Compare `package.json` on `dev` vs `beta` (or `beta` vs `main` for a full release).
+2. If the versions match, raise a `claude/bump-version-*` PR to `dev` first and wait for it to be merged before opening the release PR.
+3. When raising the `dev → beta` PR, use `?template=dev-to-beta.md` so the checklist pre-fills.
+
+### Rules
+- Never open a `dev → beta` PR if `package.json` on `dev` still matches `beta`.
+- For a full release: strip the `-beta.x` suffix (e.g. `1.1.4-beta.2` → `1.1.4`) — do not just bump the patch number independently.
+- The bump always goes through a PR — never commit directly to `dev`, `beta`, or `main`.
+
 ## Rule: run local security checks before dev → beta
 
 Before opening a `dev → beta` PR, run all three checks locally and confirm they pass. This avoids wasted CI cycles on the beta pipeline.
