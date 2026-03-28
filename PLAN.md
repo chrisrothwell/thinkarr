@@ -1651,3 +1651,21 @@ Token cost of history is now capped. A conversation with 35 tool-calling rounds 
 ### Phase N+2 — Release 1.1.3
 
 Bumped `package.json` version from `1.1.3-beta.1` to `1.1.3` for stable release.
+
+---
+
+### Phase N+3 — Bug fixes: issues #146 and #217
+
+#### Bug Fixes
+
+- **#146 Docker E2E suite ran only 19 of 26 tests**: `playwright.docker.config.ts` was missing the `title-cards` project, so the 7 tests in `title-cards.spec.ts` never ran against the built Docker image. `global-setup-docker.ts` also omitted the Overseerr configuration from `POST /api/setup`, which title-card tests require for the "Request" flow. Additionally `API_RATE_LIMIT_MAX=1000` was missing from the container's environment (matching the dev/beta setup), preventing the title-card tests from being throttled by the default 60 req/min limit.
+
+- **#217 Model selector overlapped with sidebar-toggle icon**: When the sidebar is collapsed, the `SidebarToggle` button is `fixed left-2` with `w-8` (ends ~40 px from the left edge). The top toolbar had a fixed `px-4` (16 px) left padding, so the model selector label sat directly behind the toggle icon. Fixed by conditionally applying `pl-12 pr-4` to the toolbar when `sidebarCollapsed` is true, giving 48 px of clearance.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `playwright.docker.config.ts` | Added `title-cards` project (#146) |
+| `tests/e2e/global-setup-docker.ts` | Added `overseerr` to `POST /api/setup` payload; added `API_RATE_LIMIT_MAX=1000` env var to container (#146) |
+| `src/app/chat/page.tsx` | Toolbar left padding conditionally expands to `pl-12` when sidebar is collapsed (#217) |

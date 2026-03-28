@@ -180,7 +180,7 @@ export default function ChatPage() {
 
         {/* Top toolbar: model selector (left) + report issue button (right) */}
         {(canChangeModel && models.length > 1) || activeConversationId ? (
-          <div className="flex items-center justify-between border-b px-4 py-1.5">
+          <div className={`flex items-center justify-between border-b py-1.5 ${sidebarCollapsed ? "pl-12 pr-4" : "px-4"}`}>
             {/* Model selector — left side */}
             {canChangeModel && models.length > 1 ? (
               <label className="flex items-center gap-2 text-xs text-muted-foreground">
