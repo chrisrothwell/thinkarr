@@ -19,6 +19,7 @@ interface ChatInputProps {
   selectedModel: string;
   ttsVoice?: string;
   lastResponse?: string;
+  onRealtimeTurn?: (role: "user" | "assistant", text: string) => void;
 }
 
 export function ChatInput({
@@ -33,6 +34,7 @@ export function ChatInput({
   selectedModel,
   ttsVoice = "alloy",
   lastResponse = "",
+  onRealtimeTurn,
 }: ChatInputProps) {
   const [value, setValue] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -121,7 +123,7 @@ export function ChatInput({
             lastResponse={lastResponse}
           />
         ) : chatMode === "realtime" ? (
-          <RealtimeChat modelId={selectedModel} />
+          <RealtimeChat modelId={selectedModel} onTurn={onRealtimeTurn} />
         ) : (
           <div className="flex items-end gap-2">
             <textarea

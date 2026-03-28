@@ -159,6 +159,28 @@ export default function ChatPage() {
     [activeConversationId, createConversation, sendMessage, selectedModel],
   );
 
+  const handleRealtimeTurn = useCallback(
+    async (role: "user" | "assistant", text: string) => {
+      let convId = activeConversationId;
+
+      if (!convId) {
+        const conv = await createConversation();
+        if (!conv) return;
+        convId = conv.id;
+        setActiveConversationId(convId);
+      }
+
+      await fetch(`/api/conversations/${convId}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role, content: text }),
+      });
+
+      loadMessages(convId);
+    },
+    [activeConversationId, createConversation, loadMessages],
+  );
+
   if (userLoading) {
     return (
       <div className="flex h-screen items-center justify-center">
@@ -281,6 +303,7 @@ export default function ChatPage() {
           selectedModel={selectedModel}
           ttsVoice={endpointCaps.ttsVoice}
           lastResponse={messages.findLast((m) => m.role === "assistant")?.content ?? ""}
+          onRealtimeTurn={handleRealtimeTurn}
         />
       </main>
 
