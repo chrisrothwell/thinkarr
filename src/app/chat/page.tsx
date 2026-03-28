@@ -19,6 +19,7 @@ interface ModelOption {
   label: string;
   supportsVoice?: boolean;
   supportsRealtime?: boolean;
+  ttsVoice?: string;
 }
 
 export default function ChatPage() {
@@ -37,7 +38,11 @@ export default function ChatPage() {
 
   // Chat mode (text / voice / realtime)
   const [chatMode, setChatMode] = useState<ChatMode>("text");
-  const [endpointCaps, setEndpointCaps] = useState({ supportsVoice: false, supportsRealtime: false });
+  const [endpointCaps, setEndpointCaps] = useState({
+    supportsVoice: false,
+    supportsRealtime: false,
+    ttsVoice: "alloy",
+  });
   const [reportIssueOpen, setReportIssueOpen] = useState(false);
 
   const {
@@ -88,6 +93,7 @@ export default function ChatPage() {
             setEndpointCaps({
               supportsVoice: defaultOpt.supportsVoice ?? false,
               supportsRealtime: defaultOpt.supportsRealtime ?? false,
+              ttsVoice: defaultOpt.ttsVoice ?? "alloy",
             });
           }
         }
@@ -194,6 +200,7 @@ export default function ChatPage() {
                     const caps = {
                       supportsVoice: opt?.supportsVoice ?? false,
                       supportsRealtime: opt?.supportsRealtime ?? false,
+                      ttsVoice: opt?.ttsVoice ?? "alloy",
                     };
                     setEndpointCaps(caps);
                     setChatMode((prev) => {
@@ -270,6 +277,8 @@ export default function ChatPage() {
           supportsVoice={endpointCaps.supportsVoice}
           supportsRealtime={endpointCaps.supportsRealtime}
           selectedModel={selectedModel}
+          ttsVoice={endpointCaps.ttsVoice}
+          lastResponse={messages.findLast((m) => m.role === "assistant")?.content ?? ""}
         />
       </main>
 

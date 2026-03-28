@@ -7,6 +7,7 @@ export function useVoiceInput() {
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [stream, setStream] = useState<MediaStream | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
@@ -26,9 +27,10 @@ export function useVoiceInput() {
     }
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
-      const mediaRecorder = new MediaRecorder(stream);
+      const liveStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = liveStream;
+      setStream(liveStream);
+      const mediaRecorder = new MediaRecorder(liveStream);
       mediaRecorderRef.current = mediaRecorder;
       chunksRef.current = [];
 
@@ -67,6 +69,7 @@ export function useVoiceInput() {
         // Stop all mic tracks
         streamRef.current?.getTracks().forEach((t) => t.stop());
         streamRef.current = null;
+        setStream(null);
 
         const blob = new Blob(chunksRef.current, { type: "audio/webm" });
         chunksRef.current = [];
@@ -101,5 +104,5 @@ export function useVoiceInput() {
     });
   }, []);
 
-  return { recording, transcribing, startRecording, stopAndTranscribe, error };
+  return { recording, transcribing, startRecording, stopAndTranscribe, error, stream };
 }
