@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback } from "react";
+import { clientLog } from "@/lib/client-logger";
 
 export interface RealtimeTurn {
   role: "user" | "assistant";
@@ -87,7 +88,13 @@ export function useRealtimeChat(modelId: string) {
           });
           // Ask the model to respond
           sendEvent({ type: "response.create" });
-        } catch {
+        } catch (e) {
+          clientLog.error("Realtime tool execution failed", {
+            toolName: name,
+            callId,
+            errorName: e instanceof Error ? e.name : "UnknownError",
+            errorMessage: e instanceof Error ? e.message : "Unknown error",
+          });
           // Send error as tool result
           sendEvent({
             type: "conversation.item.create",
@@ -123,6 +130,7 @@ export function useRealtimeChat(modelId: string) {
       return;
     }
 
+    let phase: "session" | "microphone" | "rtc-setup" | "sdp-exchange" = "session";
     try {
       // 1. Get ephemeral session token from our server
       const sessionRes = await fetch("/api/realtime/session", {
@@ -138,6 +146,7 @@ export function useRealtimeChat(modelId: string) {
       sessionRef.current = session;
 
       // 2. Create RTCPeerConnection
+      phase = "rtc-setup";
       const pc = new RTCPeerConnection();
       pcRef.current = pc;
 
@@ -150,10 +159,12 @@ export function useRealtimeChat(modelId: string) {
       };
 
       // 4. Add local microphone track
+      phase = "microphone";
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       stream.getTracks().forEach((track) => pc.addTrack(track, stream));
 
       // 5. Create data channel for events
+      phase = "rtc-setup";
       const dc = pc.createDataChannel("oai-events");
       dcRef.current = dc;
 
@@ -174,6 +185,7 @@ export function useRealtimeChat(modelId: string) {
       await pc.setLocalDescription(offer);
 
       // 7. Exchange SDP with OpenAI Realtime API
+      phase = "sdp-exchange";
       const sdpRes = await fetch(
         `${session.rtcBaseUrl}/realtime?model=${encodeURIComponent(session.realtimeModel)}`,
         {
@@ -195,6 +207,10 @@ export function useRealtimeChat(modelId: string) {
 
       setConnected(true);
     } catch (e) {
+      const errName = e instanceof Error ? e.name : "UnknownError";
+      const errMsg = e instanceof Error ? e.message : "Unknown error";
+      const online = typeof navigator !== "undefined" ? navigator.onLine : null;
+
       let msg: string;
       if (e instanceof DOMException) {
         if (e.name === "NotAllowedError" || e.name === "PermissionDeniedError") {
@@ -205,9 +221,19 @@ export function useRealtimeChat(modelId: string) {
         } else {
           msg = `Microphone error: ${e.message}`;
         }
+      } else if (errMsg === "Failed to fetch" || errMsg === "NetworkError when attempting to fetch resource.") {
+        msg = online === false ? "Network error: you appear to be offline" : "Network error: could not reach the server";
       } else {
-        msg = e instanceof Error ? e.message : "Connection failed";
+        msg = errMsg;
       }
+
+      clientLog.error("Realtime connect failed", {
+        phase,
+        errorName: errName,
+        errorMessage: errMsg,
+        online,
+        modelId,
+      });
       setError(msg);
       pcRef.current?.close();
       pcRef.current = null;
