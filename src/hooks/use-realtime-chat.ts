@@ -14,7 +14,11 @@ interface SessionData {
   rtcBaseUrl: string;
 }
 
-export function useRealtimeChat(modelId: string) {
+interface UseRealtimeChatOptions {
+  onTurnComplete?: (role: "user" | "assistant", text: string) => void;
+}
+
+export function useRealtimeChat(modelId: string, options: UseRealtimeChatOptions = {}) {
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [transcript, setTranscript] = useState<RealtimeTurn[]>([]);
@@ -24,6 +28,8 @@ export function useRealtimeChat(modelId: string) {
   const dcRef = useRef<RTCDataChannel | null>(null);
   const audioElRef = useRef<HTMLAudioElement | null>(null);
   const sessionRef = useRef<SessionData | null>(null);
+  const onTurnCompleteRef = useRef(options.onTurnComplete);
+  onTurnCompleteRef.current = options.onTurnComplete;
 
   const sendEvent = useCallback((event: Record<string, unknown>) => {
     if (dcRef.current?.readyState === "open") {
@@ -42,7 +48,7 @@ export function useRealtimeChat(modelId: string) {
 
       const type = event.type as string;
 
-      // Accumulate assistant audio transcript
+      // Accumulate assistant audio transcript (deltas for live display)
       if (type === "response.audio_transcript.delta") {
         const delta = event.delta as string;
         setTranscript((prev) => {
@@ -54,11 +60,28 @@ export function useRealtimeChat(modelId: string) {
         });
       }
 
+      // Assistant turn complete — save to conversation
+      if (type === "response.audio_transcript.done") {
+        const text = (event.transcript as string) ?? "";
+        if (text) {
+          onTurnCompleteRef.current?.("assistant", text);
+        }
+      }
+
       // User transcript (speech-to-text from input audio)
       if (type === "conversation.item.input_audio_transcription.completed") {
         const text = event.transcript as string;
         if (text) {
-          setTranscript((prev) => [...prev, { role: "user", text }]);
+          // Insert user turn before the last assistant entry if transcription
+          // arrived after the assistant started responding (common in realtime flow)
+          setTranscript((prev) => {
+            const last = prev[prev.length - 1];
+            if (last?.role === "assistant") {
+              return [...prev.slice(0, -1), { role: "user", text }, last];
+            }
+            return [...prev, { role: "user", text }];
+          });
+          onTurnCompleteRef.current?.("user", text);
         }
       }
 

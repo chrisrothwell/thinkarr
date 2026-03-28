@@ -21,6 +21,8 @@ import {
   Search,
   FileText,
   Download,
+  Play,
+  Square,
 } from "lucide-react";
 import { DEFAULT_SYSTEM_PROMPT, DEFAULT_REALTIME_SYSTEM_PROMPT } from "@/lib/llm/default-prompt";
 import { copyToClipboard } from "@/lib/utils";
@@ -103,6 +105,8 @@ export default function SettingsPage() {
 
   // LLM state (admin only)
   const [endpoints, setEndpoints] = useState<LlmEndpoint[]>([]);
+  const [previewingVoiceEpId, setPreviewingVoiceEpId] = useState<string | null>(null);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
 
   // Plex & Arrs state (admin only)
   const [plexConfig, setPlexConfig] = useState<PlexConfig>({ url: "", token: "" });
@@ -449,6 +453,52 @@ export default function SettingsPage() {
       prev.map((ep) => (ep.id === id ? { ...ep, [field]: value } : ep)),
     );
     setSaved(false);
+  }
+
+  async function previewVoice(ep: LlmEndpoint) {
+    // Stop any in-progress preview
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      previewAudioRef.current = null;
+    }
+    if (previewingVoiceEpId === ep.id) {
+      setPreviewingVoiceEpId(null);
+      return;
+    }
+
+    setPreviewingVoiceEpId(ep.id);
+    try {
+      const res = await fetch("/api/voice/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: "Hi, I'm Thinkarr, your friendly AI assistant.",
+          modelId: ep.id,
+          voice: ep.ttsVoice || "alloy",
+        }),
+      });
+      if (!res.ok) {
+        setPreviewingVoiceEpId(null);
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      previewAudioRef.current = audio;
+      audio.onended = () => {
+        URL.revokeObjectURL(url);
+        setPreviewingVoiceEpId(null);
+        previewAudioRef.current = null;
+      };
+      audio.onerror = () => {
+        URL.revokeObjectURL(url);
+        setPreviewingVoiceEpId(null);
+        previewAudioRef.current = null;
+      };
+      await audio.play();
+    } catch {
+      setPreviewingVoiceEpId(null);
+    }
   }
 
   function removeEndpoint(id: string) {
@@ -849,15 +899,27 @@ export default function SettingsPage() {
                   {ep.supportsTts && (
                     <div className="space-y-1.5">
                       <Label>TTS Voice</Label>
-                      <select
-                        value={ep.ttsVoice || "alloy"}
-                        onChange={(e) => updateEndpoint(ep.id, "ttsVoice", e.target.value)}
-                        className="rounded border bg-background px-2 py-1.5 text-sm w-full"
-                      >
-                        {["alloy", "echo", "fable", "onyx", "nova", "shimmer"].map((v) => (
-                          <option key={v} value={v}>{v.charAt(0).toUpperCase() + v.slice(1)}</option>
-                        ))}
-                      </select>
+                      <div className="flex gap-2">
+                        <select
+                          value={ep.ttsVoice || "alloy"}
+                          onChange={(e) => updateEndpoint(ep.id, "ttsVoice", e.target.value)}
+                          className="rounded border bg-background px-2 py-1.5 text-sm flex-1"
+                        >
+                          {["alloy", "echo", "fable", "onyx", "nova", "shimmer"].map((v) => (
+                            <option key={v} value={v}>{v.charAt(0).toUpperCase() + v.slice(1)}</option>
+                          ))}
+                        </select>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => previewVoice(ep)}
+                          title="Preview this voice"
+                          className="shrink-0"
+                        >
+                          {previewingVoiceEpId === ep.id ? <Square size={14} /> : <Play size={14} />}
+                        </Button>
+                      </div>
                       <p className="text-xs text-muted-foreground">Voice used when reading responses aloud in voice mode.</p>
                     </div>
                   )}

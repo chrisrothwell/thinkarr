@@ -136,6 +136,44 @@ describe("POST /api/realtime/session", () => {
     expect(body.data.realtimeModel).toBe("gpt-4o-realtime-preview-2024-12-17");
   });
 
+  it("passes ttsVoice from endpoint config to the realtime session", async () => {
+    mockGetEndpointConfig.mockReturnValue({
+      id: "ep1",
+      name: "OpenAI",
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "sk-test",
+      model: "gpt-4.1",
+      systemPrompt: "",
+      enabled: true,
+      supportsVoice: true,
+      supportsRealtime: true,
+      realtimeModel: "gpt-4o-realtime-preview-2024-12-17",
+      realtimeSystemPrompt: "",
+      ttsVoice: "nova",
+    });
+    const req = new Request("http://localhost/api/realtime/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ modelId: "ep1:gpt-4.1" }),
+    });
+    await POST(req);
+    const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    const sentBody = JSON.parse(init.body as string);
+    expect(sentBody.voice).toBe("nova");
+  });
+
+  it("falls back to alloy when ttsVoice is not set on the endpoint", async () => {
+    const req = new Request("http://localhost/api/realtime/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ modelId: "ep1:gpt-4.1" }),
+    });
+    await POST(req);
+    const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    const sentBody = JSON.parse(init.body as string);
+    expect(sentBody.voice).toBe("alloy");
+  });
+
   it("returns 400 when endpoint is ChatGPT-compatible but not OpenAI (e.g. Gemini)", async () => {
     mockGetEndpointConfig.mockReturnValue({
       id: "ep-gemini",

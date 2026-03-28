@@ -1,6 +1,6 @@
 {
   "name": "thinkarr",
-  "version": "1.1.4-beta.3",
+  "version": "1.1.4-beta.4",
   "private": true,
   "scripts": {
     "dev": "next dev",
