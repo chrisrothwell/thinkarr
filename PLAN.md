@@ -352,6 +352,7 @@ src/
 │       └── textarea.tsx             # Multi-line text input
 ├── hooks/
 │   ├── use-audio-level.ts           # Web Audio AnalyserNode → 7 normalised bar heights for visualizer
+│   ├── use-silence-detection.ts     # VAD: auto-stops recording on 1.5s silence or 60s hard timeout
 │   ├── use-auto-scroll.ts           # Auto-scroll on new messages, respects manual scroll
 │   ├── use-chat.ts                  # Messages state, SSE streaming, send/stop, model override
 │   ├── use-conversations.ts         # Conversation CRUD (list, create, delete, rename, viewAll)

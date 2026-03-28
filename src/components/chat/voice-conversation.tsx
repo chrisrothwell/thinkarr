@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { useVoiceInput } from "@/hooks/use-voice-input";
 import { useAudioLevel } from "@/hooks/use-audio-level";
+import { useSilenceDetection } from "@/hooks/use-silence-detection";
 import { useTts } from "@/hooks/use-tts";
 
 type VoicePhase = "idle" | "listening" | "processing" | "speaking";
@@ -37,6 +38,22 @@ export function VoiceConversation({
     useVoiceInput();
   const bars = useAudioLevel(recording ? stream : null);
   const { speaking, speakText, stop: stopTts } = useTts(modelId);
+
+  // Shared stop-listening logic used by both the manual button and auto-stop
+  const handleStopListening = useCallback(async () => {
+    const text = await stopAndTranscribe(modelId);
+    if (text) {
+      onSend(text);
+      // phase transitions to "processing" via the transcribing useEffect
+    } else {
+      setPhase("idle");
+    }
+  }, [stopAndTranscribe, modelId, onSend]);
+
+  const { secondsRemaining } = useSilenceDetection({
+    stream: recording ? stream : null,
+    onAutoStop: handleStopListening,
+  });
 
   // Track what we've already spoken so we don't replay the same response
   const lastSpokenRef = useRef<string>("");
@@ -75,15 +92,9 @@ export function VoiceConversation({
       await startRecording();
       if (!error) setPhase("listening");
     } else if (phase === "listening") {
-      const text = await stopAndTranscribe(modelId);
-      if (text) {
-        onSend(text);
-        // phase will move to "processing" via the transcribing effect above
-      } else {
-        setPhase("idle");
-      }
+      await handleStopListening();
     }
-  }, [phase, startRecording, stopAndTranscribe, modelId, onSend, error]);
+  }, [phase, startRecording, error, handleStopListening]);
 
   // Skip current TTS and start a new recording immediately
   const handleAskAgain = useCallback(async () => {
@@ -148,7 +159,11 @@ export function VoiceConversation({
       {/* Status label */}
       <p className="text-sm text-muted-foreground">
         {phase === "idle" && "Tap to speak"}
-        {phase === "listening" && "Listening\u2026 tap to stop"}
+        {phase === "listening" && (
+          secondsRemaining !== null
+            ? `Sending in ${secondsRemaining}s\u2026`
+            : "Listening\u2026 tap to stop"
+        )}
         {phase === "processing" && "Thinking\u2026"}
         {phase === "speaking" && "Speaking\u2026"}
       </p>
