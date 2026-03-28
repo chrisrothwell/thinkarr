@@ -36,11 +36,32 @@ export function useTts(modelId: string) {
         });
 
         if (!res.ok) {
+          const errText = await res.text().catch(() => "(unreadable)");
+          clientLog.error("TTS request failed", {
+            status: res.status,
+            statusText: res.statusText,
+            responseBody: errText.slice(0, 500),
+            modelId,
+            voice,
+          });
           setSpeaking(false);
           return;
         }
 
         const blob = await res.blob();
+        clientLog.info("TTS audio received", {
+          blobSize: blob.size,
+          mimeType: blob.type,
+          modelId,
+          voice,
+        });
+
+        if (blob.size === 0) {
+          clientLog.error("TTS audio blob is empty", { modelId, voice });
+          setSpeaking(false);
+          return;
+        }
+
         const url = URL.createObjectURL(blob);
         objectUrlRef.current = url;
 
@@ -57,7 +78,13 @@ export function useTts(modelId: string) {
             setSpeaking(false);
             resolve();
           };
-          audio.onerror = () => {
+          audio.onerror = (e) => {
+            clientLog.error("TTS audio element error", {
+              errorType: e instanceof ErrorEvent ? e.message : "MediaError",
+              mediaError: audio.error ? { code: audio.error.code, message: audio.error.message } : null,
+              blobSize: blob.size,
+              mimeType: blob.type,
+            });
             if (objectUrlRef.current === url) {
               URL.revokeObjectURL(url);
               objectUrlRef.current = null;
@@ -66,7 +93,15 @@ export function useTts(modelId: string) {
             setSpeaking(false);
             resolve();
           };
-          audio.play().catch(() => {
+          audio.play().catch((e: unknown) => {
+            clientLog.error("TTS audio play() rejected", {
+              errorName: e instanceof Error ? e.name : "UnknownError",
+              errorMessage: e instanceof Error ? e.message : "Unknown error",
+              blobSize: blob.size,
+              mimeType: blob.type,
+              modelId,
+              voice,
+            });
             setSpeaking(false);
             resolve();
           });

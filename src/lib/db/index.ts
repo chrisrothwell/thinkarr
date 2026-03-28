@@ -102,6 +102,79 @@ export function ensureSchemaIntegrity(sqlite: Database.Database): void {
   }
 }
 
+type StoredEndpoint = {
+  id?: string;
+  realtimeModel?: string;
+  realtimeSystemPrompt?: string;
+  supportsVoice?: boolean;
+  supportsRealtime?: boolean;
+  [key: string]: unknown;
+};
+
+/**
+ * Normalizes the `llm.endpoints` JSON blob in app_config to ensure fields
+ * added after initial release (`supportsVoice`, `supportsRealtime`,
+ * `realtimeModel`, `realtimeSystemPrompt`) are present and consistent.
+ *
+ * Key invariant: `supportsRealtime` must equal `realtimeModel !== ""`.
+ * If an endpoint was saved with a realtimeModel but supportsRealtime=false
+ * (or vice-versa), this corrects it on startup without operator intervention.
+ *
+ * Exported for unit testing.
+ */
+export function migrateLlmEndpoints(db: ReturnType<typeof drizzle<typeof schema>>): void {
+  const row = db
+    .select({ value: schema.appConfig.value })
+    .from(schema.appConfig)
+    .where(eq(schema.appConfig.key, "llm.endpoints"))
+    .get();
+
+  if (!row) return;
+
+  let endpoints: StoredEndpoint[];
+  try {
+    endpoints = JSON.parse(row.value) as StoredEndpoint[];
+  } catch {
+    logger.warn("Data migration: llm.endpoints is not valid JSON — skipping normalization");
+    return;
+  }
+
+  if (!Array.isArray(endpoints)) return;
+
+  let dirty = false;
+  const normalized = endpoints.map((ep) => {
+    const result = { ...ep };
+    const realtimeModel = typeof ep.realtimeModel === "string" ? ep.realtimeModel : "";
+    const expectedRealtime = realtimeModel !== "";
+
+    if (ep.realtimeModel === undefined) { result.realtimeModel = ""; dirty = true; }
+    if (ep.realtimeSystemPrompt === undefined) { result.realtimeSystemPrompt = ""; dirty = true; }
+    if (ep.supportsVoice === undefined) { result.supportsVoice = false; dirty = true; }
+    if (ep.supportsRealtime !== expectedRealtime) { result.supportsRealtime = expectedRealtime; dirty = true; }
+
+    return result;
+  });
+
+  if (!dirty) return;
+
+  const changedIds = endpoints
+    .filter((ep, i) => JSON.stringify(ep) !== JSON.stringify(normalized[i]))
+    .map((ep) => ep.id ?? "(unknown)");
+
+  db.insert(schema.appConfig)
+    .values({ key: "llm.endpoints", value: JSON.stringify(normalized), encrypted: false, updatedAt: new Date() })
+    .onConflictDoUpdate({
+      target: schema.appConfig.key,
+      set: { value: JSON.stringify(normalized), updatedAt: new Date() },
+    })
+    .run();
+
+  logger.info("Data migration: normalized llm.endpoints", {
+    endpointCount: normalized.length,
+    correctedEndpoints: changedIds,
+  });
+}
+
 export function getDb() {
   if (!_db) {
     fs.mkdirSync(DB_DIR, { recursive: true });
@@ -178,7 +251,15 @@ export function getDb() {
     ensureSchemaIntegrity(sqlite);
     logger.info("Database ready");
 
-    // ── 5. Auto-generate internal API key ────────────────────────────────────
+    // ── 5. Data migration: normalize llm.endpoints JSON ─────────────────────
+    // Endpoints stored before supportsRealtime/supportsVoice/realtimeModel
+    // fields were introduced may have inconsistent or absent values.
+    // Rule: supportsRealtime = (realtimeModel !== "").
+    // This is a data-level migration — ensureSchemaIntegrity only handles
+    // column-level drift and cannot reach inside JSON config blobs.
+    migrateLlmEndpoints(_db);
+
+    // ── 6. Auto-generate internal API key ────────────────────────────────────
     // Generated once on first boot; the operator copies it from
     // Settings → Logs → Internal API Key and gives it to Claude for
     // the /beta-logs diagnostic command.
