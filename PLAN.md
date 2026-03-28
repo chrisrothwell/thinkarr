@@ -223,6 +223,18 @@ Build an LLM-powered chat frontend for media management (*arr stack). Users log 
 - [x] **`src/__tests__/lib/services/is-openai-endpoint.test.ts`** — Unit tests for `isOpenAIEndpoint`: true for `api.openai.com`, false for Gemini/Anthropic/localhost/invalid URLs
 - [x] **`src/__tests__/api/realtime-session.test.ts`** — Two new cases: Gemini-compatible endpoint (non-openai.com host) and Anthropic endpoint both return HTTP 400 even when `supportsRealtime: true`
 
+### Phase 21: Realtime Mode Persistence & Cleanup (issue #232)
+
+#### Bug Fixes
+- [x] **Realtime turns not saved to conversation history (#232)** — Realtime mode ran in complete isolation from the main conversation system: turns were displayed in a local transcript div but never written to the DB, so they vanished on reload and were excluded from `report-issue` transcripts. Fixed with a new `POST /api/conversations/[id]/messages` endpoint that accepts `{ role, content }` and writes a message row. `useRealtimeChat` now accepts an `onTurnComplete` callback; it fires for each complete turn using `response.audio_transcript.done` (assistant) and `conversation.item.input_audio_transcription.completed` (user). `RealtimeChat` component passes this to the hook via `onTurn` prop. `chat/page.tsx` provides `handleRealtimeTurn`, which creates a conversation on demand (same pattern as `handleSend`) then POSTs each turn and reloads messages so they appear in `MessageList`. — `src/app/api/conversations/[id]/messages/route.ts` (new), `src/hooks/use-realtime-chat.ts`, `src/components/chat/realtime-chat.tsx`, `src/components/chat/chat-input.tsx`, `src/app/chat/page.tsx`
+
+- [x] **User transcript ordering issue (#232)** — In the OpenAI Realtime flow, `response.audio_transcript.delta` events (assistant response) often arrive before `conversation.item.input_audio_transcription.completed` (user speech-to-text). The old code appended the user turn at the end, so the transcript showed assistant text before the user's question. Fixed: when user transcription arrives and the last transcript entry is an assistant turn, the user entry is inserted before it. — `src/hooks/use-realtime-chat.ts`
+
+- [x] **Session leak on navigation (#232)** — Clicking "New Chat", switching conversations, or changing mode all unmount `RealtimeChat` but previously left the WebRTC peer connection and audio element open (no disconnect called). Fixed with a `useEffect` cleanup in `RealtimeChat` that calls `disconnect()` on unmount, covering all exit paths. — `src/components/chat/realtime-chat.tsx`
+
+#### Tests
+- [x] **`src/__tests__/api/conversation-messages.test.ts`** — New: 9 tests covering 401 (unauth), 400 (invalid role), 400 (missing/blank content), 404 (nonexistent conversation), 404 (other user's conversation), 200 user message saved to DB, 200 assistant message saved to DB, whitespace trimming
+
 ### Phase 14: Coordinated Dependency Upgrades (issue #68)
 
 #### Dependency Upgrades
@@ -292,6 +304,7 @@ src/
 │   │   │   ├── route.ts             # GET list (?all=true for admin) / POST create
 │   │   │   └── [id]/
 │   │   │       ├── route.ts         # GET with messages (admin can view any) / DELETE
+│   │   │       ├── messages/route.ts # POST save realtime turn (user or assistant)
 │   │   │       └── title/route.ts   # PATCH rename
 │   │   ├── mcp/route.ts             # GET list tools / POST execute tool (bearer auth)
 │   │   ├── models/route.ts          # GET available models for current user
@@ -444,6 +457,7 @@ src/
 | GET | /api/conversations/[id] | Get conversation with messages (admin can view any) |
 | DELETE | /api/conversations/[id] | Delete conversation |
 | PATCH | /api/conversations/[id]/title | Rename conversation |
+| POST | /api/conversations/[id]/messages | Save a single realtime turn (user or assistant) to a conversation |
 | GET | /api/mcp | List available MCP tools (bearer auth, permission-filtered) |
 | POST | /api/mcp | Execute tool or list tools (bearer auth, permission-checked) |
 | GET | /api/models | Get available models for current user (respects canChangeModel) |

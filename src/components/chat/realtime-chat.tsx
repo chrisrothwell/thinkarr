@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import { Phone, PhoneOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
@@ -7,10 +8,21 @@ import { useRealtimeChat } from "@/hooks/use-realtime-chat";
 
 interface RealtimeChatProps {
   modelId: string;
+  onTurn?: (role: "user" | "assistant", text: string) => void;
 }
 
-export function RealtimeChat({ modelId }: RealtimeChatProps) {
-  const { connected, connecting, transcript, connect, disconnect, error } = useRealtimeChat(modelId);
+export function RealtimeChat({ modelId, onTurn }: RealtimeChatProps) {
+  const { connected, connecting, transcript, connect, disconnect, error } = useRealtimeChat(
+    modelId,
+    { onTurnComplete: onTurn },
+  );
+
+  // Disconnect when the component unmounts (mode change, conversation switch, new chat)
+  useEffect(() => {
+    return () => {
+      disconnect();
+    };
+  }, [disconnect]);
 
   return (
     <div className="flex flex-col gap-3 rounded-xl border border-input bg-card p-4">
