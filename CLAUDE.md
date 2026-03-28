@@ -139,22 +139,32 @@ For every feature or bug fix, check whether a unit or E2E test already covers th
 - Prefer unit tests for logic/API behaviour; prefer E2E tests only for UI interactions that can't be covered at the unit level.
 - If an existing test already covers the behaviour, no new test is needed — but do not remove or weaken existing tests.
 
-## Rule: keep E2E test suites in sync
+## Rule: two E2E tiers — full suite vs. Docker smoke
 
-The E2E suite runs in two configurations:
+The E2E suite is split into two tiers with distinct purposes:
 
-| Config | Command | When used |
-|--------|---------|-----------|
-| `playwright.config.ts` | `npx playwright test` | Dev/CI against the Next.js dev server |
-| `playwright.docker.config.ts` | `npx playwright test --config playwright.docker.config.ts` | CI against the built Docker image |
+| Tier | Config | Spec files | When it runs |
+|------|--------|-----------|--------------|
+| Full suite | `playwright.config.ts` | All `*.spec.ts` files | Every PR — fast dev-server feedback on all features |
+| Docker smoke | `playwright.docker.config.ts` | `smoke-docker.spec.ts` only | Beta CI — verifies the built image boots and infrastructure is wired correctly |
 
-**Both configs must always run the same set of test files.** When adding or removing a spec file, update both configs. Concretely:
+### What the Docker smoke covers (and why)
 
-- Every `projects` entry in `playwright.config.ts` must have a matching entry in `playwright.docker.config.ts` (same `name`, same `testMatch`, same `storageState` if applicable).
-- When adding a new spec that needs a service configured at setup time (e.g. Overseerr, a third-party mock), ensure `tests/e2e/global-setup-docker.ts` passes the same configuration as `tests/e2e/global-setup.ts` does to `POST /api/setup`.
-- Environment variables set in `global-setup.ts` (e.g. `API_RATE_LIMIT_MAX`) must also be passed via `-e` flags in the `docker run` command inside `global-setup-docker.ts`.
+The smoke suite exists to catch Docker-specific failure modes that the dev server can't surface:
 
-The test count reported by both configs must be identical. A mismatch is a bug — fix it before merging.
+- Container boots and serves requests (routing/redirects work)
+- `next build` standalone output is intact (pages render)
+- Env vars are injected correctly (`PLEX_API_BASE`, `SECURE_COOKIES`, `API_RATE_LIMIT_MAX`)
+- Plex OAuth completes and a session cookie is issued
+- A chat round-trip succeeds (LLM `baseUrl` reaches the app)
+
+Application-logic coverage (title cards, rate-limit UI, conversation history, etc.) is **not** repeated in the smoke suite — the same JS runs in both environments, so there is no additional signal in duplicating those tests against Docker.
+
+### Adding new E2E tests
+
+- New feature tests → add to the appropriate `*.spec.ts` file; they run in the full suite only.
+- If a new test exercises a Docker-specific infrastructure concern (new env var, new mount, new entrypoint behaviour), add it to `smoke-docker.spec.ts`.
+- Do **not** add feature/logic tests to `smoke-docker.spec.ts`.
 ## Rule: use /beta-logs before diagnosing runtime issues
 
 When investigating a bug reported against beta (unexpected behaviour,

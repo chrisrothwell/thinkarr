@@ -1,10 +1,14 @@
 import { defineConfig, devices } from "@playwright/test";
-import { DOCKER_BASE_URL, ADMIN_AUTH_FILE } from "./tests/e2e/global-setup-docker";
+import { DOCKER_BASE_URL } from "./tests/e2e/global-setup-docker";
 
 export default defineConfig({
   testDir: "./tests/e2e",
   globalSetup: "./tests/e2e/global-setup-docker.ts",
   globalTeardown: "./tests/e2e/global-teardown-docker.ts",
+
+  // Smoke suite — only smoke-docker.spec.ts runs against the built image.
+  // Full feature coverage lives in playwright.config.ts (dev-server suite).
+  testMatch: /smoke-docker\.spec\.ts/,
 
   workers: 1,
   retries: process.env.CI ? 1 : 0,
@@ -27,38 +31,8 @@ export default defineConfig({
 
   projects: [
     {
-      name: "routing",
-      testMatch: /routing\.spec\.ts/,
+      name: "smoke",
       use: { ...devices["Desktop Chrome"] },
-    },
-    {
-      name: "login",
-      testMatch: /login\.spec\.ts/,
-      use: { ...devices["Desktop Chrome"] },
-    },
-    {
-      name: "chat",
-      testMatch: /chat\.spec\.ts/,
-      use: {
-        ...devices["Desktop Chrome"],
-        storageState: ADMIN_AUTH_FILE,
-      },
-    },
-    {
-      name: "rate-limit",
-      testMatch: /rate-limit\.spec\.ts/,
-      use: {
-        ...devices["Desktop Chrome"],
-        storageState: ADMIN_AUTH_FILE,
-      },
-    },
-    {
-      name: "title-cards",
-      testMatch: /title-cards\.spec\.ts/,
-      use: {
-        ...devices["Desktop Chrome"],
-        storageState: ADMIN_AUTH_FILE,
-      },
     },
   ],
 });
