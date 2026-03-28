@@ -138,6 +138,23 @@ For every feature or bug fix, check whether a unit or E2E test already covers th
 - E2E tests live in `tests/e2e/` and use Playwright.
 - Prefer unit tests for logic/API behaviour; prefer E2E tests only for UI interactions that can't be covered at the unit level.
 - If an existing test already covers the behaviour, no new test is needed — but do not remove or weaken existing tests.
+
+## Rule: keep E2E test suites in sync
+
+The E2E suite runs in two configurations:
+
+| Config | Command | When used |
+|--------|---------|-----------|
+| `playwright.config.ts` | `npx playwright test` | Dev/CI against the Next.js dev server |
+| `playwright.docker.config.ts` | `npx playwright test --config playwright.docker.config.ts` | CI against the built Docker image |
+
+**Both configs must always run the same set of test files.** When adding or removing a spec file, update both configs. Concretely:
+
+- Every `projects` entry in `playwright.config.ts` must have a matching entry in `playwright.docker.config.ts` (same `name`, same `testMatch`, same `storageState` if applicable).
+- When adding a new spec that needs a service configured at setup time (e.g. Overseerr, a third-party mock), ensure `tests/e2e/global-setup-docker.ts` passes the same configuration as `tests/e2e/global-setup.ts` does to `POST /api/setup`.
+- Environment variables set in `global-setup.ts` (e.g. `API_RATE_LIMIT_MAX`) must also be passed via `-e` flags in the `docker run` command inside `global-setup-docker.ts`.
+
+The test count reported by both configs must be identical. A mismatch is a bug — fix it before merging.
 ## Rule: use /beta-logs before diagnosing runtime issues
 
 When investigating a bug reported against beta (unexpected behaviour,
