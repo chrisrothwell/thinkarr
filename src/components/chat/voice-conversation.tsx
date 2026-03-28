@@ -33,7 +33,7 @@ export function VoiceConversation({
 }: VoiceConversationProps) {
   const [phase, setPhase] = useState<VoicePhase>("idle");
 
-  const { recording, transcribing, startRecording, stopAndTranscribe, error, stream } =
+  const { recording, transcribing, startRecording, stopAndTranscribe, cancelRecording, error, stream } =
     useVoiceInput();
   const bars = useAudioLevel(recording ? stream : null);
   const { speaking, speakText, stop: stopTts } = useTts(modelId);
@@ -94,9 +94,10 @@ export function VoiceConversation({
   }, [stopTts, startRecording]);
 
   const handleCancel = useCallback(() => {
+    if (recording) cancelRecording();
     stopTts();
     onCancel();
-  }, [stopTts, onCancel]);
+  }, [recording, cancelRecording, stopTts, onCancel]);
 
   const isListening = phase === "listening";
   const isProcessing = phase === "processing";

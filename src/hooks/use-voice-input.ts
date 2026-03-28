@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { clientLog } from "@/lib/client-logger";
 
 export function useVoiceInput() {
@@ -104,5 +104,26 @@ export function useVoiceInput() {
     });
   }, []);
 
-  return { recording, transcribing, startRecording, stopAndTranscribe, error, stream };
+  const cancelRecording = useCallback(() => {
+    const mediaRecorder = mediaRecorderRef.current;
+    if (mediaRecorder && mediaRecorder.state !== "inactive") {
+      mediaRecorder.onstop = null; // discard any pending transcription
+      mediaRecorder.stop();
+    }
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    setStream(null);
+    chunksRef.current = [];
+    setRecording(false);
+  }, []);
+
+  // Stop the mic if the component using this hook is unmounted while recording
+  useEffect(() => {
+    return () => {
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    };
+  }, []);
+
+  return { recording, transcribing, startRecording, stopAndTranscribe, cancelRecording, error, stream };
 }
