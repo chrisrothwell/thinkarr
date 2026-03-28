@@ -47,8 +47,9 @@ export default async function globalSetup(_: FullConfig) {
   // 1. Start mock servers — they bind to 127.0.0.1 which is reachable from
   //    the container because we use --network=host
   const mocks = await startMockServers();
-  console.log(`[e2e-docker] Mock Plex server:  ${mocks.plexUrl}`);
-  console.log(`[e2e-docker] Mock LLM server:   ${mocks.llmUrl}`);
+  console.log(`[e2e-docker] Mock Plex server:      ${mocks.plexUrl}`);
+  console.log(`[e2e-docker] Mock LLM server:       ${mocks.llmUrl}`);
+  console.log(`[e2e-docker] Mock Overseerr server: ${mocks.overseerrUrl}`);
 
   // 2. Isolated config dir on the host, mounted into the container as /config
   const configDir = mkdtempSync(path.join(tmpdir(), "thinkarr-e2e-docker-"));
@@ -64,6 +65,7 @@ export default async function globalSetup(_: FullConfig) {
       `-e PLEX_API_BASE=${mocks.plexUrl}`,
       "-e SECURE_COOKIES=false",
       "-e NEXT_TELEMETRY_DISABLED=1",
+      "-e API_RATE_LIMIT_MAX=1000",
       `-e PUID=${TEST_PUID}`,
       `-e PGID=${TEST_PGID}`,
       `-v ${configDir}:/config`,
@@ -122,7 +124,7 @@ export default async function globalSetup(_: FullConfig) {
   }
   console.log("[e2e-docker] Admin session created");
 
-  // 8. Configure the app via POST /api/setup (LLM + Plex) — authenticated as admin
+  // 8. Configure the app via POST /api/setup (LLM + Plex + Overseerr) — authenticated as admin
   const setupRes = await apiCtx.post("/api/setup", {
     data: {
       llm: {
@@ -133,6 +135,10 @@ export default async function globalSetup(_: FullConfig) {
       plex: {
         url: mocks.plexUrl,
         token: "e2e-plex-admin-token",
+      },
+      overseerr: {
+        url: mocks.overseerrUrl,
+        apiKey: "e2e-overseerr-key",
       },
     },
   });
