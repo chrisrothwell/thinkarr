@@ -31,13 +31,12 @@ export function useSilenceDetection({
   // Keep a stable ref to the latest callback so the rAF loop never captures
   // a stale closure without needing to be recreated.
   const onAutoStopRef = useRef(onAutoStop);
-  onAutoStopRef.current = onAutoStop;
+  useEffect(() => {
+    onAutoStopRef.current = onAutoStop;
+  }, [onAutoStop]);
 
   useEffect(() => {
-    if (!stream) {
-      setSecondsRemaining(null);
-      return;
-    }
+    if (!stream) return;
 
     const ctx = new AudioContext();
     const analyser = ctx.createAnalyser();
@@ -103,5 +102,6 @@ export function useSilenceDetection({
     };
   }, [stream]);
 
-  return { secondsRemaining };
+  // When stream is null return null directly — avoids setState in effect body
+  return { secondsRemaining: stream ? secondsRemaining : null };
 }
