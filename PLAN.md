@@ -1736,3 +1736,18 @@ Also added `blob: https:` to `connect-src`:
 |------|--------|
 | `next.config.ts` | Added `media-src 'self' blob:` and extended `connect-src` with `blob: https:` |
 | `package.json` | Version `1.1.4-beta.2` → `1.1.4-beta.3` |
+
+### Phase N+6 — Report Issue: add version and base URL (#227)
+
+Added `version` (`NEXT_PUBLIC_APP_VERSION`) and `baseUrl` (derived from `x-forwarded-proto` + `host` request headers) to:
+- The GitHub issue body (Conversation Details table)
+- The `report-issue: report logged` and `report-issue: GitHub issue created` log entries
+
+This lets Claude immediately identify which deployment and version a user report came from without needing to ask.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/app/api/report-issue/route.ts` | Added `version` and `baseUrl` to issue body and both log entries |
+| `src/__tests__/api/report-issue.test.ts` | Extended existing test to assert version/baseUrl present in log metadata and issue body |
