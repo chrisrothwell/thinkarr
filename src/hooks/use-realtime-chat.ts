@@ -1,12 +1,7 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { clientLog } from "@/lib/client-logger";
-
-export interface RealtimeTurn {
-  role: "user" | "assistant";
-  text: string;
-}
 
 interface SessionData {
   clientSecret: string;
@@ -15,21 +10,98 @@ interface SessionData {
 }
 
 interface UseRealtimeChatOptions {
+  /** Called when a user or assistant turn completes (transcript text). */
   onTurnComplete?: (role: "user" | "assistant", text: string) => void;
+  /**
+   * Active conversation ID. When provided, tool calls and their results are
+   * persisted to the conversation so they appear in the main chat window.
+   */
+  conversationId?: string | null;
+  /**
+   * Called after each tool result is saved to the DB so the caller can
+   * reload the message list and render the updated tool cards.
+   */
+  onMessagesUpdated?: () => void;
 }
 
 export function useRealtimeChat(modelId: string, options: UseRealtimeChatOptions = {}) {
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
-  const [transcript, setTranscript] = useState<RealtimeTurn[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const dcRef = useRef<RTCDataChannel | null>(null);
   const audioElRef = useRef<HTMLAudioElement | null>(null);
   const sessionRef = useRef<SessionData | null>(null);
+  const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+
+  // Stable refs so event-handler closures always read the latest values
+  // without needing them as effect / callback dependencies.
+  const connectedRef = useRef(false);
+  connectedRef.current = connected;
   const onTurnCompleteRef = useRef(options.onTurnComplete);
   onTurnCompleteRef.current = options.onTurnComplete;
+  const conversationIdRef = useRef(options.conversationId);
+  conversationIdRef.current = options.conversationId;
+  const onMessagesUpdatedRef = useRef(options.onMessagesUpdated);
+  onMessagesUpdatedRef.current = options.onMessagesUpdated;
+
+  // Set when the user explicitly calls disconnect() so that dc.onclose /
+  // pc.onconnectionstatechange know not to show an error message.
+  const intentionalDisconnectRef = useRef(false);
+
+  // ---------------------------------------------------------------------------
+  // Wake Lock helpers
+  // ---------------------------------------------------------------------------
+
+  const acquireWakeLock = useCallback(async () => {
+    if (!("wakeLock" in navigator)) return;
+    try {
+      wakeLockRef.current = await navigator.wakeLock.request("screen");
+    } catch {
+      // Wake lock denied or not available — not critical, session continues
+    }
+  }, []);
+
+  const releaseWakeLock = useCallback(() => {
+    if (wakeLockRef.current) {
+      wakeLockRef.current.release().catch(() => {});
+      wakeLockRef.current = null;
+    }
+  }, []);
+
+  // Re-acquire the wake lock when the page becomes visible again — the browser
+  // auto-releases it when the page is hidden (screen off, app backgrounded).
+  // If the session survived the background period, keep the screen on.
+  useEffect(() => {
+    const handleVisibilityChange = async () => {
+      if (document.visibilityState === "visible" && connectedRef.current) {
+        await acquireWakeLock();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [acquireWakeLock]);
+
+  // ---------------------------------------------------------------------------
+  // Unexpected-disconnect handler (shared between pc and dc events)
+  // ---------------------------------------------------------------------------
+
+  const handleUnexpectedDisconnect = useCallback(() => {
+    if (intentionalDisconnectRef.current) return;
+    releaseWakeLock();
+    pcRef.current?.close();
+    pcRef.current = null;
+    dcRef.current = null;
+    sessionRef.current = null;
+    setConnected(false);
+    setConnecting(false);
+    setError("Connection lost. Tap Connect to start a new session.");
+  }, [releaseWakeLock]);
+
+  // ---------------------------------------------------------------------------
+  // Data channel message handler
+  // ---------------------------------------------------------------------------
 
   const sendEvent = useCallback((event: Record<string, unknown>) => {
     if (dcRef.current?.readyState === "open") {
@@ -48,19 +120,7 @@ export function useRealtimeChat(modelId: string, options: UseRealtimeChatOptions
 
       const type = event.type as string;
 
-      // Accumulate assistant audio transcript (deltas for live display)
-      if (type === "response.audio_transcript.delta") {
-        const delta = event.delta as string;
-        setTranscript((prev) => {
-          const last = prev[prev.length - 1];
-          if (last?.role === "assistant") {
-            return [...prev.slice(0, -1), { ...last, text: last.text + delta }];
-          }
-          return [...prev, { role: "assistant", text: delta }];
-        });
-      }
-
-      // Assistant turn complete — save to conversation
+      // Assistant turn complete — save to conversation and refresh message list
       if (type === "response.audio_transcript.done") {
         const text = (event.transcript as string) ?? "";
         if (text) {
@@ -72,15 +132,6 @@ export function useRealtimeChat(modelId: string, options: UseRealtimeChatOptions
       if (type === "conversation.item.input_audio_transcription.completed") {
         const text = event.transcript as string;
         if (text) {
-          // Insert user turn before the last assistant entry if transcription
-          // arrived after the assistant started responding (common in realtime flow)
-          setTranscript((prev) => {
-            const last = prev[prev.length - 1];
-            if (last?.role === "assistant") {
-              return [...prev.slice(0, -1), { role: "user", text }, last];
-            }
-            return [...prev, { role: "user", text }];
-          });
           onTurnCompleteRef.current?.("user", text);
         }
       }
@@ -90,17 +141,21 @@ export function useRealtimeChat(modelId: string, options: UseRealtimeChatOptions
         const callId = event.call_id as string;
         const name = event.name as string;
         const argsStr = event.arguments as string;
+        const conversationId = conversationIdRef.current;
 
         try {
           const res = await fetch("/api/realtime/tool", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ toolName: name, toolArgs: JSON.parse(argsStr || "{}") }),
+            body: JSON.stringify({
+              toolName: name,
+              toolArgs: JSON.parse(argsStr || "{}"),
+              ...(conversationId ? { conversationId, callId } : {}),
+            }),
           });
           const data = await res.json();
           const output = data.success ? data.data.result : JSON.stringify({ error: data.error });
 
-          // Send tool result back to the realtime session
           sendEvent({
             type: "conversation.item.create",
             item: {
@@ -109,8 +164,11 @@ export function useRealtimeChat(modelId: string, options: UseRealtimeChatOptions
               output,
             },
           });
-          // Ask the model to respond
           sendEvent({ type: "response.create" });
+
+          if (conversationId) {
+            onMessagesUpdatedRef.current?.();
+          }
         } catch (e) {
           clientLog.error("Realtime tool execution failed", {
             toolName: name,
@@ -118,7 +176,6 @@ export function useRealtimeChat(modelId: string, options: UseRealtimeChatOptions
             errorName: e instanceof Error ? e.name : "UnknownError",
             errorMessage: e instanceof Error ? e.message : "Unknown error",
           });
-          // Send error as tool result
           sendEvent({
             type: "conversation.item.create",
             item: {
@@ -134,13 +191,16 @@ export function useRealtimeChat(modelId: string, options: UseRealtimeChatOptions
     [sendEvent],
   );
 
+  // ---------------------------------------------------------------------------
+  // Connect / disconnect
+  // ---------------------------------------------------------------------------
+
   const connect = useCallback(async () => {
     if (connected || connecting) return;
     setConnecting(true);
     setError(null);
-    setTranscript([]);
+    intentionalDisconnectRef.current = false;
 
-    // Microphone access requires a secure context (HTTPS or localhost)
     if (!window.isSecureContext) {
       setError("Microphone access requires a secure connection (HTTPS). Please reload over HTTPS.");
       setConnecting(false);
@@ -155,7 +215,6 @@ export function useRealtimeChat(modelId: string, options: UseRealtimeChatOptions
 
     let phase: "session" | "microphone" | "rtc-setup" | "sdp-exchange" = "session";
     try {
-      // 1. Get ephemeral session token from our server
       const sessionRes = await fetch("/api/realtime/session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -168,12 +227,10 @@ export function useRealtimeChat(modelId: string, options: UseRealtimeChatOptions
       const session = sessionData.data as SessionData;
       sessionRef.current = session;
 
-      // 2. Create RTCPeerConnection
       phase = "rtc-setup";
       const pc = new RTCPeerConnection();
       pcRef.current = pc;
 
-      // 3. Set up remote audio playback
       const audioEl = new Audio();
       audioEl.autoplay = true;
       audioElRef.current = audioEl;
@@ -181,15 +238,27 @@ export function useRealtimeChat(modelId: string, options: UseRealtimeChatOptions
         audioEl.srcObject = e.streams[0];
       };
 
-      // 4. Add local microphone track
+      // Detect unexpected connection drops (screen off, network loss, server timeout).
+      // "disconnected" can self-recover so we only act on definitive states.
+      pc.onconnectionstatechange = () => {
+        if (pc.connectionState === "failed" || pc.connectionState === "closed") {
+          handleUnexpectedDisconnect();
+        }
+      };
+
       phase = "microphone";
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       stream.getTracks().forEach((track) => pc.addTrack(track, stream));
 
-      // 5. Create data channel for events
       phase = "rtc-setup";
       const dc = pc.createDataChannel("oai-events");
       dcRef.current = dc;
+
+      // How many individual user/assistant messages to inject as history.
+      // 10 = 5 back-and-forth exchanges, mirroring MAX_TOOL_ROUNDS_IN_HISTORY
+      // in the text orchestrator — enough for immediate context without
+      // front-loading the realtime session with a large token payload.
+      const REALTIME_HISTORY_TURNS = 10;
 
       dc.onopen = () => {
         // Enable input audio transcription so user speech is surfaced as text
@@ -199,15 +268,66 @@ export function useRealtimeChat(modelId: string, options: UseRealtimeChatOptions
             input_audio_transcription: { model: "whisper-1" },
           },
         });
+
+        // Inject recent conversation history so the model has context when
+        // switching from text or voice mode into realtime.
+        const convId = conversationIdRef.current;
+        if (convId) {
+          void (async () => {
+            try {
+              const res = await fetch(`/api/conversations/${convId}`);
+              const data = (await res.json()) as {
+                success: boolean;
+                data?: { messages?: { role: string; content: string | null }[] };
+              };
+              if (!data.success) return;
+
+              const allMessages = data.data?.messages ?? [];
+
+              // Keep only user and assistant turns that have text content.
+              // Tool messages and pure tool-call assistant entries (content: null)
+              // are not representable as Realtime API conversation items.
+              const textTurns = allMessages.filter(
+                (m) =>
+                  (m.role === "user" || m.role === "assistant") &&
+                  typeof m.content === "string" &&
+                  m.content.trim() !== "",
+              );
+
+              const recent = textTurns.slice(-REALTIME_HISTORY_TURNS);
+
+              for (const msg of recent) {
+                sendEvent({
+                  type: "conversation.item.create",
+                  item: {
+                    type: "message",
+                    role: msg.role,
+                    content: [
+                      {
+                        // Realtime API uses "input_text" for user turns, "text" for assistant
+                        type: msg.role === "user" ? "input_text" : "text",
+                        text: msg.content,
+                      },
+                    ],
+                  },
+                });
+              }
+            } catch {
+              // History injection is best-effort — session continues without it
+            }
+          })();
+        }
       };
 
       dc.onmessage = (e) => handleDataChannelMessage(e.data as string);
 
-      // 6. Create SDP offer
+      // Data channel close is the most reliable signal that the session has ended
+      // (fires on network loss, server timeout, and screen-off on mobile).
+      dc.onclose = () => handleUnexpectedDisconnect();
+
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
-      // 7. Exchange SDP with OpenAI Realtime API
       phase = "sdp-exchange";
       const sdpRes = await fetch(
         `${session.rtcBaseUrl}/realtime?model=${encodeURIComponent(session.realtimeModel)}`,
@@ -229,6 +349,8 @@ export function useRealtimeChat(modelId: string, options: UseRealtimeChatOptions
       await pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
 
       setConnected(true);
+      // Keep the screen on for the duration of the session
+      await acquireWakeLock();
     } catch (e) {
       const errName = e instanceof Error ? e.name : "UnknownError";
       const errMsg = e instanceof Error ? e.message : "Unknown error";
@@ -263,9 +385,11 @@ export function useRealtimeChat(modelId: string, options: UseRealtimeChatOptions
     } finally {
       setConnecting(false);
     }
-  }, [modelId, connected, connecting, handleDataChannelMessage, sendEvent]);
+  }, [modelId, connected, connecting, handleDataChannelMessage, sendEvent, acquireWakeLock, handleUnexpectedDisconnect]);
 
   const disconnect = useCallback(() => {
+    intentionalDisconnectRef.current = true;
+    releaseWakeLock();
     dcRef.current?.close();
     pcRef.current?.close();
     if (audioElRef.current) {
@@ -276,7 +400,7 @@ export function useRealtimeChat(modelId: string, options: UseRealtimeChatOptions
     sessionRef.current = null;
     setConnected(false);
     setConnecting(false);
-  }, []);
+  }, [releaseWakeLock]);
 
-  return { connected, connecting, transcript, connect, disconnect, error };
+  return { connected, connecting, connect, disconnect, error };
 }

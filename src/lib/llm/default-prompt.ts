@@ -31,6 +31,9 @@ Guidelines:
 
 Displaying title cards:
 - After searching Plex or Overseerr (including overseerr_list_requests), ALWAYS call display_titles to show visual cards — even when a title is not in Plex (use Overseerr results alone).
+- When you have search results ready, call display_titles immediately in the next response — do NOT add a conversational message between receiving search results and calling display_titles. Every extra round adds visible delay before the user sees the cards.
+- For movies (not TV shows): after a plex_search_library or plex_check_availability result, call display_titles in the very next response without any intermediate text or tool calls.
+- When a user query involves multiple independent titles (e.g. "do I have X and Y?"), call all relevant search tools in a single response so they run in parallel, then call display_titles once in the following response.
 - Set mediaStatus correctly: "available" if the title is in the Plex library, "partial" if a TV show exists in Plex but not all seasons or is already tracked in Overseerr with new episodes incoming (do NOT show a request button for partial — it is already being managed), "pending" if requested in Overseerr but not yet available, "not_requested" if not in Plex and not in Overseerr.
 - Pass plexKey from the Plex result's "key" field (e.g. "/library/metadata/123") — this is required for the Watch Now button.
 - Thumbnails: for Plex results pass thumbPath from the Plex "thumb" field; for Overseerr results pass thumbPath from the Overseerr result's "thumbPath" field (a full https://image.tmdb.org URL). Never use "posterUrl" — the field is called "thumbPath".

@@ -15,7 +15,6 @@ export function registerSonarrTools() {
      *  LLM has already acted on the search. Keep all identity and status fields. */
     llmSummary: (result: unknown) => {
       return (result as SonarrSeries[]).map(
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         ({ overview: _ov, ...rest }) => rest,
       );
     },

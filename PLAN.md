@@ -1777,3 +1777,105 @@ This lets Claude immediately identify which deployment and version a user report
 |------|--------|
 | `src/app/api/report-issue/route.ts` | Added `version` and `baseUrl` to issue body and both log entries |
 | `src/__tests__/api/report-issue.test.ts` | Extended existing test to assert version/baseUrl present in log metadata and issue body |
+
+### Phase N+7 — Fix premature streaming text and speed up title card display (#239)
+
+Two issues reported in beta via the user feedback tool (#239):
+
+1. **Premature text before tool results**: The orchestrator was yielding `text_delta` events to the client as soon as each streamed chunk arrived. When the LLM emitted text *and* tool calls in the same response (e.g. "I'm not seeing any results…" alongside a `plex_search_library` call), the speculative answer appeared in the chat before the tool ran — then the real answer appeared after. The transcript in #239 shows this clearly for the "When is the next apprentice?" query.
+
+   **Fix**: Text deltas are now buffered during streaming and only yielded to the client *after* the full response is consumed. If tool calls were also present in that response, the buffered text is silently discarded (it was a premature guess). If no tool calls were present, the accumulated text is yielded as a single `text_delta` event before `done`. The text is still saved to the DB and forwarded to the LLM context regardless, so history and the next round behave correctly.
+
+2. **Slow title card display**: Between receiving search results and calling `display_titles`, the LLM sometimes emitted an intermediate conversational message (e.g. "Here are the results!") which added a full LLM round of latency before cards appeared.
+
+   **Fix**: Added explicit instructions to `DEFAULT_SYSTEM_PROMPT` telling the LLM to call `display_titles` immediately in the next response after receiving search results — no intermediate text — and to batch all searches for multiple independent titles in a single round so they execute in parallel.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/llm/orchestrator.ts` | Buffer text deltas; suppress premature text when tool calls are present in the same LLM response |
+| `src/lib/llm/default-prompt.ts` | New `display_titles` latency guidance: no intermediate rounds, parallel batching for multi-title queries |
+| `src/__tests__/lib/orchestrator.test.ts` | 2 new tests: suppresses text when tool calls present; yields text when no tool calls |
+
+### Phase N+8 — Realtime voice: unify transcript into main chat window (#239 follow-up)
+
+Two further improvements requested following the #239 diagnosis:
+
+1. **Title cards and tool results in the voice chat window**: In realtime/voice mode, `display_titles` was filtered out of the tool list and tool call results were never persisted to the DB, so the main `MessageList` never rendered them. Every tool call and its result is now saved to the conversation DB (assistant row with `toolCalls` JSON + tool row with `toolCallId`). After each tool completes, the hook fires `onMessagesUpdated` so the message list reloads and renders title cards, tool call status widgets, etc. exactly as it does for text chat. Audio remains clean — the realtime system prompt already instructs the model to summarise results in speech without reading raw JSON.
+
+2. **Removed the ephemeral transcript widget**: `RealtimeChat` previously rendered a bounded scroll area with live character-by-character turn text that duplicated the main `MessageList`. This is removed. All interactions (user speech, assistant responses, tool results, title cards) appear exclusively in the main chat window. The `RealtimeChat` component now only renders the connection status and connect/end-call button. `transcript` state was removed from `useRealtimeChat` entirely.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/app/api/realtime/tool/route.ts` | Accept `conversationId` + `callId`; persist assistant tool-call message + tool result to DB when provided |
+| `src/app/api/realtime/session/route.ts` | Remove `display_titles` filter — all tools now available in realtime sessions |
+| `src/hooks/use-realtime-chat.ts` | Add `conversationId` + `onMessagesUpdated` options; pass them to tool route; remove `transcript` state |
+| `src/components/chat/realtime-chat.tsx` | Remove ephemeral transcript widget; accept `conversationId` + `onMessagesUpdated` props |
+| `src/components/chat/chat-input.tsx` | Thread `conversationId` + `onRealtimeMessagesUpdated` down to `RealtimeChat` |
+| `src/app/chat/page.tsx` | Pass `activeConversationId` + `handleRealtimeMessagesUpdated` (calls `loadMessages`) into `ChatInput` |
+
+### Phase N+9 — Realtime and voice: ensure connections tear down on all navigation paths
+
+Two cleanup gaps identified:
+
+1. **Realtime model change while connected**: switching to another realtime-capable model left the WebRTC session open on the old model (the component stayed mounted and the `modelId` prop changed silently). Fixed in `chat/page.tsx` by always resetting `chatMode` to `"text"` on any model change while in realtime — the session is model-specific and must be re-established fresh.
+
+2. **Voice mode unmount without cleanup**: `VoiceConversation` only stopped the mic and TTS via the "Exit voice" button handler. Navigating away (mode change, conversation switch, new chat) would unmount the component while the mic stream or TTS audio kept running. Fixed by adding a `useEffect` unmount cleanup that calls `cancelRecording()` and `stopTts()`, using stable refs so the cleanup always reads the latest values without needing them as effect dependencies.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/app/chat/page.tsx` | Always reset realtime to text on model change (session is model-specific) |
+| `src/components/chat/voice-conversation.tsx` | Add unmount `useEffect` cleanup for mic + TTS via stable refs |
+
+### Phase N+10 — Realtime: detect unexpected disconnects + Screen Wake Lock
+
+Two mobile resilience improvements:
+
+1. **Unexpected disconnect detection**: Previously `connected` state stayed `true` after the underlying WebRTC connection dropped (screen off, app backgrounded, network loss, server timeout). The UI showed the green dot and "Listening" even though `sendEvent` silently no-oped. Fixed by wiring `pc.onconnectionstatechange` (`"failed"` / `"closed"`) and `dc.onclose` in `useRealtimeChat`. Both fire `handleUnexpectedDisconnect` which tears down the connection and surfaces a "Connection lost. Tap Connect to start a new session." message. An `intentionalDisconnectRef` flag prevents showing this error on a user-initiated end-call.
+
+2. **Screen Wake Lock**: The browser Screen Wake Lock API (`navigator.wakeLock.request("screen")`) is called after a successful WebRTC handshake to prevent the device screen from turning off during an active session (supported on Android Chrome and iOS Safari 16.4+). The lock is released on disconnect (user-initiated or unexpected), and re-acquired on `visibilitychange` to `"visible"` if the session is still connected (since the browser auto-releases the lock when the page is hidden). Falls back silently if the API is unavailable.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/hooks/use-realtime-chat.ts` | Wire `pc.onconnectionstatechange` + `dc.onclose` for unexpected-disconnect detection; add wake lock acquire/release/re-acquire lifecycle |
+
+### Phase N+12 — Cap conversation history at 20 messages to limit token growth
+
+Long-running conversations previously grew unboundedly, increasing token usage and latency with every turn. Added a sliding-window cap of 20 individual messages (≈10 exchanges) applied at the end of history loading.
+
+- `MAX_CONVERSATION_TURNS = 20` constant added to `orchestrator.ts`
+- `capConversationHistory(messages, conversationId)` function: walks backwards counting user/assistant turns, finds the cutoff index, slices to the most recent 20, then strips any leading tool messages that would be orphaned
+- Called at the end of `loadHistory()` after `trimToolHistory()`
+- 6 new unit tests covering: unchanged when under limit, unchanged at exact limit, drops oldest when over, keeps most-recent messages, retains tool messages inside the window, drops tool messages outside the window
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/llm/orchestrator.ts` | Add `MAX_CONVERSATION_TURNS`, `capConversationHistory()`, call it in `loadHistory()` |
+| `src/__tests__/lib/orchestrator.test.ts` | Add 6 unit tests for `capConversationHistory` |
+
+### Phase N+11 — Realtime: inject conversation history on connect
+
+When switching from text or voice mode into a realtime session mid-conversation, the OpenAI Realtime session previously started with no knowledge of prior turns. Fixed by injecting history in `dc.onopen`:
+
+- Fetches the conversation from `GET /api/conversations/${conversationId}` after the data channel opens
+- Filters to user and assistant messages with non-empty text content (tool messages and pure tool-call assistant entries cannot be represented as Realtime API conversation items)
+- Replays the last 20 turns (≈10 exchanges) as `conversation.item.create` events using the correct content type (`input_text` for user, `text` for assistant)
+- Best-effort: if the fetch fails the session continues without history rather than erroring
+
+History is injected after `session.update` so transcription is enabled before the model sees the prior context.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/hooks/use-realtime-chat.ts` | Inject last 20 text turns as `conversation.item.create` events in `dc.onopen` |
+

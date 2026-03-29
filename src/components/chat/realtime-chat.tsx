@@ -8,14 +8,22 @@ import { useRealtimeChat } from "@/hooks/use-realtime-chat";
 
 interface RealtimeChatProps {
   modelId: string;
+  conversationId?: string | null;
   onTurn?: (role: "user" | "assistant", text: string) => void;
+  onMessagesUpdated?: () => void;
 }
 
-export function RealtimeChat({ modelId, onTurn }: RealtimeChatProps) {
-  const { connected, connecting, transcript, connect, disconnect, error } = useRealtimeChat(
-    modelId,
-    { onTurnComplete: onTurn },
-  );
+export function RealtimeChat({
+  modelId,
+  conversationId,
+  onTurn,
+  onMessagesUpdated,
+}: RealtimeChatProps) {
+  const { connected, connecting, connect, disconnect, error } = useRealtimeChat(modelId, {
+    onTurnComplete: onTurn,
+    conversationId,
+    onMessagesUpdated,
+  });
 
   // Disconnect when the component unmounts (mode change, conversation switch, new chat)
   useEffect(() => {
@@ -26,7 +34,6 @@ export function RealtimeChat({ modelId, onTurn }: RealtimeChatProps) {
 
   return (
     <div className="flex flex-col gap-3 rounded-xl border border-input bg-card p-4">
-      {/* Status + controls */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 text-sm">
           <span
@@ -35,7 +42,11 @@ export function RealtimeChat({ modelId, onTurn }: RealtimeChatProps) {
             }`}
           />
           <span className="text-muted-foreground">
-            {connected ? "Connected" : connecting ? "Connecting..." : "Disconnected"}
+            {connected
+              ? "Listening — speak now"
+              : connecting
+              ? "Connecting..."
+              : "Disconnected"}
           </span>
         </div>
 
@@ -53,29 +64,6 @@ export function RealtimeChat({ modelId, onTurn }: RealtimeChatProps) {
       </div>
 
       {error && <p className="text-sm text-destructive">{error}</p>}
-
-      {/* Live transcript */}
-      {transcript.length > 0 && (
-        <div className="max-h-48 overflow-y-auto space-y-1.5 text-sm">
-          {transcript.map((turn, i) => (
-            <div key={i} className={`flex gap-2 ${turn.role === "user" ? "justify-end" : "justify-start"}`}>
-              <span
-                className={`rounded-lg px-3 py-1.5 max-w-[80%] ${
-                  turn.role === "user"
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-muted text-foreground"
-                }`}
-              >
-                {turn.text}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {connected && transcript.length === 0 && (
-        <p className="text-xs text-muted-foreground text-center">Speak now — transcript will appear here</p>
-      )}
     </div>
   );
 }
