@@ -1879,6 +1879,23 @@ Two CodeQL alerts were raised on the `beta → main` PR (#245) because these fun
 | `src/app/api/voice/tts/route.ts` | Replace fenced-code-block regex with `split("``\`")` to eliminate ReDoS vector |
 | `src/lib/services/test-connection.ts` | `probeTtsSupport`: use `new URL(path, origin).toString()` as fetch target |
 
+### Phase N+15 — CodeQL required on beta (CI gate parity with main)
+
+`:beta` is a deployable Docker image with the same attack surface as `:latest`. GitHub's auto-setup CodeQL only gates `main`; a security vulnerability could ship to the beta deployment undetected.
+
+Added a `codeql` job to `ci.yml` that runs on PRs to `dev`, `beta`, and `main`. The job is included in `ci-complete`'s required-jobs list, so `CI Complete` (the single check required by branch protection on all three branches) now automatically requires CodeQL to pass.
+
+`upload: false` is set on the `analyze` step to avoid the "advanced configuration cannot be processed when default setup is enabled" conflict. The default setup continues uploading to the Security tab for `main`; this job acts as a local gate on `dev` and `beta`, failing CI on `error`-level findings and saving the SARIF as a downloadable artifact. GitHub's auto-setup continues to run on `main` in parallel — this is intentional.
+
+Updated `CLAUDE.md` to document the new gate, the `upload: false` constraint, and clarify that the `ci.yml` `codeql` job supplements auto-setup rather than replacing it.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `.github/workflows/ci.yml` | Added `codeql` job (`upload: false`, `fail-on: error`, SARIF artifact); added to `ci-complete` needs |
+| `CLAUDE.md` | New "CodeQL is a required gate on dev, beta, and main" rule; documents `upload: false` constraint |
+
 ---
 
 ### Phase N+13 — Version bump to 1.1.4 (stable release)
