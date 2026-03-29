@@ -254,13 +254,68 @@ export function useRealtimeChat(modelId: string, options: UseRealtimeChatOptions
       const dc = pc.createDataChannel("oai-events");
       dcRef.current = dc;
 
+      // How many individual user/assistant messages to inject as history.
+      // 20 ≈ 10 back-and-forth exchanges — enough for continuity without
+      // overwhelming the realtime model's context window.
+      const REALTIME_HISTORY_TURNS = 20;
+
       dc.onopen = () => {
+        // Enable input audio transcription so user speech is surfaced as text
         sendEvent({
           type: "session.update",
           session: {
             input_audio_transcription: { model: "whisper-1" },
           },
         });
+
+        // Inject recent conversation history so the model has context when
+        // switching from text or voice mode into realtime.
+        const convId = conversationIdRef.current;
+        if (convId) {
+          void (async () => {
+            try {
+              const res = await fetch(`/api/conversations/${convId}`);
+              const data = (await res.json()) as {
+                success: boolean;
+                data?: { messages?: { role: string; content: string | null }[] };
+              };
+              if (!data.success) return;
+
+              const allMessages = data.data?.messages ?? [];
+
+              // Keep only user and assistant turns that have text content.
+              // Tool messages and pure tool-call assistant entries (content: null)
+              // are not representable as Realtime API conversation items.
+              const textTurns = allMessages.filter(
+                (m) =>
+                  (m.role === "user" || m.role === "assistant") &&
+                  typeof m.content === "string" &&
+                  m.content.trim() !== "",
+              );
+
+              const recent = textTurns.slice(-REALTIME_HISTORY_TURNS);
+
+              for (const msg of recent) {
+                sendEvent({
+                  type: "conversation.item.create",
+                  item: {
+                    type: "message",
+                    role: msg.role,
+                    content: [
+                      {
+                        // Realtime API uses "input_text" for user turns, "text" for assistant
+                        type: msg.role === "user" ? "input_text" : "text",
+                        text: msg.content,
+                      },
+                    ],
+                  },
+                });
+              }
+            } catch {
+              // History injection is best-effort — session continues without it
+            }
+          })();
+        }
       };
 
       dc.onmessage = (e) => handleDataChannelMessage(e.data as string);

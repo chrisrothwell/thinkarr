@@ -1846,3 +1846,20 @@ Two mobile resilience improvements:
 |------|--------|
 | `src/hooks/use-realtime-chat.ts` | Wire `pc.onconnectionstatechange` + `dc.onclose` for unexpected-disconnect detection; add wake lock acquire/release/re-acquire lifecycle |
 
+### Phase N+11 — Realtime: inject conversation history on connect
+
+When switching from text or voice mode into a realtime session mid-conversation, the OpenAI Realtime session previously started with no knowledge of prior turns. Fixed by injecting history in `dc.onopen`:
+
+- Fetches the conversation from `GET /api/conversations/${conversationId}` after the data channel opens
+- Filters to user and assistant messages with non-empty text content (tool messages and pure tool-call assistant entries cannot be represented as Realtime API conversation items)
+- Replays the last 20 turns (≈10 exchanges) as `conversation.item.create` events using the correct content type (`input_text` for user, `text` for assistant)
+- Best-effort: if the fetch fails the session continues without history rather than erroring
+
+History is injected after `session.update` so transcription is enabled before the model sees the prior context.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/hooks/use-realtime-chat.ts` | Inject last 20 text turns as `conversation.item.create` events in `dc.onopen` |
+
