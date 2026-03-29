@@ -255,9 +255,10 @@ export function useRealtimeChat(modelId: string, options: UseRealtimeChatOptions
       dcRef.current = dc;
 
       // How many individual user/assistant messages to inject as history.
-      // 20 ≈ 10 back-and-forth exchanges — enough for continuity without
-      // overwhelming the realtime model's context window.
-      const REALTIME_HISTORY_TURNS = 20;
+      // 10 = 5 back-and-forth exchanges, mirroring MAX_TOOL_ROUNDS_IN_HISTORY
+      // in the text orchestrator — enough for immediate context without
+      // front-loading the realtime session with a large token payload.
+      const REALTIME_HISTORY_TURNS = 10;
 
       dc.onopen = () => {
         // Enable input audio transcription so user speech is surfaced as text
