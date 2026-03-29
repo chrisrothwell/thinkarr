@@ -130,7 +130,7 @@ CodeQL runs as the `codeql` job in `.github/workflows/ci.yml` and is included in
 
 **Rationale:** `:beta` is a deployable Docker image with the same network attack surface as `:latest`. Security vulnerabilities must be caught before the image ships, not only on the `beta → main` PR.
 
-GitHub's auto-setup continues to run on `main` in parallel — this is intentional and not a conflict. Do not remove the `codeql` job from `ci.yml`.
+The `codeql` job uses `upload: false` on the `analyze` step to avoid the "advanced configuration cannot be processed when default setup is enabled" conflict. GitHub's default setup continues to upload results to the Security tab for `main`; the `ci.yml` job acts as a local gate on `dev` and `beta` PRs, failing CI on `error`-level findings and saving the SARIF as a downloadable artifact. Do not remove the `codeql` job from `ci.yml` and do not change `upload: false` to `true`.
 
 ## Rule: CodeQL false positives
 

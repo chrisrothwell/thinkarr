@@ -132,8 +132,14 @@ jobs:
           retention-days: 7
 
   # CodeQL SAST — runs on all PR targets (dev, beta, main).
-  # GitHub's auto-setup only gates main; this job ensures beta is covered too
+  # GitHub's default setup only gates main; this job ensures beta is covered too
   # since :beta is a deployable Docker image with the same attack surface as :latest.
+  #
+  # upload: false — avoids the "advanced configuration cannot be processed when
+  # default setup is enabled" conflict. The default setup continues to upload to
+  # the Security tab for main. This job acts as a local gate: fail-on: error exits
+  # non-zero if any high/error-level findings are present in the SARIF, blocking
+  # the PR without uploading. The SARIF is saved as a downloadable artifact.
   codeql:
     name: CodeQL Security Scan
     runs-on: ubuntu-latest
@@ -141,7 +147,6 @@ jobs:
     if: needs.changes.outputs.code == 'true'
     permissions:
       contents: read
-      security-events: write
       actions: read
 
     steps:
@@ -157,6 +162,17 @@ jobs:
         uses: github/codeql-action/analyze@v3
         with:
           category: "/language:javascript-typescript"
+          upload: false
+          output: ${{ runner.temp }}/codeql-results
+          fail-on: error
+
+      - name: Upload SARIF as artifact
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: codeql-sarif-pr-${{ github.event.pull_request.number }}
+          path: ${{ runner.temp }}/codeql-results
+          retention-days: 7
 
   # Always runs — this is the single check required by branch protection rulesets.
   # Passes if test/e2e/codeql succeeded or were skipped (docs-only PR).
