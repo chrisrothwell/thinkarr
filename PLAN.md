@@ -1817,3 +1817,18 @@ Two further improvements requested following the #239 diagnosis:
 | `src/components/chat/chat-input.tsx` | Thread `conversationId` + `onRealtimeMessagesUpdated` down to `RealtimeChat` |
 | `src/app/chat/page.tsx` | Pass `activeConversationId` + `handleRealtimeMessagesUpdated` (calls `loadMessages`) into `ChatInput` |
 
+### Phase N+9 — Realtime and voice: ensure connections tear down on all navigation paths
+
+Two cleanup gaps identified:
+
+1. **Realtime model change while connected**: switching to another realtime-capable model left the WebRTC session open on the old model (the component stayed mounted and the `modelId` prop changed silently). Fixed in `chat/page.tsx` by always resetting `chatMode` to `"text"` on any model change while in realtime — the session is model-specific and must be re-established fresh.
+
+2. **Voice mode unmount without cleanup**: `VoiceConversation` only stopped the mic and TTS via the "Exit voice" button handler. Navigating away (mode change, conversation switch, new chat) would unmount the component while the mic stream or TTS audio kept running. Fixed by adding a `useEffect` unmount cleanup that calls `cancelRecording()` and `stopTts()`, using stable refs so the cleanup always reads the latest values without needing them as effect dependencies.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/app/chat/page.tsx` | Always reset realtime to text on model change (session is model-specific) |
+| `src/components/chat/voice-conversation.tsx` | Add unmount `useEffect` cleanup for mic + TTS via stable refs |
+

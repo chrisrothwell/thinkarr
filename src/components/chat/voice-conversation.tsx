@@ -41,6 +41,25 @@ export function VoiceConversation({
   const bars = useAudioLevel(recording ? stream : null);
   const { speaking, speakText, stop: stopTts } = useTts(modelId);
 
+  // Keep stable refs so the unmount cleanup can read the latest values
+  // without needing them as effect dependencies.
+  const recordingRef = useRef(recording);
+  recordingRef.current = recording;
+  const cancelRecordingRef = useRef(cancelRecording);
+  cancelRecordingRef.current = cancelRecording;
+  const stopTtsRef = useRef(stopTts);
+  stopTtsRef.current = stopTts;
+
+  // Release mic and stop TTS when the component unmounts (mode change,
+  // conversation switch, new chat, etc.) so resources are not held after
+  // the user navigates away from voice mode.
+  useEffect(() => {
+    return () => {
+      if (recordingRef.current) cancelRecordingRef.current();
+      stopTtsRef.current();
+    };
+  }, []);
+
   // Derive the full 4-value phase for the UI without storing "speaking" in state.
   // This avoids calling setPhase synchronously inside effects (react-hooks/set-state-in-effect).
   const effectivePhase = speaking ? "speaking" : phase;

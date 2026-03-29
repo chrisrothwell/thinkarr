@@ -238,7 +238,10 @@ export default function ChatPage() {
                     setEndpointCaps(caps);
                     setChatMode((prev) => {
                       if (prev === "voice" && !caps.supportsVoice) return "text";
-                      if (prev === "realtime" && !caps.supportsRealtime) return "text";
+                      // Realtime sessions are model-specific (baked into the WebRTC
+                      // handshake). Always drop back to text on model change so the
+                      // old session is torn down and the user reconnects fresh.
+                      if (prev === "realtime") return "text";
                       return prev;
                     });
                   }}
