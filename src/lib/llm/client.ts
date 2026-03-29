@@ -39,6 +39,8 @@ export interface LlmEndpointConfig {
   systemPrompt: string;
   enabled: boolean;
   supportsVoice?: boolean;
+  supportsTts?: boolean;
+  ttsVoice?: string;
   supportsRealtime?: boolean;
   realtimeModel?: string;
   realtimeSystemPrompt?: string;

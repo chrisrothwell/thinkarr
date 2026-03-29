@@ -4,7 +4,7 @@ import { useState, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { SendHorizontal, Square } from "lucide-react";
 import type { ChatMode } from "@/app/chat/page";
-import { VoiceInput } from "@/components/chat/voice-input";
+import { VoiceConversation } from "@/components/chat/voice-conversation";
 import { RealtimeChat } from "@/components/chat/realtime-chat";
 
 interface ChatInputProps {
@@ -17,6 +17,11 @@ interface ChatInputProps {
   supportsVoice: boolean;
   supportsRealtime: boolean;
   selectedModel: string;
+  ttsVoice?: string;
+  lastResponse?: string;
+  conversationId?: string | null;
+  onRealtimeTurn?: (role: "user" | "assistant", text: string) => void;
+  onRealtimeMessagesUpdated?: () => void;
 }
 
 export function ChatInput({
@@ -29,6 +34,11 @@ export function ChatInput({
   supportsVoice,
   supportsRealtime,
   selectedModel,
+  ttsVoice = "alloy",
+  lastResponse = "",
+  conversationId,
+  onRealtimeTurn,
+  onRealtimeMessagesUpdated,
 }: ChatInputProps) {
   const [value, setValue] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -108,16 +118,21 @@ export function ChatInput({
 
         {/* Input area */}
         {chatMode === "voice" ? (
-          <VoiceInput
+          <VoiceConversation
             modelId={selectedModel}
-            onTranscript={(text) => {
-              onSend(text);
-              onModeChange("text");
-            }}
-            disabled={disabled}
+            ttsVoice={ttsVoice}
+            onSend={onSend}
+            onCancel={() => onModeChange("text")}
+            streaming={streaming ?? false}
+            lastResponse={lastResponse}
           />
         ) : chatMode === "realtime" ? (
-          <RealtimeChat modelId={selectedModel} />
+          <RealtimeChat
+            modelId={selectedModel}
+            conversationId={conversationId}
+            onTurn={onRealtimeTurn}
+            onMessagesUpdated={onRealtimeMessagesUpdated}
+          />
         ) : (
           <div className="flex items-end gap-2">
             <textarea

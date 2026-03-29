@@ -19,6 +19,7 @@ interface ModelOption {
   label: string;
   supportsVoice?: boolean;
   supportsRealtime?: boolean;
+  ttsVoice?: string;
 }
 
 export default function ChatPage() {
@@ -37,7 +38,11 @@ export default function ChatPage() {
 
   // Chat mode (text / voice / realtime)
   const [chatMode, setChatMode] = useState<ChatMode>("text");
-  const [endpointCaps, setEndpointCaps] = useState({ supportsVoice: false, supportsRealtime: false });
+  const [endpointCaps, setEndpointCaps] = useState({
+    supportsVoice: false,
+    supportsRealtime: false,
+    ttsVoice: "alloy",
+  });
   const [reportIssueOpen, setReportIssueOpen] = useState(false);
 
   const {
@@ -88,6 +93,7 @@ export default function ChatPage() {
             setEndpointCaps({
               supportsVoice: defaultOpt.supportsVoice ?? false,
               supportsRealtime: defaultOpt.supportsRealtime ?? false,
+              ttsVoice: defaultOpt.ttsVoice ?? "alloy",
             });
           }
         }
@@ -116,10 +122,12 @@ export default function ChatPage() {
   const handleNewChat = useCallback(() => {
     setActiveConversationId(null);
     clearMessages();
+    setChatMode("text");
   }, [clearMessages]);
 
   const handleSelectConversation = useCallback((id: string) => {
     setActiveConversationId(id);
+    setChatMode("text");
     if (window.innerWidth < 768) setSidebarCollapsed(true);
   }, []);
 
@@ -151,6 +159,37 @@ export default function ChatPage() {
     [activeConversationId, createConversation, sendMessage, selectedModel],
   );
 
+  const handleRealtimeTurn = useCallback(
+    async (role: "user" | "assistant", text: string) => {
+      let convId = activeConversationId;
+
+      if (!convId) {
+        const conv = await createConversation();
+        if (!conv) return;
+        convId = conv.id;
+        setActiveConversationId(convId);
+      }
+
+      await fetch(`/api/conversations/${convId}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role, content: text }),
+      });
+
+      loadMessages(convId);
+    },
+    [activeConversationId, createConversation, loadMessages],
+  );
+
+  // Called by the realtime hook after each tool result is persisted to the DB.
+  // Reloads the message list so title cards and other tool outputs appear
+  // in the main chat window immediately after the tool completes.
+  const handleRealtimeMessagesUpdated = useCallback(() => {
+    if (activeConversationId) {
+      loadMessages(activeConversationId);
+    }
+  }, [activeConversationId, loadMessages]);
+
   if (userLoading) {
     return (
       <div className="flex h-screen items-center justify-center">
@@ -180,7 +219,7 @@ export default function ChatPage() {
 
         {/* Top toolbar: model selector (left) + report issue button (right) */}
         {(canChangeModel && models.length > 1) || activeConversationId ? (
-          <div className="flex items-center justify-between border-b px-4 py-1.5">
+          <div className={`flex items-center justify-between border-b py-1.5 ${sidebarCollapsed ? "pl-12 pr-4" : "px-4"}`}>
             {/* Model selector — left side */}
             {canChangeModel && models.length > 1 ? (
               <label className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -194,11 +233,15 @@ export default function ChatPage() {
                     const caps = {
                       supportsVoice: opt?.supportsVoice ?? false,
                       supportsRealtime: opt?.supportsRealtime ?? false,
+                      ttsVoice: opt?.ttsVoice ?? "alloy",
                     };
                     setEndpointCaps(caps);
                     setChatMode((prev) => {
                       if (prev === "voice" && !caps.supportsVoice) return "text";
-                      if (prev === "realtime" && !caps.supportsRealtime) return "text";
+                      // Realtime sessions are model-specific (baked into the WebRTC
+                      // handshake). Always drop back to text on model change so the
+                      // old session is torn down and the user reconnects fresh.
+                      if (prev === "realtime") return "text";
                       return prev;
                     });
                   }}
@@ -270,6 +313,11 @@ export default function ChatPage() {
           supportsVoice={endpointCaps.supportsVoice}
           supportsRealtime={endpointCaps.supportsRealtime}
           selectedModel={selectedModel}
+          ttsVoice={endpointCaps.ttsVoice}
+          lastResponse={messages.findLast((m) => m.role === "assistant")?.content ?? ""}
+          conversationId={activeConversationId}
+          onRealtimeTurn={handleRealtimeTurn}
+          onRealtimeMessagesUpdated={handleRealtimeMessagesUpdated}
         />
       </main>
 

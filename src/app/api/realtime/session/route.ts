@@ -52,11 +52,13 @@ export async function POST(request: Request) {
     );
   }
 
-  // Build tools for the realtime session (exclude display_titles — no visual cards in voice mode)
+  // Build tools for the realtime session — all tools including display_titles.
+  // Tool results are persisted to the conversation DB so they appear as title
+  // cards in the main chat window. The audio output stays clean because the
+  // realtime system prompt instructs the model to summarise results in speech.
   initializeTools();
   const allTools = getOpenAITools();
   const realtimeTools = allTools
-    .filter((t) => "function" in t && t.function.name !== "display_titles")
     .map((t) => {
       const fn = (t as { type: "function"; function: { name: string; description?: string; parameters?: unknown } }).function;
       return {
@@ -79,7 +81,7 @@ export async function POST(request: Request) {
       },
       body: JSON.stringify({
         model: ep.realtimeModel,
-        voice: "alloy",
+        voice: ep.ttsVoice || "alloy",
         instructions,
         tools: realtimeTools,
         tool_choice: "auto",

@@ -10,6 +10,8 @@ export interface ModelOption {
   model: string;
   label: string;
   supportsVoice: boolean;
+  supportsTts: boolean;
+  ttsVoice: string;
   supportsRealtime: boolean;
 }
 
@@ -21,6 +23,8 @@ interface LlmEndpoint {
   enabled: boolean;
   isDefault?: boolean;
   supportsVoice?: boolean;
+  supportsTts?: boolean;
+  ttsVoice?: string;
   supportsRealtime?: boolean;
 }
 
@@ -66,6 +70,8 @@ export async function GET() {
       model: ep.model,
       label: endpoints.length > 1 ? `${ep.name} — ${ep.model}` : ep.model,
       supportsVoice: ep.supportsVoice ?? false,
+      supportsTts: ep.supportsTts ?? false,
+      ttsVoice: ep.ttsVoice ?? "alloy",
       supportsRealtime: ep.supportsRealtime ?? false,
     }));
 

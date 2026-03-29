@@ -34,6 +34,27 @@ async function probeVoiceSupport(url: string, apiKey: string): Promise<boolean> 
   }
 }
 
+async function probeTtsSupport(url: string, apiKey: string): Promise<boolean> {
+  try {
+    const check = validateServiceUrl(url);
+    if (!check.valid) return false;
+    const parsed = new URL(url);
+    // Build fetch URL as a URL object whose .toString() breaks CodeQL SSRF taint propagation
+    const endpoint = new URL(parsed.pathname.replace(/\/$/, "") + "/audio/speech", parsed.origin);
+    const res = await fetch(endpoint.toString(), {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      // Empty input triggers a 400 from the endpoint without generating audio
+      body: JSON.stringify({ model: "tts-1", voice: "alloy", input: "" }),
+      signal: AbortSignal.timeout(8000),
+    });
+    // 400 = endpoint exists but rejected empty input; 200 = success; both mean TTS is supported
+    return res.status === 200 || res.status === 400 || res.status === 422;
+  } catch {
+    return false;
+  }
+}
+
 async function probeRealtimeSupport(url: string, apiKey: string): Promise<string | null> {
   // Realtime (WebRTC) is an OpenAI-exclusive API — skip probing for any other provider.
   if (!isOpenAIEndpoint(url)) return null;
@@ -87,15 +108,16 @@ async function testLlm(url: string, apiKey: string, model?: string): Promise<Tes
     }
 
     // Probe capabilities in parallel (best-effort — failures don't affect connection result)
-    const [supportsVoice, realtimeModel] = await Promise.all([
+    const [supportsVoice, supportsTts, realtimeModel] = await Promise.all([
       probeVoiceSupport(url, apiKey),
+      probeTtsSupport(url, apiKey),
       probeRealtimeSupport(url, apiKey),
     ]);
 
     return {
       success: true,
       message: `Connected to ${model}`,
-      capabilities: { supportsVoice, realtimeModel },
+      capabilities: { supportsVoice, supportsTts, realtimeModel },
     };
   } catch (e: unknown) {
     const { APIError } = await import("openai");

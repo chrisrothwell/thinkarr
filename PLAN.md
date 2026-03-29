@@ -202,6 +202,18 @@ Build an LLM-powered chat frontend for media management (*arr stack). Users log 
 - [x] **`src/__tests__/lib/plex.test.ts`** — Added tests for `searchByTag` with `tagType` (country, director, default genre) and `getTagsForTitle` (full extraction, empty fields)
 - [x] **`src/__tests__/lib/overseerr.test.ts`** — New: `listRequests` title resolution (movie, TV), seasons list, graceful fallback on fetch failure
 
+### Phase 22: PWA Installability Fixes
+
+#### Bug Fixes
+- [x] **Manifest syntax error blocking PWA install** — Chrome's background PWA installability checker fetches `/manifest.json` without session cookies (unauthenticated context). The auth middleware was intercepting it and redirecting to the login page, so Chrome received HTML instead of JSON and reported "Manifest: Line 1, column 1, Syntax error". `beforeinstallprompt` never fired as a result. Fixed: `/manifest.json`, `/sw.js`, and icon files are now allowed through the middleware without a session cookie. — `src/proxy.ts`
+
+- [x] **Service worker intercepting cross-origin requests** — The SW's fetch handler called `event.respondWith(fetch(event.request))` for all GET/HEAD requests, including cross-origin ones (e.g. `https://api.ipify.org`). When the browser's CSP blocked the re-issued fetch, the SW produced an unhandled rejection and a console error. Fixed: same-origin check added — the SW now only intercepts requests whose origin matches its own. — `public/sw.js`
+
+- [x] **Sidebar fetching public IP via `api.ipify.org`** — `sidebar.tsx` fetched the user's public IP on every page load to display in the footer. This hit the cross-origin SW bug above and is a privacy concern (exposing the user's NAT IP in the UI). Removed entirely; unused `useState`/`useEffect` imports cleaned up. — `src/components/chat/sidebar.tsx`
+
+#### Version
+- Bumped to `1.1.4-beta.4`
+
 ### Phase 19: Orphaned Tool Call Repair (issue #151)
 
 #### Bug Fix
@@ -222,6 +234,18 @@ Build an LLM-powered chat frontend for media management (*arr stack). Users log 
 #### Tests
 - [x] **`src/__tests__/lib/services/is-openai-endpoint.test.ts`** — Unit tests for `isOpenAIEndpoint`: true for `api.openai.com`, false for Gemini/Anthropic/localhost/invalid URLs
 - [x] **`src/__tests__/api/realtime-session.test.ts`** — Two new cases: Gemini-compatible endpoint (non-openai.com host) and Anthropic endpoint both return HTTP 400 even when `supportsRealtime: true`
+
+### Phase 21: Realtime Mode Persistence & Cleanup (issue #232)
+
+#### Bug Fixes
+- [x] **Realtime turns not saved to conversation history (#232)** — Realtime mode ran in complete isolation from the main conversation system: turns were displayed in a local transcript div but never written to the DB, so they vanished on reload and were excluded from `report-issue` transcripts. Fixed with a new `POST /api/conversations/[id]/messages` endpoint that accepts `{ role, content }` and writes a message row. `useRealtimeChat` now accepts an `onTurnComplete` callback; it fires for each complete turn using `response.audio_transcript.done` (assistant) and `conversation.item.input_audio_transcription.completed` (user). `RealtimeChat` component passes this to the hook via `onTurn` prop. `chat/page.tsx` provides `handleRealtimeTurn`, which creates a conversation on demand (same pattern as `handleSend`) then POSTs each turn and reloads messages so they appear in `MessageList`. — `src/app/api/conversations/[id]/messages/route.ts` (new), `src/hooks/use-realtime-chat.ts`, `src/components/chat/realtime-chat.tsx`, `src/components/chat/chat-input.tsx`, `src/app/chat/page.tsx`
+
+- [x] **User transcript ordering issue (#232)** — In the OpenAI Realtime flow, `response.audio_transcript.delta` events (assistant response) often arrive before `conversation.item.input_audio_transcription.completed` (user speech-to-text). The old code appended the user turn at the end, so the transcript showed assistant text before the user's question. Fixed: when user transcription arrives and the last transcript entry is an assistant turn, the user entry is inserted before it. — `src/hooks/use-realtime-chat.ts`
+
+- [x] **Session leak on navigation (#232)** — Clicking "New Chat", switching conversations, or changing mode all unmount `RealtimeChat` but previously left the WebRTC peer connection and audio element open (no disconnect called). Fixed with a `useEffect` cleanup in `RealtimeChat` that calls `disconnect()` on unmount, covering all exit paths. — `src/components/chat/realtime-chat.tsx`
+
+#### Tests
+- [x] **`src/__tests__/api/conversation-messages.test.ts`** — New: 9 tests covering 401 (unauth), 400 (invalid role), 400 (missing/blank content), 404 (nonexistent conversation), 404 (other user's conversation), 200 user message saved to DB, 200 assistant message saved to DB, whitespace trimming
 
 ### Phase 14: Coordinated Dependency Upgrades (issue #68)
 
@@ -244,6 +268,20 @@ Build an LLM-powered chat frontend for media management (*arr stack). Users log 
 #### Tests
 - [x] **`src/__tests__/api/voice-transcribe.test.ts`** — Tests for 401 (unauth), 400 (missing audio), 200 (success with mocked Whisper), 500 (API error)
 - [x] **`src/__tests__/api/realtime-session.test.ts`** — Tests for 401 (unauth), 400 (no realtime support), 400 (unknown endpoint), 200 (success with mock fetch), 502 (OpenAI returns error)
+
+### Phase 20: Voice TTS Read-back (issue #120)
+
+#### Features
+- [x] **TTS read-back in voice mode (#120)** — Non-realtime voice mode now completes a full speak-listen loop: after the LLM response finishes streaming, the assistant's text is automatically read aloud using the OpenAI TTS API (`/v1/audio/speech`). Markdown is stripped before synthesis so asterisks, headings, code fences etc. are not spoken. Input is truncated to 4096 chars (OpenAI limit). `POST /api/voice/tts` mirrors the existing `/api/voice/transcribe` route: requires auth, checks rate limit, resolves the endpoint client via `getLlmClientForEndpoint(modelId)`, and returns raw `audio/mpeg` bytes. — `src/app/api/voice/tts/route.ts` (new)
+- [x] **`useTts` hook** — `speakText(text, voice)` fetches `/api/voice/tts`, decodes the blob to an object URL, plays it with `new Audio()`, and resolves the returned promise when playback ends (or errors). `stop()` immediately pauses and revokes the URL. `speaking: boolean` state lets the UI react to playback. — `src/hooks/use-tts.ts` (new)
+- [x] **`useAudioLevel` hook** — During recording, pipes the live `MediaStream` through a Web Audio `AnalyserNode` (fftSize 64) sampled at ~20 fps (every 3rd rAF frame). Returns an array of 7 normalised bar heights (0–1) for the real-time visualizer. — `src/hooks/use-audio-level.ts` (new)
+- [x] **`useVoiceInput` exposes live stream** — Added `stream: MediaStream | null` state field (set on recording start, cleared on stop) so `VoiceConversation` can pass it to `useAudioLevel`. — `src/hooks/use-voice-input.ts`
+- [x] **`VoiceConversation` component** — Replaces `VoiceInput` in voice mode. Owns a 4-state machine: `idle → listening → processing → speaking → idle`. `idle`: secondary mic button, "Tap to speak". `listening`: destructive mic button + `animate-ping` outer ring + 7 real-time audio level bars (CSS height driven by `useAudioLevel`). `processing`: spinner, "Thinking…". `speaking`: primary `Volume2` icon + `animate-ping` ring, "Speaking…" + "Ask again" button (stops TTS and restarts mic) + "Cancel" link (exits to text mode). No longer auto-switches to text mode after sending. — `src/components/chat/voice-conversation.tsx` (new)
+- [x] **`supportsTts` capability probe** — `probeTtsSupport()` sends `POST /audio/speech` with an empty `input` (triggers 400 from the endpoint, proving the route exists, without generating audio). Runs in parallel with existing `probeVoiceSupport` and `probeRealtimeSupport`. Settings UI shows a `✓ TTS` / `✗ No TTS` badge per endpoint; a TTS voice selector (Alloy/Echo/Fable/Onyx/Nova/Shimmer) is shown when `supportsTts` is true. — `src/lib/services/test-connection.ts`, `src/types/api.ts`, `src/app/settings/page.tsx`
+- [x] **`ttsVoice` field on endpoints** — `LlmEndpointConfig`, `/api/models`, and `endpointCaps` in `chat/page.tsx` all carry `ttsVoice` (default `"alloy"`). Passed through `ChatInput` → `VoiceConversation` → `useTts`. — `src/lib/llm/client.ts`, `src/app/api/models/route.ts`, `src/app/chat/page.tsx`, `src/components/chat/chat-input.tsx`
+
+#### Tests
+- [x] **`src/__tests__/api/voice-tts.test.ts`** — 9 tests: 401 (unauth), 400 (missing text), 400 (empty text), 400 (invalid JSON), 200 success with default voice, 200 success with specified voice, alloy fallback for invalid voice, markdown stripping, 500 on API error
 
 ### Phase 13: React 19 Upgrade Fix
 
@@ -278,6 +316,7 @@ src/
 │   │   │   ├── route.ts             # GET list (?all=true for admin) / POST create
 │   │   │   └── [id]/
 │   │   │       ├── route.ts         # GET with messages (admin can view any) / DELETE
+│   │   │       ├── messages/route.ts # POST save realtime turn (user or assistant)
 │   │   │       └── title/route.ts   # PATCH rename
 │   │   ├── mcp/route.ts             # GET list tools / POST execute tool (bearer auth)
 │   │   ├── models/route.ts          # GET available models for current user
@@ -294,7 +333,8 @@ src/
 │   │   │   ├── session/route.ts     # POST create ephemeral OpenAI Realtime session (WebRTC)
 │   │   │   └── tool/route.ts        # POST execute tool server-side during realtime session
 │   │   ├── voice/
-│   │   │   └── transcribe/route.ts  # POST audio → Whisper STT → transcript
+│   │   │   ├── transcribe/route.ts  # POST audio → Whisper STT → transcript
+│   │   │   └── tts/route.ts         # POST text + voice → OpenAI TTS → audio/mpeg
 │   │   └── setup/
 │   │       ├── route.ts             # GET status + POST save config
 │   │       └── test-connection/
@@ -323,7 +363,8 @@ src/
 │   │   ├── title-card.tsx           # Rich title card (thumbnail, status, cast, Watch Now / Request / More Info buttons)
 │   │   ├── title-carousel.tsx       # Single card or horizontal snap-scroll carousel with arrow buttons
 │   │   ├── tool-call.tsx            # "Running {Action} on {Service}" + expandable details
-│   │   └── voice-input.tsx          # Mic record/transcribe UI (click-to-toggle, spinner)
+│   │   ├── voice-conversation.tsx   # 4-state voice loop (idle→listening→processing→speaking) with TTS read-back
+│   │   └── voice-input.tsx          # Mic record/transcribe UI (legacy, kept for reference)
 │   └── ui/
 │       ├── avatar.tsx               # Image/fallback avatar (sm/md/lg)
 │       ├── badge.tsx                # 4 variants
@@ -335,11 +376,14 @@ src/
 │       ├── tabs.tsx                 # Tabs/TabsList/TabsTrigger/TabsContent
 │       └── textarea.tsx             # Multi-line text input
 ├── hooks/
+│   ├── use-audio-level.ts           # Web Audio AnalyserNode → 7 normalised bar heights for visualizer
+│   ├── use-silence-detection.ts     # VAD: auto-stops recording on 1.5s silence or 60s hard timeout
 │   ├── use-auto-scroll.ts           # Auto-scroll on new messages, respects manual scroll
 │   ├── use-chat.ts                  # Messages state, SSE streaming, send/stop, model override
 │   ├── use-conversations.ts         # Conversation CRUD (list, create, delete, rename, viewAll)
 │   ├── use-realtime-chat.ts         # WebRTC realtime hook (connect, SDP, data channel, tool calls)
-│   └── use-voice-input.ts           # MediaRecorder hook (record, stop, POST to transcribe)
+│   ├── use-tts.ts                   # OpenAI TTS playback hook (speakText, stop, speaking state)
+│   └── use-voice-input.ts           # MediaRecorder hook (record, stop, POST to transcribe, exposes live stream)
 ├── lib/
 │   ├── auth/
 │   │   └── session.ts               # Session create/validate/destroy + cookie management
@@ -425,6 +469,7 @@ src/
 | GET | /api/conversations/[id] | Get conversation with messages (admin can view any) |
 | DELETE | /api/conversations/[id] | Delete conversation |
 | PATCH | /api/conversations/[id]/title | Rename conversation |
+| POST | /api/conversations/[id]/messages | Save a single realtime turn (user or assistant) to a conversation |
 | GET | /api/mcp | List available MCP tools (bearer auth, permission-filtered) |
 | POST | /api/mcp | Execute tool or list tools (bearer auth, permission-checked) |
 | GET | /api/models | Get available models for current user (respects canChangeModel) |
@@ -443,6 +488,7 @@ src/
 | GET | /api/settings/logs/[filename] | Read last 500 lines or full log; `?download=true` streams file (admin) |
 | POST | /api/request | Submit Overseerr media request (movie or TV with optional seasons array) |
 | POST | /api/voice/transcribe | Transcribe audio file via Whisper STT (auth required) |
+| POST | /api/voice/tts | Synthesise speech from text via OpenAI TTS (auth required) |
 | POST | /api/realtime/session | Create ephemeral OpenAI Realtime session token for WebRTC (auth required) |
 | POST | /api/realtime/tool | Execute a tool server-side during a realtime voice session (auth required) |
 | GET | /api/plex/avatar/[userId] | Server-side proxy for Plex user avatar images (auth required; fetches stored Plex.tv URL with token) |
@@ -1651,3 +1697,231 @@ Token cost of history is now capped. A conversation with 35 tool-calling rounds 
 ### Phase N+2 — Release 1.1.3
 
 Bumped `package.json` version from `1.1.3-beta.1` to `1.1.3` for stable release.
+
+---
+
+### Phase N+3 — Bug fixes: issues #146 and #217
+
+#### Bug Fixes
+
+- **#146 Docker E2E suite ran only 19 of 26 tests**: `playwright.docker.config.ts` was missing the `title-cards` project, so the 7 tests in `title-cards.spec.ts` never ran against the built Docker image. `global-setup-docker.ts` also omitted the Overseerr configuration from `POST /api/setup`, which title-card tests require for the "Request" flow. Additionally `API_RATE_LIMIT_MAX=1000` was missing from the container's environment (matching the dev/beta setup), preventing the title-card tests from being throttled by the default 60 req/min limit.
+
+- **#217 Model selector overlapped with sidebar-toggle icon**: When the sidebar is collapsed, the `SidebarToggle` button is `fixed left-2` with `w-8` (ends ~40 px from the left edge). The top toolbar had a fixed `px-4` (16 px) left padding, so the model selector label sat directly behind the toggle icon. Fixed by conditionally applying `pl-12 pr-4` to the toolbar when `sidebarCollapsed` is true, giving 48 px of clearance.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `playwright.docker.config.ts` | Added `title-cards` project (#146) |
+| `tests/e2e/global-setup-docker.ts` | Added `overseerr` to `POST /api/setup` payload; added `API_RATE_LIMIT_MAX=1000` env var to container (#146) |
+| `src/app/chat/page.tsx` | Toolbar left padding conditionally expands to `pl-12` when sidebar is collapsed (#217) |
+
+### Phase N+4 — Voice/Realtime diagnostics & SW phantom-GET fix (#119)
+
+Two connected issues investigated:
+
+- **#119 Realtime 'failed to fetch'**: Server log showed `REALTIME_SESSION_CREATED` but client received "failed to fetch" with no further detail. Root cause unknown without client-side logging. Added phase-tracked `clientLog.error` to `useRealtimeChat.connect()` covering four phases (`session`, `microphone`, `rtc-setup`, `sdp-exchange`). Also added `clientLog.error` for silent tool-call failures. Friendly "Failed to fetch" message handling mirrors `use-chat.ts`.
+
+- **Voice TTS audio not playing (#119)**: POST to `/api/voice/tts` returned 200 with 428 KB `audio/mpeg` but audio did not play; UI returned to idle after ~3 s (exactly the TTS download time). `audio.play()` rejection was silently swallowed — no logging. Most likely cause: browser autoplay policy (`NotAllowedError`) since TTS play is triggered asynchronously after LLM stream completes, not directly from a user gesture. Added `clientLog.error` to `play().catch()`, `audio.onerror`, empty-blob guard, and `!res.ok` path so the next failure will be logged and diagnosable.
+
+- **SW phantom GET → 405**: Browser DevTools showed `anonymous @ sw.js:8` issuing a GET to `/api/voice/tts` ~8 minutes after the TTS POST, returning 405. The service worker (`public/sw.js`) was unconditionally re-issuing every intercepted request via `fetch(event.request)`, including replayed navigations to previously-seen API URLs as GET. Fixed: SW now only intercepts `GET`/`HEAD` non-API requests — the minimum needed for PWA installability.
+
+- **DB data migration for `llm.endpoints`**: `ensureSchemaIntegrity` handles column-level drift but not JSON blob drift inside `app_config`. Endpoints saved before `supportsRealtime`/`supportsVoice`/`realtimeModel` fields were added had those fields missing, causing the realtime UI button to never appear. Added `migrateLlmEndpoints()` that runs at startup after `ensureSchemaIntegrity`, normalises missing fields, and enforces the invariant `supportsRealtime = (realtimeModel !== "")`. 8 unit tests added.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/hooks/use-realtime-chat.ts` | Added `clientLog` with phase tracking for `connect()` failures; added `clientLog.error` in tool-call catch |
+| `src/hooks/use-tts.ts` | Added `clientLog.error` to `play().catch()`, `audio.onerror`, empty-blob guard, and `!res.ok` path |
+| `public/sw.js` | SW now only intercepts `GET`/`HEAD` non-API requests — prevents phantom API replays |
+| `src/lib/db/index.ts` | Added exported `migrateLlmEndpoints()` — startup data migration for `llm.endpoints` JSON blob |
+| `src/__tests__/db/migrate-llm-endpoints.test.ts` | 8 unit tests for `migrateLlmEndpoints` |
+| `.gitignore` | Added `.claude/settings.json` (may contain internal API key) |
+| `package.json` | Version `1.1.4-beta.1` → `1.1.4-beta.2` |
+
+### Phase N+5 — Fix CSP blocking TTS audio blob URLs (#226)
+
+**Root cause** (confirmed from beta logs via `[client] TTS audio element error`):
+
+```
+MEDIA_ELEMENT_ERROR: Media load rejected by URL safety check (MediaError code 4)
+NotSupportedError: Failed to load because no supported source was found.
+blobSize: 479040, mimeType: audio/mpeg
+```
+
+The CSP in `next.config.ts` had no `media-src` directive, so it inherited `default-src 'self'` which blocks `blob:` URLs. `useTts` creates an audio blob URL via `URL.createObjectURL()` and passes it to `new Audio(url)` — the browser rejected this before the audio element could play.
+
+Also added `blob: https:` to `connect-src`:
+- `blob:` — required for voice input (`MediaRecorder` blob reads in some browsers)
+- `https:` — required for WebRTC SDP exchange to the OpenAI realtime endpoint
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `next.config.ts` | Added `media-src 'self' blob:` and extended `connect-src` with `blob: https:` |
+| `package.json` | Version `1.1.4-beta.2` → `1.1.4-beta.3` |
+
+### Phase N+6 — Report Issue: add version and base URL (#227)
+
+Added `version` (`NEXT_PUBLIC_APP_VERSION`) and `baseUrl` (derived from `x-forwarded-proto` + `host` request headers) to:
+- The GitHub issue body (Conversation Details table)
+- The `report-issue: report logged` and `report-issue: GitHub issue created` log entries
+
+This lets Claude immediately identify which deployment and version a user report came from without needing to ask.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/app/api/report-issue/route.ts` | Added `version` and `baseUrl` to issue body and both log entries |
+| `src/__tests__/api/report-issue.test.ts` | Extended existing test to assert version/baseUrl present in log metadata and issue body |
+
+### Phase N+7 — Fix premature streaming text and speed up title card display (#239)
+
+Two issues reported in beta via the user feedback tool (#239):
+
+1. **Premature text before tool results**: The orchestrator was yielding `text_delta` events to the client as soon as each streamed chunk arrived. When the LLM emitted text *and* tool calls in the same response (e.g. "I'm not seeing any results…" alongside a `plex_search_library` call), the speculative answer appeared in the chat before the tool ran — then the real answer appeared after. The transcript in #239 shows this clearly for the "When is the next apprentice?" query.
+
+   **Fix**: Text deltas are now buffered during streaming and only yielded to the client *after* the full response is consumed. If tool calls were also present in that response, the buffered text is silently discarded (it was a premature guess). If no tool calls were present, the accumulated text is yielded as a single `text_delta` event before `done`. The text is still saved to the DB and forwarded to the LLM context regardless, so history and the next round behave correctly.
+
+2. **Slow title card display**: Between receiving search results and calling `display_titles`, the LLM sometimes emitted an intermediate conversational message (e.g. "Here are the results!") which added a full LLM round of latency before cards appeared.
+
+   **Fix**: Added explicit instructions to `DEFAULT_SYSTEM_PROMPT` telling the LLM to call `display_titles` immediately in the next response after receiving search results — no intermediate text — and to batch all searches for multiple independent titles in a single round so they execute in parallel.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/llm/orchestrator.ts` | Buffer text deltas; suppress premature text when tool calls are present in the same LLM response |
+| `src/lib/llm/default-prompt.ts` | New `display_titles` latency guidance: no intermediate rounds, parallel batching for multi-title queries |
+| `src/__tests__/lib/orchestrator.test.ts` | 2 new tests: suppresses text when tool calls present; yields text when no tool calls |
+
+### Phase N+8 — Realtime voice: unify transcript into main chat window (#239 follow-up)
+
+Two further improvements requested following the #239 diagnosis:
+
+1. **Title cards and tool results in the voice chat window**: In realtime/voice mode, `display_titles` was filtered out of the tool list and tool call results were never persisted to the DB, so the main `MessageList` never rendered them. Every tool call and its result is now saved to the conversation DB (assistant row with `toolCalls` JSON + tool row with `toolCallId`). After each tool completes, the hook fires `onMessagesUpdated` so the message list reloads and renders title cards, tool call status widgets, etc. exactly as it does for text chat. Audio remains clean — the realtime system prompt already instructs the model to summarise results in speech without reading raw JSON.
+
+2. **Removed the ephemeral transcript widget**: `RealtimeChat` previously rendered a bounded scroll area with live character-by-character turn text that duplicated the main `MessageList`. This is removed. All interactions (user speech, assistant responses, tool results, title cards) appear exclusively in the main chat window. The `RealtimeChat` component now only renders the connection status and connect/end-call button. `transcript` state was removed from `useRealtimeChat` entirely.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/app/api/realtime/tool/route.ts` | Accept `conversationId` + `callId`; persist assistant tool-call message + tool result to DB when provided |
+| `src/app/api/realtime/session/route.ts` | Remove `display_titles` filter — all tools now available in realtime sessions |
+| `src/hooks/use-realtime-chat.ts` | Add `conversationId` + `onMessagesUpdated` options; pass them to tool route; remove `transcript` state |
+| `src/components/chat/realtime-chat.tsx` | Remove ephemeral transcript widget; accept `conversationId` + `onMessagesUpdated` props |
+| `src/components/chat/chat-input.tsx` | Thread `conversationId` + `onRealtimeMessagesUpdated` down to `RealtimeChat` |
+| `src/app/chat/page.tsx` | Pass `activeConversationId` + `handleRealtimeMessagesUpdated` (calls `loadMessages`) into `ChatInput` |
+
+### Phase N+9 — Realtime and voice: ensure connections tear down on all navigation paths
+
+Two cleanup gaps identified:
+
+1. **Realtime model change while connected**: switching to another realtime-capable model left the WebRTC session open on the old model (the component stayed mounted and the `modelId` prop changed silently). Fixed in `chat/page.tsx` by always resetting `chatMode` to `"text"` on any model change while in realtime — the session is model-specific and must be re-established fresh.
+
+2. **Voice mode unmount without cleanup**: `VoiceConversation` only stopped the mic and TTS via the "Exit voice" button handler. Navigating away (mode change, conversation switch, new chat) would unmount the component while the mic stream or TTS audio kept running. Fixed by adding a `useEffect` unmount cleanup that calls `cancelRecording()` and `stopTts()`, using stable refs so the cleanup always reads the latest values without needing them as effect dependencies.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/app/chat/page.tsx` | Always reset realtime to text on model change (session is model-specific) |
+| `src/components/chat/voice-conversation.tsx` | Add unmount `useEffect` cleanup for mic + TTS via stable refs |
+
+### Phase N+10 — Realtime: detect unexpected disconnects + Screen Wake Lock
+
+Two mobile resilience improvements:
+
+1. **Unexpected disconnect detection**: Previously `connected` state stayed `true` after the underlying WebRTC connection dropped (screen off, app backgrounded, network loss, server timeout). The UI showed the green dot and "Listening" even though `sendEvent` silently no-oped. Fixed by wiring `pc.onconnectionstatechange` (`"failed"` / `"closed"`) and `dc.onclose` in `useRealtimeChat`. Both fire `handleUnexpectedDisconnect` which tears down the connection and surfaces a "Connection lost. Tap Connect to start a new session." message. An `intentionalDisconnectRef` flag prevents showing this error on a user-initiated end-call.
+
+2. **Screen Wake Lock**: The browser Screen Wake Lock API (`navigator.wakeLock.request("screen")`) is called after a successful WebRTC handshake to prevent the device screen from turning off during an active session (supported on Android Chrome and iOS Safari 16.4+). The lock is released on disconnect (user-initiated or unexpected), and re-acquired on `visibilitychange` to `"visible"` if the session is still connected (since the browser auto-releases the lock when the page is hidden). Falls back silently if the API is unavailable.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/hooks/use-realtime-chat.ts` | Wire `pc.onconnectionstatechange` + `dc.onclose` for unexpected-disconnect detection; add wake lock acquire/release/re-acquire lifecycle |
+
+### Phase N+12 — Cap conversation history at 20 messages to limit token growth
+
+Long-running conversations previously grew unboundedly, increasing token usage and latency with every turn. Added a sliding-window cap of 20 individual messages (≈10 exchanges) applied at the end of history loading.
+
+- `MAX_CONVERSATION_TURNS = 20` constant added to `orchestrator.ts`
+- `capConversationHistory(messages, conversationId)` function: walks backwards counting user/assistant turns, finds the cutoff index, slices to the most recent 20, then strips any leading tool messages that would be orphaned
+- Called at the end of `loadHistory()` after `trimToolHistory()`
+- 6 new unit tests covering: unchanged when under limit, unchanged at exact limit, drops oldest when over, keeps most-recent messages, retains tool messages inside the window, drops tool messages outside the window
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/llm/orchestrator.ts` | Add `MAX_CONVERSATION_TURNS`, `capConversationHistory()`, call it in `loadHistory()` |
+| `src/__tests__/lib/orchestrator.test.ts` | Add 6 unit tests for `capConversationHistory` |
+
+### Phase N+14 — Fix CodeQL alerts blocking beta → main (tts ReDoS + test-connection SSRF)
+
+Two CodeQL alerts were raised on the `beta → main` PR (#245) because these functions exist in `beta` but not in `main`, making them "new" to the `main` branch scan. The alerts weren't blocking on `beta` because `beta` branch protection does not require CodeQL to pass; `main` does.
+
+#### Fixed
+
+- **js/polynomial-redos — `src/app/api/voice/tts/route.ts`** — `stripMarkdown` used `/```[\w]*\n?([\s\S]*?)```/g` on uncontrolled user input. The overlap between `\n?` and `[\s\S]*?` on newlines is flagged by CodeQL as polynomial. Fix: replaced the regex with a `text.split("``\`")` approach — even-indexed segments are outside code fences, odd-indexed are inside. No regex, no backtracking.
+
+- **js/ssrf — `src/lib/services/test-connection.ts` (`probeTtsSupport`)** — `probeTtsSupport` was added in Phase N+4, after Phase 27 addressed equivalent alerts in `probeVoiceSupport` / `probeRealtimeSupport`. The function already used `validateServiceUrl` + URL reconstruction, but the prior alerts were dismissed rather than fixed in code. Fix: build the fetch target as `new URL(path, origin)` and pass `.toString()` to `fetch`, matching the pattern used for the tmdb-thumb proxy in Phase 27 that broke CodeQL's taint propagation path.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/app/api/voice/tts/route.ts` | Replace fenced-code-block regex with `split("``\`")` to eliminate ReDoS vector |
+| `src/lib/services/test-connection.ts` | `probeTtsSupport`: use `new URL(path, origin).toString()` as fetch target |
+
+### Phase N+15 — CodeQL required on beta (CI gate parity with main)
+
+`:beta` is a deployable Docker image with the same attack surface as `:latest`. GitHub's auto-setup CodeQL only gates `main`; a security vulnerability could ship to the beta deployment undetected.
+
+Added a `codeql` job to `ci.yml` that runs on PRs to `dev`, `beta`, and `main`. The job is included in `ci-complete`'s required-jobs list, so `CI Complete` (the single check required by branch protection on all three branches) now automatically requires CodeQL to pass.
+
+`upload: false` is set on the `analyze` step to avoid the "advanced configuration cannot be processed when default setup is enabled" conflict. The default setup continues uploading to the Security tab for `main`; this job acts as a local gate on `dev` and `beta`, failing CI on `error`-level findings and saving the SARIF as a downloadable artifact. GitHub's auto-setup continues to run on `main` in parallel — this is intentional.
+
+Updated `CLAUDE.md` to document the new gate, the `upload: false` constraint, and clarify that the `ci.yml` `codeql` job supplements auto-setup rather than replacing it.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `.github/workflows/ci.yml` | Added `codeql` job (`upload: false`, `fail-on: error`, SARIF artifact); added to `ci-complete` needs |
+| `CLAUDE.md` | New "CodeQL is a required gate on dev, beta, and main" rule; documents `upload: false` constraint |
+
+---
+
+### Phase N+13 — Version bump to 1.1.4 (stable release)
+
+Bumped `package.json` version from `1.1.4-beta.5` to `1.1.4` for stable release.
+
+| File | Change |
+|------|--------|
+| `package.json` | Version `1.1.4-beta.5` → `1.1.4` |
+
+---
+
+### Phase N+11 — Realtime: inject conversation history on connect
+
+When switching from text or voice mode into a realtime session mid-conversation, the OpenAI Realtime session previously started with no knowledge of prior turns. Fixed by injecting history in `dc.onopen`:
+
+- Fetches the conversation from `GET /api/conversations/${conversationId}` after the data channel opens
+- Filters to user and assistant messages with non-empty text content (tool messages and pure tool-call assistant entries cannot be represented as Realtime API conversation items)
+- Replays the last 20 turns (≈10 exchanges) as `conversation.item.create` events using the correct content type (`input_text` for user, `text` for assistant)
+- Best-effort: if the fetch fails the session continues without history rather than erroring
+
+History is injected after `session.update` so transcription is enabled before the model sees the prior context.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/hooks/use-realtime-chat.ts` | Inject last 20 text turns as `conversation.item.create` events in `dc.onopen` |
+

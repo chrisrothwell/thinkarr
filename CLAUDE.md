@@ -55,6 +55,33 @@ Only the human manages the release flow. All version bumps go through PRs — ne
 7. Merge `dev` → `beta` → `main` via PRs
 8. Apply `v1.1.0` tag to `main` → CI publishes `:latest` Docker image
 
+## Rule: version bump on every release PR
+
+**Always check and bump `package.json` before opening a `dev → beta` or `beta → main` PR.**
+
+### Version bump logic
+
+| Situation | Example current | Bump to |
+|-----------|----------------|---------|
+| Starting a new beta cycle | `1.1.3` | `1.1.4-beta.1` |
+| Additional beta iteration | `1.1.4-beta.1` | `1.1.4-beta.2` |
+| Full release (beta → main) | `1.1.4-beta.2` | `1.1.4` |
+
+### Workflow
+
+1. Compare `package.json` on `dev` vs `beta` (or `beta` vs `main` for a full release).
+2. If the versions match, raise a `claude/bump-version-*` PR to `dev` first and wait for it to be merged before opening the release PR.
+3. When raising the `dev → beta` PR, use `?template=dev-to-beta.md` so the checklist pre-fills.
+
+### Rules
+- Never open a `dev → beta` PR if `package.json` on `dev` still matches `beta`.
+- For a full release: strip the `-beta.x` suffix (e.g. `1.1.4-beta.2` → `1.1.4`) — do not just bump the patch number independently.
+- The bump always goes through a PR — never commit directly to `dev`, `beta`, or `main`.
+
+### Exception: security/CI-only fixes during an active release cycle
+
+If dev and beta are both already at the intended release version (e.g. both at `1.1.4`) and the dev → beta merge carries **only** security fixes, CodeQL/CI fixes, or equivalent non-functional changes, the version bump requirement is waived. Open the dev → beta PR directly. The beta → main PR version check still applies normally.
+
 ## Rule: run local security checks before dev → beta
 
 Before opening a `dev → beta` PR, run all three checks locally and confirm they pass. This avoids wasted CI cycles on the beta pipeline.
@@ -101,13 +128,21 @@ For every PR, update `PLAN.md` to reflect what was built or changed:
 
 Do this as a separate commit on the same branch before pushing, so the PR includes the documentation alongside the code.
 
+## Rule: CodeQL is a required gate on dev, beta, and main
+
+CodeQL runs as the `codeql` job in `.github/workflows/ci.yml` and is included in the `CI Complete` gate. This means CodeQL must pass on every PR to `dev`, `beta`, and `main`.
+
+**Rationale:** `:beta` is a deployable Docker image with the same network attack surface as `:latest`. Security vulnerabilities must be caught before the image ships, not only on the `beta → main` PR.
+
+The `codeql` job uses `upload: false` on the `analyze` step to avoid the "advanced configuration cannot be processed when default setup is enabled" conflict. GitHub's default setup continues to upload results to the Security tab for `main`; the `ci.yml` job acts as a local gate on `dev` and `beta` PRs, failing CI on `error`-level findings and saving the SARIF as a downloadable artifact. Do not remove the `codeql` job from `ci.yml` and do not change `upload: false` to `true`.
+
 ## Rule: CodeQL false positives
 
 When GitHub Code Scanning raises a `js/ssrf` (or other) alert that is a confirmed false positive — i.e. the code has explicit URL validation that CodeQL cannot trace through — **dismiss the alert via the GitHub API**. Do not:
 
 - Add `// lgtm[...]` comments — ignored by GitHub Code Scanning (only worked on the legacy lgtm.com product)
 - Create `.github/codeql/codeql-config.yml` alone — GitHub's auto-setup ignores this file unless a custom workflow explicitly references it via `config-file:`
-- Create `.github/workflows/codeql.yml` to replace GitHub's built-in scanning — this repo uses GitHub's auto-setup intentionally
+- Create `.github/workflows/codeql.yml` to replace GitHub's built-in scanning — this repo uses GitHub's auto-setup intentionally; the `codeql` job in `ci.yml` supplements it, it does not replace it
 
 ### How to dismiss via `gh` CLI
 
@@ -138,6 +173,33 @@ For every feature or bug fix, check whether a unit or E2E test already covers th
 - E2E tests live in `tests/e2e/` and use Playwright.
 - Prefer unit tests for logic/API behaviour; prefer E2E tests only for UI interactions that can't be covered at the unit level.
 - If an existing test already covers the behaviour, no new test is needed — but do not remove or weaken existing tests.
+
+## Rule: two E2E tiers — full suite vs. Docker smoke
+
+The E2E suite is split into two tiers with distinct purposes:
+
+| Tier | Config | Spec files | When it runs |
+|------|--------|-----------|--------------|
+| Full suite | `playwright.config.ts` | All `*.spec.ts` files | Every PR — fast dev-server feedback on all features |
+| Docker smoke | `playwright.docker.config.ts` | `smoke-docker.spec.ts` only | Beta CI — verifies the built image boots and infrastructure is wired correctly |
+
+### What the Docker smoke covers (and why)
+
+The smoke suite exists to catch Docker-specific failure modes that the dev server can't surface:
+
+- Container boots and serves requests (routing/redirects work)
+- `next build` standalone output is intact (pages render)
+- Env vars are injected correctly (`PLEX_API_BASE`, `SECURE_COOKIES`, `API_RATE_LIMIT_MAX`)
+- Plex OAuth completes and a session cookie is issued
+- A chat round-trip succeeds (LLM `baseUrl` reaches the app)
+
+Application-logic coverage (title cards, rate-limit UI, conversation history, etc.) is **not** repeated in the smoke suite — the same JS runs in both environments, so there is no additional signal in duplicating those tests against Docker.
+
+### Adding new E2E tests
+
+- New feature tests → add to the appropriate `*.spec.ts` file; they run in the full suite only.
+- If a new test exercises a Docker-specific infrastructure concern (new env var, new mount, new entrypoint behaviour), add it to `smoke-docker.spec.ts`.
+- Do **not** add feature/logic tests to `smoke-docker.spec.ts`.
 ## Rule: use /beta-logs before diagnosing runtime issues
 
 When investigating a bug reported against beta (unexpected behaviour,

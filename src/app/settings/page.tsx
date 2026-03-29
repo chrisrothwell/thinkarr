@@ -21,6 +21,8 @@ import {
   Search,
   FileText,
   Download,
+  Play,
+  Square,
 } from "lucide-react";
 import { DEFAULT_SYSTEM_PROMPT, DEFAULT_REALTIME_SYSTEM_PROMPT } from "@/lib/llm/default-prompt";
 import { copyToClipboard } from "@/lib/utils";
@@ -38,6 +40,8 @@ interface LlmEndpoint {
   enabled: boolean;
   isDefault: boolean;
   supportsVoice: boolean;
+  supportsTts: boolean;
+  ttsVoice: string;
   supportsRealtime: boolean;
   realtimeModel: string;
   realtimeSystemPrompt: string;
@@ -101,6 +105,8 @@ export default function SettingsPage() {
 
   // LLM state (admin only)
   const [endpoints, setEndpoints] = useState<LlmEndpoint[]>([]);
+  const [previewingVoiceEpId, setPreviewingVoiceEpId] = useState<string | null>(null);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
 
   // Plex & Arrs state (admin only)
   const [plexConfig, setPlexConfig] = useState<PlexConfig>({ url: "", token: "" });
@@ -174,6 +180,8 @@ export default function SettingsPage() {
               (d.llmEndpoints || []).map((ep: LlmEndpoint) => ({
                 ...ep,
                 supportsVoice: ep.supportsVoice ?? false,
+                supportsTts: ep.supportsTts ?? false,
+                ttsVoice: ep.ttsVoice ?? "alloy",
                 supportsRealtime: ep.supportsRealtime ?? false,
                 realtimeModel: ep.realtimeModel ?? "",
                 realtimeSystemPrompt: ep.realtimeSystemPrompt ?? "",
@@ -378,7 +386,11 @@ export default function SettingsPage() {
       }));
       // If LLM test succeeded and capabilities were detected, update the endpoint
       if (sectionKey === "llm" && endpointId && result?.success && result?.capabilities) {
-        const caps = result.capabilities as { supportsVoice: boolean; realtimeModel: string | null };
+        const caps = result.capabilities as {
+          supportsVoice: boolean;
+          supportsTts: boolean;
+          realtimeModel: string | null;
+        };
         setEndpoints((prev) =>
           prev.map((ep) => {
             if (ep.id !== endpointId) return ep;
@@ -386,6 +398,7 @@ export default function SettingsPage() {
             return {
               ...ep,
               supportsVoice: caps.supportsVoice,
+              supportsTts: caps.supportsTts,
               supportsRealtime: realtimeModel !== "",
               realtimeModel,
             };
@@ -416,6 +429,8 @@ export default function SettingsPage() {
         enabled: true,
         isDefault: prev.length === 0,
         supportsVoice: false,
+        supportsTts: false,
+        ttsVoice: "alloy",
         supportsRealtime: false,
         realtimeModel: "",
         realtimeSystemPrompt: "",
@@ -438,6 +453,52 @@ export default function SettingsPage() {
       prev.map((ep) => (ep.id === id ? { ...ep, [field]: value } : ep)),
     );
     setSaved(false);
+  }
+
+  async function previewVoice(ep: LlmEndpoint) {
+    // Stop any in-progress preview
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      previewAudioRef.current = null;
+    }
+    if (previewingVoiceEpId === ep.id) {
+      setPreviewingVoiceEpId(null);
+      return;
+    }
+
+    setPreviewingVoiceEpId(ep.id);
+    try {
+      const res = await fetch("/api/voice/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: "Hi, I'm Thinkarr, your friendly AI assistant.",
+          modelId: ep.id,
+          voice: ep.ttsVoice || "alloy",
+        }),
+      });
+      if (!res.ok) {
+        setPreviewingVoiceEpId(null);
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      previewAudioRef.current = audio;
+      audio.onended = () => {
+        URL.revokeObjectURL(url);
+        setPreviewingVoiceEpId(null);
+        previewAudioRef.current = null;
+      };
+      audio.onerror = () => {
+        URL.revokeObjectURL(url);
+        setPreviewingVoiceEpId(null);
+        previewAudioRef.current = null;
+      };
+      await audio.play();
+    } catch {
+      setPreviewingVoiceEpId(null);
+    }
   }
 
   function removeEndpoint(id: string) {
@@ -824,12 +885,44 @@ export default function SettingsPage() {
                       <span className={`rounded-full px-2 py-0.5 font-medium ${ep.supportsVoice ? "bg-green-500/15 text-green-600 dark:text-green-400" : "bg-muted text-muted-foreground"}`}>
                         {ep.supportsVoice ? "✓ Voice (Whisper)" : "✗ No voice"}
                       </span>
+                      <span className={`rounded-full px-2 py-0.5 font-medium ${ep.supportsTts ? "bg-green-500/15 text-green-600 dark:text-green-400" : "bg-muted text-muted-foreground"}`}>
+                        {ep.supportsTts ? "✓ TTS" : "✗ No TTS"}
+                      </span>
                       <span className={`rounded-full px-2 py-0.5 font-medium ${ep.supportsRealtime ? "bg-green-500/15 text-green-600 dark:text-green-400" : "bg-muted text-muted-foreground"}`}>
                         {ep.supportsRealtime ? `✓ Realtime (${ep.realtimeModel || "configured"})` : "✗ No realtime"}
                       </span>
                     </div>
                     <p className="text-xs text-muted-foreground">Click Test to auto-detect capabilities.</p>
                   </div>
+
+                  {/* TTS voice selector — only shown when TTS is supported */}
+                  {ep.supportsTts && (
+                    <div className="space-y-1.5">
+                      <Label>TTS Voice</Label>
+                      <div className="flex gap-2">
+                        <select
+                          value={ep.ttsVoice || "alloy"}
+                          onChange={(e) => updateEndpoint(ep.id, "ttsVoice", e.target.value)}
+                          className="rounded border bg-background px-2 py-1.5 text-sm flex-1"
+                        >
+                          {["alloy", "echo", "fable", "onyx", "nova", "shimmer"].map((v) => (
+                            <option key={v} value={v}>{v.charAt(0).toUpperCase() + v.slice(1)}</option>
+                          ))}
+                        </select>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => previewVoice(ep)}
+                          title="Preview this voice"
+                          className="shrink-0"
+                        >
+                          {previewingVoiceEpId === ep.id ? <Square size={14} /> : <Play size={14} />}
+                        </Button>
+                      </div>
+                      <p className="text-xs text-muted-foreground">Voice used when reading responses aloud in voice mode.</p>
+                    </div>
+                  )}
 
                   {/* Realtime model override */}
                   <div className="space-y-1.5">
