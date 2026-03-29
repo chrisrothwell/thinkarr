@@ -34,6 +34,12 @@ export interface SonarrSeries {
   seasonCount?: number;
   monitored?: boolean;
   tvdbId?: number;
+  // Enrichment fields — populated by the tool handler via Plex / Overseerr lookups
+  thumbPath?: string;
+  plexKey?: string;
+  overseerrId?: number;
+  cast?: string[];
+  imdbId?: string;
 }
 
 export async function searchSeries(term: string): Promise<SonarrSeries[]> {

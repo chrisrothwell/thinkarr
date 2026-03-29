@@ -1,0 +1,303 @@
+/**
+ * Unit tests for the enrichment logic added in issue #253:
+ *  - overseerr_search / overseerr_discover auto-call getDetails for each result
+ *  - sonarr_search_series enriches with Plex (primary) then Overseerr (fallback)
+ *  - radarr_search_movie enriches with Plex (primary) then Overseerr via tmdbId (fallback)
+ */
+
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+// ---------------------------------------------------------------------------
+// Shared service mocks
+// ---------------------------------------------------------------------------
+const mockOverseerrSearch = vi.fn();
+const mockOverseerrGetDetails = vi.fn();
+const mockOverseerrDiscover = vi.fn();
+vi.mock("@/lib/services/overseerr", () => ({
+  search: (...a: unknown[]) => mockOverseerrSearch(...a),
+  getDetails: (...a: unknown[]) => mockOverseerrGetDetails(...a),
+  discover: (...a: unknown[]) => mockOverseerrDiscover(...a),
+  listRequests: vi.fn().mockResolvedValue({ results: [], hasMore: false }),
+  normalizeMediaStatus: vi.fn((s: string) => s.toLowerCase().replace(/ /g, "_")),
+}));
+
+const mockPlexSearchLibrary = vi.fn();
+const mockPlexBuildThumbUrl = vi.fn((p: string) => `/api/plex/thumb?path=${encodeURIComponent(p)}`);
+vi.mock("@/lib/services/plex", () => ({
+  searchLibrary: (...a: unknown[]) => mockPlexSearchLibrary(...a),
+  buildThumbUrl: (...a: unknown[]) => mockPlexBuildThumbUrl(...a),
+  getPlexMachineId: vi.fn(),
+  searchLibrary: (...a: unknown[]) => mockPlexSearchLibrary(...a),
+}));
+
+const mockSonarrSearchSeries = vi.fn();
+vi.mock("@/lib/services/sonarr", () => ({
+  searchSeries: (...a: unknown[]) => mockSonarrSearchSeries(...a),
+  getSeriesStatus: vi.fn(),
+  getCalendar: vi.fn(),
+  getQueue: vi.fn(),
+}));
+
+const mockRadarrSearchMovie = vi.fn();
+vi.mock("@/lib/services/radarr", () => ({
+  searchMovie: (...a: unknown[]) => mockRadarrSearchMovie(...a),
+  getMovieStatus: vi.fn(),
+  getQueue: vi.fn(),
+}));
+
+vi.mock("@/lib/logger", () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+vi.mock("@/lib/config", () => ({ getConfig: vi.fn(() => "http://example.com") }));
+
+// ---------------------------------------------------------------------------
+// Default mock responses
+// ---------------------------------------------------------------------------
+const BASE_SEARCH_RESULT = {
+  overseerrId: 550,
+  overseerrMediaType: "movie",
+  title: "Fight Club",
+  year: "1999",
+  summary: "A soap salesman.",
+  rating: 8.4,
+  mediaStatus: "Available",
+  thumbPath: "https://image.tmdb.org/t/p/w300/poster.jpg",
+  seasonCount: undefined,
+};
+
+const BASE_DETAIL = {
+  overseerrId: 550,
+  overseerrMediaType: "movie",
+  title: "Fight Club",
+  year: "1999",
+  imdbId: "tt0137523",
+  thumbPath: "https://image.tmdb.org/t/p/w300/poster.jpg",
+  cast: ["Brad Pitt", "Edward Norton"],
+  genres: ["Drama"],
+  runtime: 139,
+};
+
+const TV_SEARCH_RESULT = {
+  overseerrId: 1396,
+  overseerrMediaType: "tv",
+  title: "Breaking Bad",
+  year: "2008",
+  mediaStatus: "Available",
+  thumbPath: "https://image.tmdb.org/t/p/w300/bb.jpg",
+  seasonCount: 5,
+};
+
+const TV_DETAIL = {
+  overseerrId: 1396,
+  overseerrMediaType: "tv",
+  title: "Breaking Bad",
+  year: "2008",
+  imdbId: "tt0903747",
+  thumbPath: "https://image.tmdb.org/t/p/w300/bb.jpg",
+  cast: ["Bryan Cranston", "Aaron Paul"],
+  seasonCount: 5,
+  seasons: [
+    { seasonNumber: 1, status: "Available" },
+    { seasonNumber: 2, status: "Available" },
+  ],
+};
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockOverseerrSearch.mockResolvedValue({ results: [BASE_SEARCH_RESULT], hasMore: false });
+  mockOverseerrGetDetails.mockResolvedValue(BASE_DETAIL);
+  mockOverseerrDiscover.mockResolvedValue({ results: [BASE_SEARCH_RESULT], hasMore: false });
+  mockPlexSearchLibrary.mockResolvedValue({ results: [], hasMore: false });
+  mockSonarrSearchSeries.mockResolvedValue([]);
+  mockRadarrSearchMovie.mockResolvedValue([]);
+});
+
+// ===========================================================================
+// overseerr_search enrichment
+// ===========================================================================
+describe("overseerr_search — enrichment (#253)", () => {
+  it("calls getDetails for each search result and merges cast and imdbId", async () => {
+    const { registerOverseerrTools } = await import("@/lib/tools/overseerr-tools");
+    const { defineTool, executeTool } = await import("@/lib/tools/registry");
+    // Ensure a fresh registry
+    (defineTool as unknown as { _registry?: Map<string, unknown> })._registry?.clear?.();
+    registerOverseerrTools();
+
+    const raw = await executeTool("overseerr_search", JSON.stringify({ query: "Fight Club" }));
+    const { results } = JSON.parse(raw) as { results: Record<string, unknown>[] };
+
+    expect(mockOverseerrGetDetails).toHaveBeenCalledWith(550, "movie");
+    expect(results[0].cast).toEqual(["Brad Pitt", "Edward Norton"]);
+    expect(results[0].imdbId).toBe("tt0137523");
+  });
+
+  it("merges accurate seasonCount and seasons for TV results", async () => {
+    mockOverseerrSearch.mockResolvedValueOnce({ results: [TV_SEARCH_RESULT], hasMore: false });
+    mockOverseerrGetDetails.mockResolvedValueOnce(TV_DETAIL);
+
+    const { registerOverseerrTools } = await import("@/lib/tools/overseerr-tools");
+    const { defineTool, executeTool } = await import("@/lib/tools/registry");
+    (defineTool as unknown as { _registry?: Map<string, unknown> })._registry?.clear?.();
+    registerOverseerrTools();
+
+    const raw = await executeTool("overseerr_search", JSON.stringify({ query: "Breaking Bad" }));
+    const { results } = JSON.parse(raw) as { results: Record<string, unknown>[] };
+
+    expect(mockOverseerrGetDetails).toHaveBeenCalledWith(1396, "tv");
+    expect(results[0].seasonCount).toBe(5);
+    expect((results[0].seasons as unknown[]).length).toBe(2);
+  });
+
+  it("returns base result without enrichment if getDetails throws", async () => {
+    mockOverseerrGetDetails.mockRejectedValueOnce(new Error("Overseerr down"));
+
+    const { registerOverseerrTools } = await import("@/lib/tools/overseerr-tools");
+    const { defineTool, executeTool } = await import("@/lib/tools/registry");
+    (defineTool as unknown as { _registry?: Map<string, unknown> })._registry?.clear?.();
+    registerOverseerrTools();
+
+    const raw = await executeTool("overseerr_search", JSON.stringify({ query: "Fight Club" }));
+    const { results } = JSON.parse(raw) as { results: Record<string, unknown>[] };
+
+    // Base result still returned
+    expect(results[0].title).toBe("Fight Club");
+    expect(results[0].cast).toBeUndefined();
+  });
+});
+
+// ===========================================================================
+// sonarr_search_series enrichment
+// ===========================================================================
+describe("sonarr_search_series — Plex-first enrichment (#253)", () => {
+  const SONARR_SERIES = { id: 10, title: "Breaking Bad", year: 2008, seasonCount: 5, monitored: true, tvdbId: 81189 };
+
+  it("uses Plex data when the show is found in Plex", async () => {
+    const PLEX_RESULT = {
+      title: "Breaking Bad", year: 2008, mediaType: "tv",
+      plexKey: "/library/metadata/77", thumbPath: "/library/metadata/77/thumb",
+      cast: ["Bryan Cranston"],
+    };
+    mockSonarrSearchSeries.mockResolvedValueOnce([SONARR_SERIES]);
+    mockPlexSearchLibrary.mockResolvedValueOnce({ results: [PLEX_RESULT], hasMore: false });
+
+    const { registerSonarrTools } = await import("@/lib/tools/sonarr-tools");
+    const { defineTool, executeTool } = await import("@/lib/tools/registry");
+    (defineTool as unknown as { _registry?: Map<string, unknown> })._registry?.clear?.();
+    registerSonarrTools();
+
+    const raw = await executeTool("sonarr_search_series", JSON.stringify({ term: "Breaking Bad" }));
+    const results = JSON.parse(raw) as Record<string, unknown>[];
+
+    expect(results[0].plexKey).toBe("/library/metadata/77");
+    expect(results[0].cast).toEqual(["Bryan Cranston"]);
+    // Overseerr should NOT be called when Plex matched
+    expect(mockOverseerrSearch).not.toHaveBeenCalled();
+    expect(mockOverseerrGetDetails).not.toHaveBeenCalled();
+  });
+
+  it("falls back to Overseerr when not found in Plex", async () => {
+    mockSonarrSearchSeries.mockResolvedValueOnce([SONARR_SERIES]);
+    mockPlexSearchLibrary.mockResolvedValueOnce({ results: [], hasMore: false });
+    mockOverseerrSearch.mockResolvedValueOnce({ results: [TV_SEARCH_RESULT], hasMore: false });
+    mockOverseerrGetDetails.mockResolvedValueOnce(TV_DETAIL);
+
+    const { registerSonarrTools } = await import("@/lib/tools/sonarr-tools");
+    const { defineTool, executeTool } = await import("@/lib/tools/registry");
+    (defineTool as unknown as { _registry?: Map<string, unknown> })._registry?.clear?.();
+    registerSonarrTools();
+
+    const raw = await executeTool("sonarr_search_series", JSON.stringify({ term: "Breaking Bad" }));
+    const results = JSON.parse(raw) as Record<string, unknown>[];
+
+    expect(results[0].overseerrId).toBe(1396);
+    expect(results[0].cast).toEqual(["Bryan Cranston", "Aaron Paul"]);
+    expect(results[0].imdbId).toBe("tt0903747");
+  });
+
+  it("returns unmodified result if both Plex and Overseerr are unavailable", async () => {
+    mockSonarrSearchSeries.mockResolvedValueOnce([SONARR_SERIES]);
+    mockPlexSearchLibrary.mockRejectedValueOnce(new Error("Plex not configured"));
+    mockOverseerrSearch.mockRejectedValueOnce(new Error("Overseerr not configured"));
+
+    const { registerSonarrTools } = await import("@/lib/tools/sonarr-tools");
+    const { defineTool, executeTool } = await import("@/lib/tools/registry");
+    (defineTool as unknown as { _registry?: Map<string, unknown> })._registry?.clear?.();
+    registerSonarrTools();
+
+    const raw = await executeTool("sonarr_search_series", JSON.stringify({ term: "Breaking Bad" }));
+    const results = JSON.parse(raw) as Record<string, unknown>[];
+
+    expect(results[0].title).toBe("Breaking Bad");
+    expect(results[0].thumbPath).toBeUndefined();
+  });
+});
+
+// ===========================================================================
+// radarr_search_movie enrichment
+// ===========================================================================
+describe("radarr_search_movie — Plex-first enrichment (#253)", () => {
+  const RADARR_MOVIE = { id: 20, title: "Fight Club", year: 1999, hasFile: false, monitored: true, tmdbId: 550 };
+
+  it("uses Plex data when the movie is found in Plex", async () => {
+    const PLEX_RESULT = {
+      title: "Fight Club", year: 1999, mediaType: "movie",
+      plexKey: "/library/metadata/42", thumbPath: "/library/metadata/42/thumb",
+      cast: ["Brad Pitt"],
+    };
+    mockRadarrSearchMovie.mockResolvedValueOnce([RADARR_MOVIE]);
+    mockPlexSearchLibrary.mockResolvedValueOnce({ results: [PLEX_RESULT], hasMore: false });
+
+    const { registerRadarrTools } = await import("@/lib/tools/radarr-tools");
+    const { defineTool, executeTool } = await import("@/lib/tools/registry");
+    (defineTool as unknown as { _registry?: Map<string, unknown> })._registry?.clear?.();
+    registerRadarrTools();
+
+    const raw = await executeTool("radarr_search_movie", JSON.stringify({ term: "Fight Club" }));
+    const results = JSON.parse(raw) as Record<string, unknown>[];
+
+    expect(results[0].plexKey).toBe("/library/metadata/42");
+    expect(results[0].cast).toEqual(["Brad Pitt"]);
+    expect(mockOverseerrGetDetails).not.toHaveBeenCalled();
+  });
+
+  it("uses Overseerr getDetails via tmdbId when not in Plex", async () => {
+    mockRadarrSearchMovie.mockResolvedValueOnce([RADARR_MOVIE]);
+    mockPlexSearchLibrary.mockResolvedValueOnce({ results: [], hasMore: false });
+    mockOverseerrGetDetails.mockResolvedValueOnce(BASE_DETAIL);
+
+    const { registerRadarrTools } = await import("@/lib/tools/radarr-tools");
+    const { defineTool, executeTool } = await import("@/lib/tools/registry");
+    (defineTool as unknown as { _registry?: Map<string, unknown> })._registry?.clear?.();
+    registerRadarrTools();
+
+    const raw = await executeTool("radarr_search_movie", JSON.stringify({ term: "Fight Club" }));
+    const results = JSON.parse(raw) as Record<string, unknown>[];
+
+    // Should call getDetails with tmdbId directly (not via search)
+    expect(mockOverseerrGetDetails).toHaveBeenCalledWith(550, "movie");
+    expect(mockOverseerrSearch).not.toHaveBeenCalled();
+    expect(results[0].overseerrId).toBe(550);
+    expect(results[0].cast).toEqual(["Brad Pitt", "Edward Norton"]);
+    expect(results[0].imdbId).toBe("tt0137523");
+  });
+
+  it("falls back to Overseerr title search when tmdbId is absent", async () => {
+    const movieNoTmdb = { ...RADARR_MOVIE, tmdbId: undefined };
+    mockRadarrSearchMovie.mockResolvedValueOnce([movieNoTmdb]);
+    mockPlexSearchLibrary.mockResolvedValueOnce({ results: [], hasMore: false });
+    mockOverseerrSearch.mockResolvedValueOnce({ results: [BASE_SEARCH_RESULT], hasMore: false });
+    mockOverseerrGetDetails.mockResolvedValueOnce(BASE_DETAIL);
+
+    const { registerRadarrTools } = await import("@/lib/tools/radarr-tools");
+    const { defineTool, executeTool } = await import("@/lib/tools/registry");
+    (defineTool as unknown as { _registry?: Map<string, unknown> })._registry?.clear?.();
+    registerRadarrTools();
+
+    const raw = await executeTool("radarr_search_movie", JSON.stringify({ term: "Fight Club" }));
+    const results = JSON.parse(raw) as Record<string, unknown>[];
+
+    expect(mockOverseerrSearch).toHaveBeenCalled();
+    expect(results[0].overseerrId).toBe(550);
+    expect(results[0].imdbId).toBe("tt0137523");
+  });
+});
