@@ -1862,6 +1862,16 @@ Long-running conversations previously grew unboundedly, increasing token usage a
 | `src/lib/llm/orchestrator.ts` | Add `MAX_CONVERSATION_TURNS`, `capConversationHistory()`, call it in `loadHistory()` |
 | `src/__tests__/lib/orchestrator.test.ts` | Add 6 unit tests for `capConversationHistory` |
 
+### Phase N+13 — Version bump to 1.1.4 (stable release)
+
+Bumped `package.json` version from `1.1.4-beta.5` to `1.1.4` for stable release.
+
+| File | Change |
+|------|--------|
+| `package.json` | Version `1.1.4-beta.5` → `1.1.4` |
+
+---
+
 ### Phase N+11 — Realtime: inject conversation history on connect
 
 When switching from text or voice mode into a realtime session mid-conversation, the OpenAI Realtime session previously started with no knowledge of prior turns. Fixed by injecting history in `dc.onopen`:
