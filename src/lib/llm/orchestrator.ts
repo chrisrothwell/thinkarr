@@ -123,7 +123,6 @@ function loadHistory(conversationId: string): ChatMessage[] {
                 // watch buttons remain functional.
                 const compacted = {
                   titles: args.titles.map(
-                    // eslint-disable-next-line @typescript-eslint/no-unused-vars
                     ({ summary: _s, cast: _c, ...rest }) => rest,
                   ),
                 };
@@ -199,10 +198,70 @@ function loadHistory(conversationId: string): ChatMessage[] {
     }
   }
 
-  return trimToolHistory(repaired, conversationId);
+  return capConversationHistory(trimToolHistory(repaired, conversationId), conversationId);
 }
 
 export const MAX_TOOL_ROUNDS_IN_HISTORY = 5;
+
+/**
+ * Maximum number of user + assistant turns kept in conversation history.
+ * Older turns are dropped to keep per-request token cost predictable.
+ * Tool messages are kept only if their tool_call_id is still referenced
+ * by a kept assistant message.
+ */
+export const MAX_CONVERSATION_TURNS = 20;
+
+/**
+ * Slide the history window so at most MAX_CONVERSATION_TURNS user/assistant
+ * messages are sent to the LLM per request.
+ */
+export function capConversationHistory(
+  messages: ChatMessage[],
+  conversationId: string,
+): ChatMessage[] {
+  // Count user + assistant messages from the end to find the cutoff index
+  let turnCount = 0;
+  let cutoffIdx = 0;
+
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const role = (messages[i] as { role: string }).role;
+    if (role === "user" || role === "assistant") {
+      turnCount++;
+      if (turnCount === MAX_CONVERSATION_TURNS) {
+        cutoffIdx = i;
+        break;
+      }
+    }
+  }
+
+  if (turnCount < MAX_CONVERSATION_TURNS) return messages;
+
+  logger.info("Capping conversation history", {
+    conversationId,
+    totalTurns: turnCount,
+    keptTurns: MAX_CONVERSATION_TURNS,
+    droppedMessages: cutoffIdx,
+  });
+
+  const kept = messages.slice(cutoffIdx);
+
+  // Collect tool_call IDs referenced by assistant messages in the kept window
+  const keptToolCallIds = new Set<string>();
+  for (const msg of kept) {
+    if (msg.role === "assistant" && "tool_calls" in msg) {
+      const aMsg = msg as OpenAI.ChatCompletionAssistantMessageParam;
+      for (const tc of aMsg.tool_calls ?? []) keptToolCallIds.add(tc.id);
+    }
+  }
+
+  // Drop tool messages whose call is no longer in the kept window
+  return kept.filter((msg) => {
+    if (msg.role !== "tool") return true;
+    return keptToolCallIds.has(
+      (msg as OpenAI.ChatCompletionToolMessageParam).tool_call_id,
+    );
+  });
+}
 
 /**
  * Cap the number of tool-calling rounds kept in conversation history.
@@ -376,10 +435,14 @@ export async function* orchestrate(
 
         const delta = choice.delta;
 
-        // Text content
+        // Text content — accumulate but do NOT yield yet.
+        // We defer yielding until after the full stream is consumed so we can
+        // tell whether the LLM also emitted tool calls in this same response.
+        // If it did, the text is a premature / speculative answer produced
+        // before the tools ran and should be suppressed entirely (the next LLM
+        // turn after seeing the tool results will produce the real answer).
         if (delta?.content) {
           fullContent += delta.content;
-          yield { type: "text_delta", content: delta.content };
         }
 
         // Tool call deltas
@@ -418,8 +481,12 @@ export async function* orchestrate(
       return;
     }
 
-    // If no tool calls, save the final assistant message and we're done
+    // If no tool calls, this is the final assistant response — yield the
+    // accumulated text now that we know no tool calls came in this round.
     if (toolCalls.length === 0) {
+      if (fullContent) {
+        yield { type: "text_delta", content: fullContent };
+      }
       const messageId = saveMessage(conversationId, "assistant", fullContent);
       logger.info("LLM response complete", {
         conversationId,
