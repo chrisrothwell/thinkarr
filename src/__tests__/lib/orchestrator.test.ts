@@ -542,6 +542,134 @@ describe("trimToolHistory — pure unit", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Text suppression when the LLM emits text alongside tool calls (issue #239)
+// ---------------------------------------------------------------------------
+
+describe("orchestrator — premature text suppression (issue #239)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    sqlite = new Database(":memory:");
+    testDb = drizzle(sqlite, { schema });
+    migrate(testDb, { migrationsFolder: path.resolve(process.cwd(), "drizzle") });
+  });
+  afterEach(() => {
+    sqlite.close();
+  });
+
+  it("suppresses text_delta events when the LLM emits text and tool calls in the same response", async () => {
+    // Simulate an LLM that streams "I'm not sure..." text *and* a tool call
+    // in the same response — the premature text must not reach the client.
+    vi.doMock("@/lib/llm/client", () => ({
+      getLlmClient: () => ({
+        chat: {
+          completions: {
+            create: vi.fn(async () => {
+              return (async function* () {
+                // Round 1: text + tool call in the same response
+                yield {
+                  choices: [{
+                    delta: {
+                      content: "I'm not seeing any results right now.",
+                      tool_calls: [{
+                        index: 0,
+                        id: "call_abc123",
+                        function: { name: "plex_search_library", arguments: "" },
+                      }],
+                    },
+                  }],
+                  usage: null,
+                };
+                yield {
+                  choices: [{
+                    delta: {
+                      tool_calls: [{
+                        index: 0,
+                        id: "",
+                        function: { name: "", arguments: '{"query":"apprentice"}' },
+                      }],
+                    },
+                  }],
+                  usage: null,
+                };
+                yield {
+                  choices: [{ delta: {} }],
+                  usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+                };
+              })();
+            }),
+          },
+        },
+      }),
+      getLlmModel: () => "gpt-4o",
+      getLlmClientForEndpoint: vi.fn(),
+    }));
+
+    vi.doMock("@/lib/tools/registry", () => ({
+      hasTools: () => true,
+      getOpenAITools: () => [{ type: "function", function: { name: "plex_search_library", description: "", parameters: {} } }],
+      executeTool: vi.fn().mockResolvedValue(JSON.stringify({ results: [] })),
+      getToolLlmContent: (_name: string, result: string) => result,
+    }));
+
+    const userId = seedUser(testDb);
+    const conversationId = seedConversation(testDb, userId);
+    const { orchestrate } = await import("@/lib/llm/orchestrator");
+
+    const events: { type: string }[] = [];
+    // Drain only one round (tool_call_start will fire but the test ends after
+    // the MAX_TOOL_ROUNDS error since the mock always returns tool calls)
+    for await (const event of orchestrate({ conversationId, userMessage: "When is the next apprentice?" })) {
+      events.push(event as { type: string });
+      // Stop after the first tool_result so we don't need the mock to produce a final text response
+      if (event.type === "tool_result") break;
+    }
+
+    // The premature text from round 1 must NOT have been yielded
+    const textEvents = events.filter((e) => e.type === "text_delta");
+    expect(textEvents).toHaveLength(0);
+
+    // Tool call events must still be present
+    const toolStartEvents = events.filter((e) => e.type === "tool_call_start");
+    expect(toolStartEvents).toHaveLength(1);
+  });
+
+  it("yields text_delta when the LLM responds with text only (no tool calls)", async () => {
+    vi.doMock("@/lib/llm/client", () => ({
+      getLlmClient: () => ({
+        chat: {
+          completions: {
+            create: vi.fn(async () => {
+              return (async function* () {
+                yield { choices: [{ delta: { content: "The Apprentice airs on Thursday." } }], usage: null };
+                yield { choices: [{ delta: {} }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } };
+              })();
+            }),
+          },
+        },
+      }),
+      getLlmModel: () => "gpt-4o",
+      getLlmClientForEndpoint: vi.fn(),
+    }));
+
+    const userId = seedUser(testDb);
+    const conversationId = seedConversation(testDb, userId);
+    const { orchestrate } = await import("@/lib/llm/orchestrator");
+
+    const events: { type: string; content?: string }[] = [];
+    for await (const event of orchestrate({ conversationId, userMessage: "When is The Apprentice?" })) {
+      events.push(event as { type: string; content?: string });
+    }
+
+    const textEvents = events.filter((e) => e.type === "text_delta");
+    expect(textEvents).toHaveLength(1);
+    expect(textEvents[0].content).toBe("The Apprentice airs on Thursday.");
+
+    const doneEvent = events.find((e) => e.type === "done");
+    expect(doneEvent).toBeDefined();
+  });
+});
+
 describe("orchestrator — 429 rate-limit retry", () => {
   beforeEach(() => {
     vi.resetModules();

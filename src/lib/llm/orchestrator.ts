@@ -376,10 +376,14 @@ export async function* orchestrate(
 
         const delta = choice.delta;
 
-        // Text content
+        // Text content — accumulate but do NOT yield yet.
+        // We defer yielding until after the full stream is consumed so we can
+        // tell whether the LLM also emitted tool calls in this same response.
+        // If it did, the text is a premature / speculative answer produced
+        // before the tools ran and should be suppressed entirely (the next LLM
+        // turn after seeing the tool results will produce the real answer).
         if (delta?.content) {
           fullContent += delta.content;
-          yield { type: "text_delta", content: delta.content };
         }
 
         // Tool call deltas
@@ -418,8 +422,12 @@ export async function* orchestrate(
       return;
     }
 
-    // If no tool calls, save the final assistant message and we're done
+    // If no tool calls, this is the final assistant response — yield the
+    // accumulated text now that we know no tool calls came in this round.
     if (toolCalls.length === 0) {
+      if (fullContent) {
+        yield { type: "text_delta", content: fullContent };
+      }
       const messageId = saveMessage(conversationId, "assistant", fullContent);
       logger.info("LLM response complete", {
         conversationId,

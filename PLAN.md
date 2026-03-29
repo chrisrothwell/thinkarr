@@ -1777,3 +1777,24 @@ This lets Claude immediately identify which deployment and version a user report
 |------|--------|
 | `src/app/api/report-issue/route.ts` | Added `version` and `baseUrl` to issue body and both log entries |
 | `src/__tests__/api/report-issue.test.ts` | Extended existing test to assert version/baseUrl present in log metadata and issue body |
+
+### Phase N+7 — Fix premature streaming text and speed up title card display (#239)
+
+Two issues reported in beta via the user feedback tool (#239):
+
+1. **Premature text before tool results**: The orchestrator was yielding `text_delta` events to the client as soon as each streamed chunk arrived. When the LLM emitted text *and* tool calls in the same response (e.g. "I'm not seeing any results…" alongside a `plex_search_library` call), the speculative answer appeared in the chat before the tool ran — then the real answer appeared after. The transcript in #239 shows this clearly for the "When is the next apprentice?" query.
+
+   **Fix**: Text deltas are now buffered during streaming and only yielded to the client *after* the full response is consumed. If tool calls were also present in that response, the buffered text is silently discarded (it was a premature guess). If no tool calls were present, the accumulated text is yielded as a single `text_delta` event before `done`. The text is still saved to the DB and forwarded to the LLM context regardless, so history and the next round behave correctly.
+
+2. **Slow title card display**: Between receiving search results and calling `display_titles`, the LLM sometimes emitted an intermediate conversational message (e.g. "Here are the results!") which added a full LLM round of latency before cards appeared.
+
+   **Fix**: Added explicit instructions to `DEFAULT_SYSTEM_PROMPT` telling the LLM to call `display_titles` immediately in the next response after receiving search results — no intermediate text — and to batch all searches for multiple independent titles in a single round so they execute in parallel.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/llm/orchestrator.ts` | Buffer text deltas; suppress premature text when tool calls are present in the same LLM response |
+| `src/lib/llm/default-prompt.ts` | New `display_titles` latency guidance: no intermediate rounds, parallel batching for multi-title queries |
+| `src/__tests__/lib/orchestrator.test.ts` | 2 new tests: suppresses text when tool calls present; yields text when no tool calls |
+
