@@ -1925,3 +1925,53 @@ History is injected after `session.update` so transcription is enabled before th
 |------|--------|
 | `src/hooks/use-realtime-chat.ts` | Inject last 20 text turns as `conversation.item.create` events in `dc.onopen` |
 
+
+
+---
+
+### Phase N+16 — Fix realtime VAD sensitivity, chat naming, and form accessibility (#242, #252, #236)
+
+#### #242 — Realtime VAD too sensitive (coughs / background noise interrupt responses)
+
+The OpenAI Realtime API session was created without a `turn_detection` config, so it used the OpenAI default (threshold 0.5, silence 500 ms). This caused background noise and coughs to trigger VAD and interrupt the assistant's spoken response.
+
+Fixed by passing an explicit `turn_detection` block in the session creation payload:
+
+- `threshold: 0.7` — higher value means louder/clearer speech required to activate VAD
+- `silence_duration_ms: 800` — longer silence (800 ms vs 500 ms default) required before a turn ends, avoiding spurious cut-offs
+
+#### #252 — Realtime conversations never update the chat name
+
+Text-mode chats trigger `generateTitle()` inside `/api/chat/route.ts` after the first user message. Realtime turns bypass that route entirely — messages are saved directly via `POST /api/conversations/[id]/messages`. So the conversation title stayed as "New Chat" forever.
+
+Fixed by:
+
+1. **API route** (`src/app/api/conversations/[id]/messages/route.ts`): after saving a `user` message to a `"New Chat"` conversation, calls `generateTitle(conversationId, content)` and includes the resulting title as `data.newTitle` in the response.
+2. **Client** (`src/app/chat/page.tsx`): `handleRealtimeTurn` now reads `data.newTitle` from the API response and calls `updateConversationTitle` to update the sidebar immediately, matching the behaviour of text-mode chats.
+
+#### #236 — Form fields missing id/name attributes
+
+Many inputs, selects, textareas, and checkboxes across the settings page and chat components were missing `id` and `name` attributes. This breaks accessibility (label `htmlFor` linking), password manager autofill, browser autocomplete, and form submission semantics.
+
+Added `id` and `name` to all interactive fields:
+- LLM endpoint fields (name, enabled, default, baseUrl, apiKey, model, system prompt, TTS voice, realtime model, realtime system prompt) — using `ep-${ep.id}-<field>` IDs
+- Arr service fields (URL, apiKey) — using `arr-${svc.key}-<field>` IDs
+- Plex fields (url, token)
+- User management fields (role, model, canChangeModel, rateLimitMessages, rateLimitPeriod) — using `user-${user.id}-<field>` IDs
+- MCP endpoint and bearer token display inputs
+- GitHub issue reporting fields (already had `id`, added `name`)
+- Chat message textarea (`id="chat-message-input"`, `name="message"`)
+- Report issue textarea (`id="report-issue-description"`, `name="description"`)
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/app/api/realtime/session/route.ts` | Add `turn_detection` with `threshold: 0.7`, `silence_duration_ms: 800` |
+| `src/app/api/conversations/[id]/messages/route.ts` | Import `generateTitle`; call on first user message; return `newTitle` in response |
+| `src/app/chat/page.tsx` | `handleRealtimeTurn`: read `newTitle` from response, call `updateConversationTitle` |
+| `src/app/settings/page.tsx` | Add `id`/`name` to all form fields |
+| `src/components/chat/chat-input.tsx` | Add `id`/`name` to message textarea |
+| `src/components/chat/report-issue-modal.tsx` | Add `id`/`name` to description textarea |
+| `src/__tests__/api/conversation-messages.test.ts` | Add 3 tests for title generation behaviour |
+| `src/__tests__/api/realtime-session.test.ts` | Add 1 test asserting `turn_detection` is sent with raised threshold |

@@ -137,6 +137,8 @@ export function ChatInput({
           <div className="flex items-end gap-2">
             <textarea
               ref={textareaRef}
+              id="chat-message-input"
+              name="message"
               className="flex-1 resize-none rounded-xl border border-input bg-card px-4 py-3 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50"
               placeholder="Type a message..."
               rows={1}
