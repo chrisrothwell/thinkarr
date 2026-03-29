@@ -181,6 +181,15 @@ export default function ChatPage() {
     [activeConversationId, createConversation, loadMessages],
   );
 
+  // Called by the realtime hook after each tool result is persisted to the DB.
+  // Reloads the message list so title cards and other tool outputs appear
+  // in the main chat window immediately after the tool completes.
+  const handleRealtimeMessagesUpdated = useCallback(() => {
+    if (activeConversationId) {
+      loadMessages(activeConversationId);
+    }
+  }, [activeConversationId, loadMessages]);
+
   if (userLoading) {
     return (
       <div className="flex h-screen items-center justify-center">
@@ -303,7 +312,9 @@ export default function ChatPage() {
           selectedModel={selectedModel}
           ttsVoice={endpointCaps.ttsVoice}
           lastResponse={messages.findLast((m) => m.role === "assistant")?.content ?? ""}
+          conversationId={activeConversationId}
           onRealtimeTurn={handleRealtimeTurn}
+          onRealtimeMessagesUpdated={handleRealtimeMessagesUpdated}
         />
       </main>
 

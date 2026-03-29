@@ -1798,3 +1798,22 @@ Two issues reported in beta via the user feedback tool (#239):
 | `src/lib/llm/default-prompt.ts` | New `display_titles` latency guidance: no intermediate rounds, parallel batching for multi-title queries |
 | `src/__tests__/lib/orchestrator.test.ts` | 2 new tests: suppresses text when tool calls present; yields text when no tool calls |
 
+### Phase N+8 — Realtime voice: unify transcript into main chat window (#239 follow-up)
+
+Two further improvements requested following the #239 diagnosis:
+
+1. **Title cards and tool results in the voice chat window**: In realtime/voice mode, `display_titles` was filtered out of the tool list and tool call results were never persisted to the DB, so the main `MessageList` never rendered them. Every tool call and its result is now saved to the conversation DB (assistant row with `toolCalls` JSON + tool row with `toolCallId`). After each tool completes, the hook fires `onMessagesUpdated` so the message list reloads and renders title cards, tool call status widgets, etc. exactly as it does for text chat. Audio remains clean — the realtime system prompt already instructs the model to summarise results in speech without reading raw JSON.
+
+2. **Removed the ephemeral transcript widget**: `RealtimeChat` previously rendered a bounded scroll area with live character-by-character turn text that duplicated the main `MessageList`. This is removed. All interactions (user speech, assistant responses, tool results, title cards) appear exclusively in the main chat window. The `RealtimeChat` component now only renders the connection status and connect/end-call button. `transcript` state was removed from `useRealtimeChat` entirely.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/app/api/realtime/tool/route.ts` | Accept `conversationId` + `callId`; persist assistant tool-call message + tool result to DB when provided |
+| `src/app/api/realtime/session/route.ts` | Remove `display_titles` filter — all tools now available in realtime sessions |
+| `src/hooks/use-realtime-chat.ts` | Add `conversationId` + `onMessagesUpdated` options; pass them to tool route; remove `transcript` state |
+| `src/components/chat/realtime-chat.tsx` | Remove ephemeral transcript widget; accept `conversationId` + `onMessagesUpdated` props |
+| `src/components/chat/chat-input.tsx` | Thread `conversationId` + `onRealtimeMessagesUpdated` down to `RealtimeChat` |
+| `src/app/chat/page.tsx` | Pass `activeConversationId` + `handleRealtimeMessagesUpdated` (calls `loadMessages`) into `ChatInput` |
+

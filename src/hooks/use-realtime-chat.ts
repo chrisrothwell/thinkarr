@@ -3,11 +3,6 @@
 import { useState, useRef, useCallback } from "react";
 import { clientLog } from "@/lib/client-logger";
 
-export interface RealtimeTurn {
-  role: "user" | "assistant";
-  text: string;
-}
-
 interface SessionData {
   clientSecret: string;
   realtimeModel: string;
@@ -15,13 +10,23 @@ interface SessionData {
 }
 
 interface UseRealtimeChatOptions {
+  /** Called when a user or assistant turn completes (transcript text). */
   onTurnComplete?: (role: "user" | "assistant", text: string) => void;
+  /**
+   * Active conversation ID. When provided, tool calls and their results are
+   * persisted to the conversation so they appear in the main chat window.
+   */
+  conversationId?: string | null;
+  /**
+   * Called after each tool result is saved to the DB so the caller can
+   * reload the message list and render the updated tool cards.
+   */
+  onMessagesUpdated?: () => void;
 }
 
 export function useRealtimeChat(modelId: string, options: UseRealtimeChatOptions = {}) {
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
-  const [transcript, setTranscript] = useState<RealtimeTurn[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
@@ -30,6 +35,10 @@ export function useRealtimeChat(modelId: string, options: UseRealtimeChatOptions
   const sessionRef = useRef<SessionData | null>(null);
   const onTurnCompleteRef = useRef(options.onTurnComplete);
   onTurnCompleteRef.current = options.onTurnComplete;
+  const conversationIdRef = useRef(options.conversationId);
+  conversationIdRef.current = options.conversationId;
+  const onMessagesUpdatedRef = useRef(options.onMessagesUpdated);
+  onMessagesUpdatedRef.current = options.onMessagesUpdated;
 
   const sendEvent = useCallback((event: Record<string, unknown>) => {
     if (dcRef.current?.readyState === "open") {
@@ -48,19 +57,7 @@ export function useRealtimeChat(modelId: string, options: UseRealtimeChatOptions
 
       const type = event.type as string;
 
-      // Accumulate assistant audio transcript (deltas for live display)
-      if (type === "response.audio_transcript.delta") {
-        const delta = event.delta as string;
-        setTranscript((prev) => {
-          const last = prev[prev.length - 1];
-          if (last?.role === "assistant") {
-            return [...prev.slice(0, -1), { ...last, text: last.text + delta }];
-          }
-          return [...prev, { role: "assistant", text: delta }];
-        });
-      }
-
-      // Assistant turn complete — save to conversation
+      // Assistant turn complete — save to conversation and refresh message list
       if (type === "response.audio_transcript.done") {
         const text = (event.transcript as string) ?? "";
         if (text) {
@@ -72,15 +69,6 @@ export function useRealtimeChat(modelId: string, options: UseRealtimeChatOptions
       if (type === "conversation.item.input_audio_transcription.completed") {
         const text = event.transcript as string;
         if (text) {
-          // Insert user turn before the last assistant entry if transcription
-          // arrived after the assistant started responding (common in realtime flow)
-          setTranscript((prev) => {
-            const last = prev[prev.length - 1];
-            if (last?.role === "assistant") {
-              return [...prev.slice(0, -1), { role: "user", text }, last];
-            }
-            return [...prev, { role: "user", text }];
-          });
           onTurnCompleteRef.current?.("user", text);
         }
       }
@@ -90,12 +78,20 @@ export function useRealtimeChat(modelId: string, options: UseRealtimeChatOptions
         const callId = event.call_id as string;
         const name = event.name as string;
         const argsStr = event.arguments as string;
+        const conversationId = conversationIdRef.current;
 
         try {
           const res = await fetch("/api/realtime/tool", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ toolName: name, toolArgs: JSON.parse(argsStr || "{}") }),
+            body: JSON.stringify({
+              toolName: name,
+              toolArgs: JSON.parse(argsStr || "{}"),
+              // Pass conversation context so the route can persist the tool
+              // call and result to the DB — makes them visible in the main
+              // chat window (MessageList reads from DB).
+              ...(conversationId ? { conversationId, callId } : {}),
+            }),
           });
           const data = await res.json();
           const output = data.success ? data.data.result : JSON.stringify({ error: data.error });
@@ -111,6 +107,11 @@ export function useRealtimeChat(modelId: string, options: UseRealtimeChatOptions
           });
           // Ask the model to respond
           sendEvent({ type: "response.create" });
+
+          // Notify caller so it can reload the message list and show the new cards
+          if (conversationId) {
+            onMessagesUpdatedRef.current?.();
+          }
         } catch (e) {
           clientLog.error("Realtime tool execution failed", {
             toolName: name,
@@ -138,7 +139,6 @@ export function useRealtimeChat(modelId: string, options: UseRealtimeChatOptions
     if (connected || connecting) return;
     setConnecting(true);
     setError(null);
-    setTranscript([]);
 
     // Microphone access requires a secure context (HTTPS or localhost)
     if (!window.isSecureContext) {
@@ -278,5 +278,5 @@ export function useRealtimeChat(modelId: string, options: UseRealtimeChatOptions
     setConnecting(false);
   }, []);
 
-  return { connected, connecting, transcript, connect, disconnect, error };
+  return { connected, connecting, connect, disconnect, error };
 }
