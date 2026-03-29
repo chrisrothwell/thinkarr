@@ -78,6 +78,10 @@ Only the human manages the release flow. All version bumps go through PRs — ne
 - For a full release: strip the `-beta.x` suffix (e.g. `1.1.4-beta.2` → `1.1.4`) — do not just bump the patch number independently.
 - The bump always goes through a PR — never commit directly to `dev`, `beta`, or `main`.
 
+### Exception: security/CI-only fixes during an active release cycle
+
+If dev and beta are both already at the intended release version (e.g. both at `1.1.4`) and the dev → beta merge carries **only** security fixes, CodeQL/CI fixes, or equivalent non-functional changes, the version bump requirement is waived. Open the dev → beta PR directly. The beta → main PR version check still applies normally.
+
 ## Rule: run local security checks before dev → beta
 
 Before opening a `dev → beta` PR, run all three checks locally and confirm they pass. This avoids wasted CI cycles on the beta pipeline.
