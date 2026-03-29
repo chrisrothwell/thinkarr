@@ -124,13 +124,21 @@ For every PR, update `PLAN.md` to reflect what was built or changed:
 
 Do this as a separate commit on the same branch before pushing, so the PR includes the documentation alongside the code.
 
+## Rule: CodeQL is a required gate on dev, beta, and main
+
+CodeQL runs as the `codeql` job in `.github/workflows/ci.yml` and is included in the `CI Complete` gate. This means CodeQL must pass on every PR to `dev`, `beta`, and `main`.
+
+**Rationale:** `:beta` is a deployable Docker image with the same network attack surface as `:latest`. Security vulnerabilities must be caught before the image ships, not only on the `beta → main` PR.
+
+The `codeql` job uses `upload: false` on the `analyze` step to avoid the "advanced configuration cannot be processed when default setup is enabled" conflict. GitHub's default setup continues to upload results to the Security tab for `main`; the `ci.yml` job acts as a local gate on `dev` and `beta` PRs, failing CI on `error`-level findings and saving the SARIF as a downloadable artifact. Do not remove the `codeql` job from `ci.yml` and do not change `upload: false` to `true`.
+
 ## Rule: CodeQL false positives
 
 When GitHub Code Scanning raises a `js/ssrf` (or other) alert that is a confirmed false positive — i.e. the code has explicit URL validation that CodeQL cannot trace through — **dismiss the alert via the GitHub API**. Do not:
 
 - Add `// lgtm[...]` comments — ignored by GitHub Code Scanning (only worked on the legacy lgtm.com product)
 - Create `.github/codeql/codeql-config.yml` alone — GitHub's auto-setup ignores this file unless a custom workflow explicitly references it via `config-file:`
-- Create `.github/workflows/codeql.yml` to replace GitHub's built-in scanning — this repo uses GitHub's auto-setup intentionally
+- Create `.github/workflows/codeql.yml` to replace GitHub's built-in scanning — this repo uses GitHub's auto-setup intentionally; the `codeql` job in `ci.yml` supplements it, it does not replace it
 
 ### How to dismiss via `gh` CLI
 
