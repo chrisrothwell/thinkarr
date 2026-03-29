@@ -71,6 +71,7 @@ beforeEach(() => {
   testDb = drizzle(sqlite, { schema });
   migrate(testDb, { migrationsFolder: path.join(process.cwd(), "drizzle") });
   mockState.sessionCookie = undefined;
+  mockGenerateTitle.mockClear();
   mockGenerateTitle.mockResolvedValue(null);
 });
 
