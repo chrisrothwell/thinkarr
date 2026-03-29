@@ -199,10 +199,70 @@ function loadHistory(conversationId: string): ChatMessage[] {
     }
   }
 
-  return trimToolHistory(repaired, conversationId);
+  return capConversationHistory(trimToolHistory(repaired, conversationId), conversationId);
 }
 
 export const MAX_TOOL_ROUNDS_IN_HISTORY = 5;
+
+/**
+ * Maximum number of user + assistant turns kept in conversation history.
+ * Older turns are dropped to keep per-request token cost predictable.
+ * Tool messages are kept only if their tool_call_id is still referenced
+ * by a kept assistant message.
+ */
+export const MAX_CONVERSATION_TURNS = 20;
+
+/**
+ * Slide the history window so at most MAX_CONVERSATION_TURNS user/assistant
+ * messages are sent to the LLM per request.
+ */
+export function capConversationHistory(
+  messages: ChatMessage[],
+  conversationId: string,
+): ChatMessage[] {
+  // Count user + assistant messages from the end to find the cutoff index
+  let turnCount = 0;
+  let cutoffIdx = 0;
+
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const role = (messages[i] as { role: string }).role;
+    if (role === "user" || role === "assistant") {
+      turnCount++;
+      if (turnCount === MAX_CONVERSATION_TURNS) {
+        cutoffIdx = i;
+        break;
+      }
+    }
+  }
+
+  if (turnCount < MAX_CONVERSATION_TURNS) return messages;
+
+  logger.info("Capping conversation history", {
+    conversationId,
+    totalTurns: turnCount,
+    keptTurns: MAX_CONVERSATION_TURNS,
+    droppedMessages: cutoffIdx,
+  });
+
+  const kept = messages.slice(cutoffIdx);
+
+  // Collect tool_call IDs referenced by assistant messages in the kept window
+  const keptToolCallIds = new Set<string>();
+  for (const msg of kept) {
+    if (msg.role === "assistant" && "tool_calls" in msg) {
+      const aMsg = msg as OpenAI.ChatCompletionAssistantMessageParam;
+      for (const tc of aMsg.tool_calls ?? []) keptToolCallIds.add(tc.id);
+    }
+  }
+
+  // Drop tool messages whose call is no longer in the kept window
+  return kept.filter((msg) => {
+    if (msg.role !== "tool") return true;
+    return keptToolCallIds.has(
+      (msg as OpenAI.ChatCompletionToolMessageParam).tool_call_id,
+    );
+  });
+}
 
 /**
  * Cap the number of tool-calling rounds kept in conversation history.

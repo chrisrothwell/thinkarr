@@ -1846,6 +1846,22 @@ Two mobile resilience improvements:
 |------|--------|
 | `src/hooks/use-realtime-chat.ts` | Wire `pc.onconnectionstatechange` + `dc.onclose` for unexpected-disconnect detection; add wake lock acquire/release/re-acquire lifecycle |
 
+### Phase N+12 — Cap conversation history at 20 messages to limit token growth
+
+Long-running conversations previously grew unboundedly, increasing token usage and latency with every turn. Added a sliding-window cap of 20 individual messages (≈10 exchanges) applied at the end of history loading.
+
+- `MAX_CONVERSATION_TURNS = 20` constant added to `orchestrator.ts`
+- `capConversationHistory(messages, conversationId)` function: walks backwards counting user/assistant turns, finds the cutoff index, slices to the most recent 20, then strips any leading tool messages that would be orphaned
+- Called at the end of `loadHistory()` after `trimToolHistory()`
+- 6 new unit tests covering: unchanged when under limit, unchanged at exact limit, drops oldest when over, keeps most-recent messages, retains tool messages inside the window, drops tool messages outside the window
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/llm/orchestrator.ts` | Add `MAX_CONVERSATION_TURNS`, `capConversationHistory()`, call it in `loadHistory()` |
+| `src/__tests__/lib/orchestrator.test.ts` | Add 6 unit tests for `capConversationHistory` |
+
 ### Phase N+11 — Realtime: inject conversation history on connect
 
 When switching from text or voice mode into a realtime session mid-conversation, the OpenAI Realtime session previously started with no knowledge of prior turns. Fixed by injecting history in `dc.onopen`:
