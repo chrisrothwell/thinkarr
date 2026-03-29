@@ -35,6 +35,14 @@ vi.mock("next/headers", () => ({
 }));
 
 // ---------------------------------------------------------------------------
+// generateTitle mock
+// ---------------------------------------------------------------------------
+const mockGenerateTitle = vi.fn();
+vi.mock("@/lib/llm/orchestrator", () => ({
+  generateTitle: (...args: unknown[]) => mockGenerateTitle(...args),
+}));
+
+// ---------------------------------------------------------------------------
 // Route handler (imported after mocks)
 // ---------------------------------------------------------------------------
 import { POST } from "@/app/api/conversations/[id]/messages/route";
@@ -63,6 +71,7 @@ beforeEach(() => {
   testDb = drizzle(sqlite, { schema });
   migrate(testDb, { migrationsFolder: path.join(process.cwd(), "drizzle") });
   mockState.sessionCookie = undefined;
+  mockGenerateTitle.mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -191,5 +200,58 @@ describe("POST /api/conversations/[id]/messages — success", () => {
     const body = await res.json();
     const saved = testDb.select().from(schema.messages).where(eq(schema.messages.id, body.data.id)).get();
     expect(saved!.content).toBe("padded content");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Title generation (#252)
+// ---------------------------------------------------------------------------
+describe("POST /api/conversations/[id]/messages — title generation", () => {
+  it("calls generateTitle on the first user message and returns newTitle", async () => {
+    const uid = seedUser(testDb);
+    mockState.sessionCookie = seedSession(testDb, uid);
+    const convId = seedConversation(testDb, uid, "New Chat");
+
+    mockGenerateTitle.mockResolvedValue("Ghostbusters (1984)");
+
+    const res = await POST(
+      makeRequest({ role: "user", content: "Is Ghostbusters on Plex?" }, convId),
+      makeParams(convId),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.data.newTitle).toBe("Ghostbusters (1984)");
+    expect(mockGenerateTitle).toHaveBeenCalledWith(convId, "Is Ghostbusters on Plex?");
+  });
+
+  it("does not call generateTitle for assistant messages", async () => {
+    const uid = seedUser(testDb);
+    mockState.sessionCookie = seedSession(testDb, uid);
+    const convId = seedConversation(testDb, uid, "New Chat");
+
+    const res = await POST(
+      makeRequest({ role: "assistant", content: "Yes, it is available." }, convId),
+      makeParams(convId),
+    );
+    expect(res.status).toBe(200);
+    expect(mockGenerateTitle).not.toHaveBeenCalled();
+    const body = await res.json();
+    expect(body.data.newTitle).toBeNull();
+  });
+
+  it("returns newTitle as null when generateTitle returns null", async () => {
+    const uid = seedUser(testDb);
+    mockState.sessionCookie = seedSession(testDb, uid);
+    const convId = seedConversation(testDb, uid, "New Chat");
+
+    mockGenerateTitle.mockResolvedValue(null);
+
+    const res = await POST(
+      makeRequest({ role: "user", content: "What is on TV tonight?" }, convId),
+      makeParams(convId),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.data.newTitle).toBeNull();
   });
 });
