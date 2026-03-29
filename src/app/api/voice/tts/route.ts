@@ -86,9 +86,12 @@ export async function POST(request: Request) {
  * Strip common markdown so TTS reads natural prose instead of symbols.
  */
 function stripMarkdown(text: string): string {
-  return text
-    // Fenced code blocks — replace with "code:" + content
-    .replace(/```[\w]*\n?([\s\S]*?)```/g, "code: $1")
+  // Remove fenced code blocks via split instead of regex to avoid ReDoS on uncontrolled input.
+  // Split on ``` — even-indexed segments are outside code fences, odd-indexed are inside.
+  const parts = text.split("```");
+  const withoutFences = parts.map((p, i) => (i % 2 === 0 ? p : "code")).join(" ");
+
+  return withoutFences
     // Inline code
     .replace(/`([^`]+)`/g, "$1")
     // Bold / italic (*** ** * ___ __ _)
