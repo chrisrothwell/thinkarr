@@ -1975,3 +1975,47 @@ Added `id` and `name` to all interactive fields:
 | `src/components/chat/report-issue-modal.tsx` | Add `id`/`name` to description textarea |
 | `src/__tests__/api/conversation-messages.test.ts` | Add 3 tests for title generation behaviour |
 | `src/__tests__/api/realtime-session.test.ts` | Add 1 test asserting `turn_detection` is sent with raised threshold |
+
+---
+
+### Phase N+17 — Tool enrichment: auto-populate cast/imdbId/poster for search results (#253)
+
+Previously, `overseerr_search` and `overseerr_discover` returned only shallow search data; the LLM had to call `overseerr_get_details` separately for cast, imdbId, and accurate season data before calling `display_titles`. `sonarr_search_series` and `radarr_search_movie` returned raw Sonarr/Radarr data with no poster, cast, or Overseerr linkage at all.
+
+Fixed by adding automatic enrichment inside each tool handler so `display_titles` receives complete data without any extra LLM tool calls.
+
+#### overseerr_search / overseerr_discover
+
+Both handlers now call `overseerr.getDetails()` for every result in parallel (via `Promise.all`). The detail fields are merged into each result: `cast`, `imdbId`, updated `thumbPath` (if not already set), and for TV: `seasonCount` and per-season `seasons` array. Individual failures are non-fatal — if `getDetails` throws for a result, the base search result is returned unchanged.
+
+The `overseerr_get_details` tool description was updated to clarify that search now returns full details; `get_details` is only needed for fields not included in search results (genres, runtime, full request history).
+
+#### sonarr_search_series
+
+Added `enrichSonarrSeries(s)` helper in `sonarr-tools.ts`:
+1. **Plex first**: `plex.searchLibrary(title)` → find a `mediaType==="tv"` match by title+year → return with `thumbPath` (via `buildThumbUrl`), `plexKey`, and `cast`. Short-circuits if a match is found — Overseerr is not called.
+2. **Overseerr fallback**: `overseerr.search(title, 1)` → find TV match → `overseerr.getDetails(id, "tv")` → return with `thumbPath`, `overseerrId`, `cast`, `imdbId`.
+3. Both steps wrapped in try/catch; returns unmodified series if both fail.
+
+`SonarrSeries` interface extended with `thumbPath?`, `plexKey?`, `overseerrId?`, `cast?`, `imdbId?` enrichment fields.
+
+#### radarr_search_movie
+
+Added `enrichRadarrMovie(m)` helper in `radarr-tools.ts` using the same Plex-first/Overseerr-fallback pattern:
+1. **Plex first**: `plex.searchLibrary(title)` → `mediaType==="movie"` match → return with `thumbPath`, `plexKey`, `cast`.
+2. **Overseerr fallback — tmdbId path**: if `m.tmdbId` is set, call `overseerr.getDetails(m.tmdbId, "movie")` directly (more reliable than a title search). Returns with `thumbPath`, `overseerrId` set to `m.tmdbId`, `cast`, `imdbId`.
+3. **Overseerr fallback — title search path**: if no `tmdbId`, fall back to `overseerr.search(title)` → first movie match → `getDetails`.
+
+`RadarrMovie` interface extended with the same enrichment fields.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/services/overseerr.ts` | Added `thumbPath?` to `OverseerrDetails`; extract and set `thumbPath` in `getDetails()`; added `normalizeMediaStatus()` export |
+| `src/lib/tools/overseerr-tools.ts` | `overseerr_search` and `overseerr_discover` handlers: parallel `getDetails` enrichment; updated descriptions and `llmSummary` |
+| `src/lib/services/sonarr.ts` | Added enrichment fields to `SonarrSeries` interface |
+| `src/lib/tools/sonarr-tools.ts` | Added `enrichSonarrSeries` helper; `sonarr_search_series` handler calls it; updated description and `llmSummary` |
+| `src/lib/services/radarr.ts` | Added enrichment fields to `RadarrMovie` interface |
+| `src/lib/tools/radarr-tools.ts` | Added `enrichRadarrMovie` helper; `radarr_search_movie` handler calls it; updated description and `llmSummary` |
+| `src/__tests__/lib/tool-enrichment.test.ts` | New: unit tests for all enrichment paths (Plex match, Overseerr fallback, tmdbId direct lookup, graceful degradation) |
