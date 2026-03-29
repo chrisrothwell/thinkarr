@@ -25,7 +25,7 @@ const mockPlexSearchLibrary = vi.fn();
 const mockPlexBuildThumbUrl = vi.fn((p: string) => `/api/plex/thumb?path=${encodeURIComponent(p)}`);
 vi.mock("@/lib/services/plex", () => ({
   searchLibrary: (...a: unknown[]) => mockPlexSearchLibrary(...a),
-  buildThumbUrl: (...a: unknown[]) => mockPlexBuildThumbUrl(...a),
+  buildThumbUrl: (p: string) => mockPlexBuildThumbUrl(p),
   getPlexMachineId: vi.fn(),
 }));
 
