@@ -310,6 +310,7 @@ describe("orchestrator — orphaned tool call repair (issue #151)", () => {
     const { eq } = await import("drizzle-orm");
 
     // First request — triggers the repair and should persist the synthetic result
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     for await (const _ of orchestrate({ conversationId, userMessage: "Hello" })) { /* drain */ }
 
     // Exactly one synthetic tool result row should exist in the DB
@@ -325,6 +326,7 @@ describe("orchestrator — orphaned tool call repair (issue #151)", () => {
     expect(content.error).toMatch(/did not complete/);
 
     // Second request — no new synthetic row should be added (repair does not repeat)
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     for await (const _ of orchestrate({ conversationId, userMessage: "Go on" })) { /* drain */ }
 
     const rowsAfterSecond = testDb

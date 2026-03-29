@@ -123,7 +123,6 @@ function loadHistory(conversationId: string): ChatMessage[] {
                 // watch buttons remain functional.
                 const compacted = {
                   titles: args.titles.map(
-                    // eslint-disable-next-line @typescript-eslint/no-unused-vars
                     ({ summary: _s, cast: _c, ...rest }) => rest,
                   ),
                 };

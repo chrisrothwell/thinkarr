@@ -476,7 +476,6 @@ describe("display_titles tool call arg compression", () => {
             // Strip only decorative fields (summary, cast) — NOT thumbPath.
             // thumbPath is needed so the LLM can reuse the poster URL in
             // follow-up display_titles calls without re-searching.
-            // eslint-disable-next-line @typescript-eslint/no-unused-vars
             ({ summary: _s, cast: _c, ...rest }) => rest,
           ),
         };

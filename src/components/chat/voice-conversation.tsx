@@ -44,10 +44,13 @@ export function VoiceConversation({
   // Keep stable refs so the unmount cleanup can read the latest values
   // without needing them as effect dependencies.
   const recordingRef = useRef(recording);
+  // eslint-disable-next-line react-hooks/refs
   recordingRef.current = recording;
   const cancelRecordingRef = useRef(cancelRecording);
+  // eslint-disable-next-line react-hooks/refs
   cancelRecordingRef.current = cancelRecording;
   const stopTtsRef = useRef(stopTts);
+  // eslint-disable-next-line react-hooks/refs
   stopTtsRef.current = stopTts;
 
   // Release mic and stop TTS when the component unmounts (mode change,
