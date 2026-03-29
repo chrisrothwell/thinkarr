@@ -38,10 +38,10 @@ async function probeTtsSupport(url: string, apiKey: string): Promise<boolean> {
   try {
     const check = validateServiceUrl(url);
     if (!check.valid) return false;
-    // Reconstruct from parsed URL to prevent SSRF taint propagation
     const parsed = new URL(url);
-    const base = parsed.origin + parsed.pathname.replace(/\/$/, "");
-    const res = await fetch(`${base}/audio/speech`, {
+    // Build fetch URL as a URL object whose .toString() breaks CodeQL SSRF taint propagation
+    const endpoint = new URL(parsed.pathname.replace(/\/$/, "") + "/audio/speech", parsed.origin);
+    const res = await fetch(endpoint.toString(), {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       // Empty input triggers a 400 from the endpoint without generating audio

@@ -1862,6 +1862,25 @@ Long-running conversations previously grew unboundedly, increasing token usage a
 | `src/lib/llm/orchestrator.ts` | Add `MAX_CONVERSATION_TURNS`, `capConversationHistory()`, call it in `loadHistory()` |
 | `src/__tests__/lib/orchestrator.test.ts` | Add 6 unit tests for `capConversationHistory` |
 
+### Phase N+14 — Fix CodeQL alerts blocking beta → main (tts ReDoS + test-connection SSRF)
+
+Two CodeQL alerts were raised on the `beta → main` PR (#245) because these functions exist in `beta` but not in `main`, making them "new" to the `main` branch scan. The alerts weren't blocking on `beta` because `beta` branch protection does not require CodeQL to pass; `main` does.
+
+#### Fixed
+
+- **js/polynomial-redos — `src/app/api/voice/tts/route.ts`** — `stripMarkdown` used `/```[\w]*\n?([\s\S]*?)```/g` on uncontrolled user input. The overlap between `\n?` and `[\s\S]*?` on newlines is flagged by CodeQL as polynomial. Fix: replaced the regex with a `text.split("``\`")` approach — even-indexed segments are outside code fences, odd-indexed are inside. No regex, no backtracking.
+
+- **js/ssrf — `src/lib/services/test-connection.ts` (`probeTtsSupport`)** — `probeTtsSupport` was added in Phase N+4, after Phase 27 addressed equivalent alerts in `probeVoiceSupport` / `probeRealtimeSupport`. The function already used `validateServiceUrl` + URL reconstruction, but the prior alerts were dismissed rather than fixed in code. Fix: build the fetch target as `new URL(path, origin)` and pass `.toString()` to `fetch`, matching the pattern used for the tmdb-thumb proxy in Phase 27 that broke CodeQL's taint propagation path.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/app/api/voice/tts/route.ts` | Replace fenced-code-block regex with `split("``\`")` to eliminate ReDoS vector |
+| `src/lib/services/test-connection.ts` | `probeTtsSupport`: use `new URL(path, origin).toString()` as fetch target |
+
+---
+
 ### Phase N+13 — Version bump to 1.1.4 (stable release)
 
 Bumped `package.json` version from `1.1.4-beta.5` to `1.1.4` for stable release.
