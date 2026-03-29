@@ -27,7 +27,6 @@ vi.mock("@/lib/services/plex", () => ({
   searchLibrary: (...a: unknown[]) => mockPlexSearchLibrary(...a),
   buildThumbUrl: (...a: unknown[]) => mockPlexBuildThumbUrl(...a),
   getPlexMachineId: vi.fn(),
-  searchLibrary: (...a: unknown[]) => mockPlexSearchLibrary(...a),
 }));
 
 const mockSonarrSearchSeries = vi.fn();
