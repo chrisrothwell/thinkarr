@@ -1832,3 +1832,17 @@ Two cleanup gaps identified:
 | `src/app/chat/page.tsx` | Always reset realtime to text on model change (session is model-specific) |
 | `src/components/chat/voice-conversation.tsx` | Add unmount `useEffect` cleanup for mic + TTS via stable refs |
 
+### Phase N+10 — Realtime: detect unexpected disconnects + Screen Wake Lock
+
+Two mobile resilience improvements:
+
+1. **Unexpected disconnect detection**: Previously `connected` state stayed `true` after the underlying WebRTC connection dropped (screen off, app backgrounded, network loss, server timeout). The UI showed the green dot and "Listening" even though `sendEvent` silently no-oped. Fixed by wiring `pc.onconnectionstatechange` (`"failed"` / `"closed"`) and `dc.onclose` in `useRealtimeChat`. Both fire `handleUnexpectedDisconnect` which tears down the connection and surfaces a "Connection lost. Tap Connect to start a new session." message. An `intentionalDisconnectRef` flag prevents showing this error on a user-initiated end-call.
+
+2. **Screen Wake Lock**: The browser Screen Wake Lock API (`navigator.wakeLock.request("screen")`) is called after a successful WebRTC handshake to prevent the device screen from turning off during an active session (supported on Android Chrome and iOS Safari 16.4+). The lock is released on disconnect (user-initiated or unexpected), and re-acquired on `visibilitychange` to `"visible"` if the session is still connected (since the browser auto-releases the lock when the page is hidden). Falls back silently if the API is unavailable.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/hooks/use-realtime-chat.ts` | Wire `pc.onconnectionstatechange` + `dc.onclose` for unexpected-disconnect detection; add wake lock acquire/release/re-acquire lifecycle |
+
