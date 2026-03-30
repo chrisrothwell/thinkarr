@@ -2060,3 +2060,41 @@ Fixed by passing `language: "en"` in the `input_audio_transcription` session upd
 | File | Change |
 |------|--------|
 | `src/hooks/use-realtime-chat.ts` | Added `language: "en"` to `input_audio_transcription` in the `session.update` event sent on `dc.onopen` |
+
+---
+
+### Phase N+18 (addendum 2) — Configurable transcription language per endpoint (#258)
+
+Replaced the hardcoded `language: "en"` Whisper setting with a per-endpoint **Transcription Language** option in Settings. Defaults to "Auto-detect" so existing users are unaffected; users who experience language misdetection (e.g. Welsh) can pin it to English.
+
+#### What changed
+
+**Settings page** — A "Transcription Language" dropdown appears under each LLM endpoint when Voice (Whisper) or Realtime capability is detected. Options: Auto-detect, English, Spanish, French, German, Italian, Portuguese, Dutch, Japanese, Korean, Chinese, Russian, Arabic, Hindi, Polish, Welsh. Stored as `transcriptionLanguage` in the endpoint JSON alongside `ttsVoice`.
+
+**Data flow** — `transcriptionLanguage` propagates from settings through:
+- `LlmEndpointConfig` (client.ts) → `LlmEndpoint` (settings/route.ts) → `ModelOption` (models/route.ts) → chat page `endpointCaps` → `ChatInput` → `VoiceConversation` / `RealtimeChat`
+
+**Voice mode** (`use-voice-input` + `/api/voice/transcribe`) — `language` is appended to the FormData; the route passes it to `client.audio.transcriptions.create()` when non-empty and not "auto".
+
+**Realtime mode** (`use-realtime-chat`) — `transcriptionLanguage` is now an option; `dc.onopen` sends it in the `session.update` `input_audio_transcription` config. "auto" omits the parameter (Whisper auto-detect behaviour preserved).
+
+**Default prompts** — Removed the hardcoded "Always respond in English" instruction added earlier in this phase; language handling is now fully at the Whisper layer rather than the prompt layer.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/llm/client.ts` | Added `transcriptionLanguage?: string` to `LlmEndpointConfig` |
+| `src/app/api/settings/route.ts` | Added `transcriptionLanguage: string` to `LlmEndpoint`; default `"auto"` in legacy migration |
+| `src/app/api/models/route.ts` | Added `transcriptionLanguage` to `ModelOption` and `LlmEndpoint`; exposed with default `"auto"` |
+| `src/app/settings/page.tsx` | Added `transcriptionLanguage` to `LocalEndpoint` type, endpoint defaults, and UI selector |
+| `src/hooks/use-voice-input.ts` | `stopAndTranscribe` now accepts optional `language` param; appends to FormData when set |
+| `src/components/chat/voice-input.tsx` | Added `transcriptionLanguage` prop; passed to `stopAndTranscribe` |
+| `src/components/chat/voice-conversation.tsx` | Added `transcriptionLanguage` prop; passed to `stopAndTranscribe` |
+| `src/hooks/use-realtime-chat.ts` | Added `transcriptionLanguage` option; applied in `dc.onopen` `session.update` |
+| `src/components/chat/realtime-chat.tsx` | Added `transcriptionLanguage` prop; forwarded to hook |
+| `src/components/chat/chat-input.tsx` | Added `transcriptionLanguage` prop; forwarded to `VoiceConversation` and `RealtimeChat` |
+| `src/app/chat/page.tsx` | Added `transcriptionLanguage` to `endpointCaps` state; passed to `ChatInput` |
+| `src/app/api/voice/transcribe/route.ts` | Reads `language` from FormData; passes to Whisper when not "auto" |
+| `src/lib/llm/default-prompt.ts` | Removed hardcoded English-only instructions from both default prompts |
+| `src/__tests__/api/voice-transcribe.test.ts` | Added 3 tests: language passed, "auto" omitted, omitted field omitted |

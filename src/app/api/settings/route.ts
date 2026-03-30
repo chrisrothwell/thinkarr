@@ -19,6 +19,7 @@ export interface LlmEndpoint {
   supportsRealtime: boolean;
   realtimeModel: string;
   realtimeSystemPrompt: string;
+  transcriptionLanguage: string;
 }
 
 function getLlmEndpoints(): LlmEndpoint[] {
@@ -50,6 +51,7 @@ function getLlmEndpoints(): LlmEndpoint[] {
         supportsRealtime: false,
         realtimeModel: "",
         realtimeSystemPrompt: "",
+        transcriptionLanguage: "auto",
       },
     ];
   }

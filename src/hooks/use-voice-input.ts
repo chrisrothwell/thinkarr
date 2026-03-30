@@ -57,7 +57,7 @@ export function useVoiceInput() {
     }
   }, []);
 
-  const stopAndTranscribe = useCallback(async (modelId: string): Promise<string> => {
+  const stopAndTranscribe = useCallback(async (modelId: string, language = "auto"): Promise<string> => {
     const mediaRecorder = mediaRecorderRef.current;
     if (!mediaRecorder || mediaRecorder.state === "inactive") {
       return "";
@@ -79,6 +79,7 @@ export function useVoiceInput() {
           const form = new FormData();
           form.append("audio", blob, "recording.webm");
           form.append("modelId", modelId);
+          if (language && language !== "auto") form.append("language", language);
           const res = await fetch("/api/voice/transcribe", { method: "POST", body: form });
           const data = await res.json();
           if (data.success) {

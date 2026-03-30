@@ -18,6 +18,7 @@ interface ChatInputProps {
   supportsRealtime: boolean;
   selectedModel: string;
   ttsVoice?: string;
+  transcriptionLanguage?: string;
   lastResponse?: string;
   conversationId?: string | null;
   onRealtimeTurn?: (role: "user" | "assistant", text: string) => void;
@@ -35,6 +36,7 @@ export function ChatInput({
   supportsRealtime,
   selectedModel,
   ttsVoice = "alloy",
+  transcriptionLanguage = "auto",
   lastResponse = "",
   conversationId,
   onRealtimeTurn,
@@ -121,6 +123,7 @@ export function ChatInput({
           <VoiceConversation
             modelId={selectedModel}
             ttsVoice={ttsVoice}
+            transcriptionLanguage={transcriptionLanguage}
             onSend={onSend}
             onCancel={() => onModeChange("text")}
             streaming={streaming ?? false}
@@ -132,6 +135,7 @@ export function ChatInput({
             conversationId={conversationId}
             onTurn={onRealtimeTurn}
             onMessagesUpdated={onRealtimeMessagesUpdated}
+            transcriptionLanguage={transcriptionLanguage}
           />
         ) : (
           <div className="flex items-end gap-2">

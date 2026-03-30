@@ -42,6 +42,7 @@ export default function ChatPage() {
     supportsVoice: false,
     supportsRealtime: false,
     ttsVoice: "alloy",
+    transcriptionLanguage: "auto",
   });
   const [reportIssueOpen, setReportIssueOpen] = useState(false);
 
@@ -94,6 +95,7 @@ export default function ChatPage() {
               supportsVoice: defaultOpt.supportsVoice ?? false,
               supportsRealtime: defaultOpt.supportsRealtime ?? false,
               ttsVoice: defaultOpt.ttsVoice ?? "alloy",
+              transcriptionLanguage: defaultOpt.transcriptionLanguage ?? "auto",
             });
           }
         }
@@ -241,6 +243,7 @@ export default function ChatPage() {
                       supportsVoice: opt?.supportsVoice ?? false,
                       supportsRealtime: opt?.supportsRealtime ?? false,
                       ttsVoice: opt?.ttsVoice ?? "alloy",
+                      transcriptionLanguage: opt?.transcriptionLanguage ?? "auto",
                     };
                     setEndpointCaps(caps);
                     setChatMode((prev) => {
@@ -321,6 +324,7 @@ export default function ChatPage() {
           supportsRealtime={endpointCaps.supportsRealtime}
           selectedModel={selectedModel}
           ttsVoice={endpointCaps.ttsVoice}
+          transcriptionLanguage={endpointCaps.transcriptionLanguage}
           lastResponse={messages.findLast((m) => m.role === "assistant")?.content ?? ""}
           conversationId={activeConversationId}
           onRealtimeTurn={handleRealtimeTurn}

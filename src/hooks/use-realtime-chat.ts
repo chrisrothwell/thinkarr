@@ -22,6 +22,12 @@ interface UseRealtimeChatOptions {
    * reload the message list and render the updated tool cards.
    */
   onMessagesUpdated?: () => void;
+  /**
+   * BCP-47 language code to pass to Whisper for input audio transcription
+   * (e.g. "en", "fr"). Defaults to "auto" which lets Whisper detect the
+   * language automatically.
+   */
+  transcriptionLanguage?: string;
 }
 
 export function useRealtimeChat(modelId: string, options: UseRealtimeChatOptions = {}) {
@@ -45,6 +51,8 @@ export function useRealtimeChat(modelId: string, options: UseRealtimeChatOptions
   conversationIdRef.current = options.conversationId;
   const onMessagesUpdatedRef = useRef(options.onMessagesUpdated);
   onMessagesUpdatedRef.current = options.onMessagesUpdated;
+  const transcriptionLanguageRef = useRef(options.transcriptionLanguage ?? "auto");
+  transcriptionLanguageRef.current = options.transcriptionLanguage ?? "auto";
 
   // Set when the user explicitly calls disconnect() so that dc.onclose /
   // pc.onconnectionstatechange know not to show an error message.
@@ -262,13 +270,17 @@ export function useRealtimeChat(modelId: string, options: UseRealtimeChatOptions
 
       dc.onopen = () => {
         // Enable input audio transcription so user speech is surfaced as text.
-        // Locking language to "en" prevents Whisper from misidentifying English
-        // speech as another language (e.g. Welsh) and transcribing incorrectly,
-        // which would cause the model to respond in that language.
+        // Pass the configured language (e.g. "en") to prevent Whisper from
+        // misidentifying the spoken language. "auto" omits the parameter so
+        // Whisper auto-detects as normal.
+        const lang = transcriptionLanguageRef.current;
         sendEvent({
           type: "session.update",
           session: {
-            input_audio_transcription: { model: "whisper-1", language: "en" },
+            input_audio_transcription: {
+              model: "whisper-1",
+              ...(lang && lang !== "auto" ? { language: lang } : {}),
+            },
           },
         });
 

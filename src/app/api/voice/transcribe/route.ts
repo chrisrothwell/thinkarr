@@ -33,6 +33,9 @@ export async function POST(request: Request) {
 
   const audioFile = formData.get("audio");
   const modelId = (formData.get("modelId") as string) || "";
+  const languageRaw = (formData.get("language") as string) || "";
+  // Only pass a language hint when one is explicitly set (non-empty, not "auto")
+  const language = languageRaw && languageRaw !== "auto" ? languageRaw : undefined;
 
   if (!audioFile || !(audioFile instanceof Blob)) {
     return NextResponse.json<ApiResponse>(
@@ -48,9 +51,10 @@ export async function POST(request: Request) {
     const transcription = await client.audio.transcriptions.create({
       file,
       model: "whisper-1",
+      ...(language ? { language } : {}),
     });
 
-    logger.info("VOICE_TRANSCRIBE", { userId: session.user.id, chars: transcription.text.length });
+    logger.info("VOICE_TRANSCRIBE", { userId: session.user.id, chars: transcription.text.length, language: language ?? "auto" });
 
     return NextResponse.json<ApiResponse>({
       success: true,

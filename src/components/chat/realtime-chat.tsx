@@ -11,6 +11,7 @@ interface RealtimeChatProps {
   conversationId?: string | null;
   onTurn?: (role: "user" | "assistant", text: string) => void;
   onMessagesUpdated?: () => void;
+  transcriptionLanguage?: string;
 }
 
 export function RealtimeChat({
@@ -18,11 +19,13 @@ export function RealtimeChat({
   conversationId,
   onTurn,
   onMessagesUpdated,
+  transcriptionLanguage,
 }: RealtimeChatProps) {
   const { connected, connecting, connect, disconnect, error } = useRealtimeChat(modelId, {
     onTurnComplete: onTurn,
     conversationId,
     onMessagesUpdated,
+    transcriptionLanguage,
   });
 
   // Disconnect when the component unmounts (mode change, conversation switch, new chat)
