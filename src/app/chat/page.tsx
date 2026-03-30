@@ -20,6 +20,7 @@ interface ModelOption {
   supportsVoice?: boolean;
   supportsRealtime?: boolean;
   ttsVoice?: string;
+  transcriptionLanguage?: string;
 }
 
 export default function ChatPage() {
