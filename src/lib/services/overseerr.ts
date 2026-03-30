@@ -69,6 +69,7 @@ export interface OverseerrDetails {
   title: string;
   year?: string;
   imdbId?: string;
+  thumbPath?: string;            // Full TMDB poster URL — pass directly as thumbPath to display_titles
   cast?: string[];              // Top 10 cast members
   genres?: string[];
   runtime?: number;             // Movie: total runtime in minutes
@@ -185,6 +186,7 @@ export async function getDetails(id: number, mediaType: "movie" | "tv"): Promise
   const title = (detail?.title || detail?.name) as string;
   const releaseDate = (detail?.releaseDate || detail?.firstAirDate) as string | undefined;
   const episodeRuntimes = detail?.episodeRunTime as number[] | undefined;
+  const posterPath = detail?.posterPath as string | undefined;
 
   return {
     overseerrId: id,
@@ -192,6 +194,7 @@ export async function getDetails(id: number, mediaType: "movie" | "tv"): Promise
     title,
     year: releaseDate?.substring(0, 4),
     imdbId,
+    thumbPath: posterPath ? `https://image.tmdb.org/t/p/w300${posterPath}` : undefined,
     cast: cast.length > 0 ? cast : undefined,
     genres: genres.length > 0 ? genres : undefined,
     runtime: mediaType === "movie" ? (detail?.runtime as number | undefined) : undefined,
@@ -200,6 +203,20 @@ export async function getDetails(id: number, mediaType: "movie" | "tv"): Promise
     seasons: seasons.length > 0 ? seasons : undefined,
     requests: requests.length > 0 ? requests : undefined,
   };
+}
+
+/**
+ * Normalise the human-readable Overseerr mediaStatus string (returned by the
+ * search / discover endpoints) to the lowercase values expected by display_titles.
+ */
+export function normalizeMediaStatus(status: string): "available" | "partial" | "pending" | "not_requested" {
+  switch (status) {
+    case "Available": return "available";
+    case "Partially Available": return "partial";
+    case "Pending":
+    case "Processing": return "pending";
+    default: return "not_requested";
+  }
 }
 
 export interface OverseerrRequest {

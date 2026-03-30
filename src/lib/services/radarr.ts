@@ -34,6 +34,12 @@ export interface RadarrMovie {
   monitored?: boolean;
   hasFile?: boolean;
   tmdbId?: number;
+  // Enrichment fields — populated by the tool handler via Plex / Overseerr lookups
+  thumbPath?: string;
+  plexKey?: string;
+  overseerrId?: number;
+  cast?: string[];
+  imdbId?: string;
 }
 
 export async function searchMovie(term: string): Promise<RadarrMovie[]> {

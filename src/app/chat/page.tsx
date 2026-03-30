@@ -170,15 +170,22 @@ export default function ChatPage() {
         setActiveConversationId(convId);
       }
 
-      await fetch(`/api/conversations/${convId}/messages`, {
+      const res = await fetch(`/api/conversations/${convId}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ role, content: text }),
       });
 
+      if (res.ok) {
+        const json = await res.json();
+        if (json.data?.newTitle) {
+          updateConversationTitle(convId, json.data.newTitle);
+        }
+      }
+
       loadMessages(convId);
     },
-    [activeConversationId, createConversation, loadMessages],
+    [activeConversationId, createConversation, loadMessages, updateConversationTitle],
   );
 
   // Called by the realtime hook after each tool result is persisted to the DB.

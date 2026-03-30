@@ -85,6 +85,14 @@ export async function POST(request: Request) {
         instructions,
         tools: realtimeTools,
         tool_choice: "auto",
+        // Raise VAD threshold and extend silence window so coughs / background
+        // noise don't interrupt the assistant's spoken response.
+        turn_detection: {
+          type: "server_vad",
+          threshold: 0.7,          // default 0.5 — higher = harder to trigger
+          prefix_padding_ms: 300,
+          silence_duration_ms: 800, // default 500 — longer pause required to end turn
+        },
       }),
     });
 
