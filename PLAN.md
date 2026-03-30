@@ -2019,3 +2019,30 @@ Added `enrichRadarrMovie(m)` helper in `radarr-tools.ts` using the same Plex-fir
 | `src/lib/services/radarr.ts` | Added enrichment fields to `RadarrMovie` interface |
 | `src/lib/tools/radarr-tools.ts` | Added `enrichRadarrMovie` helper; `radarr_search_movie` handler calls it; updated description and `llmSummary` |
 | `src/__tests__/lib/tool-enrichment.test.ts` | New: unit tests for all enrichment paths (Plex match, Overseerr fallback, tmdbId direct lookup, graceful degradation) |
+
+
+---
+
+### Phase N+18 — Bug fixes: Welsh TTS and overseerr_list_requests inlining (#258)
+
+Two bugs reported via user feedback in issue #258 from a real conversation session.
+
+#### Bug 1: TTS/voice responding in Welsh
+
+The Realtime API model detects the spoken/typed language and responds in kind. When a user accidentally typed in Welsh, the model began responding in Welsh, causing confusion.
+
+Fixed by adding an explicit English-only instruction to both `DEFAULT_SYSTEM_PROMPT` and `DEFAULT_REALTIME_SYSTEM_PROMPT` in `default-prompt.ts`. The instruction tells the model to always respond in English and to politely inform the user if they speak another language.
+
+#### Bug 2: overseerr_list_requests not inlining full details on title cards
+
+The `overseerr_list_requests` tool returned minimal fields (no `thumbPath`, no per-season `seasons` data) because the Overseerr `/request` API endpoint does not reliably include `posterPath` in the media sub-object. As a result, title cards rendered from list-requests had no poster image and missing season information.
+
+Fixed by applying the same `getDetails` enrichment pattern already used in `overseerr_search` and `overseerr_discover`: the tool handler now calls `overseerr.getDetails()` in parallel for each result (up to 10 per page), merging `thumbPath` and for TV shows: `seasons` and `seasonCount`. Individual failures are non-fatal. The `llmSummary` was also updated to include `thumbPath` and compact `seasons` string so history-compressed turns retain the poster and season data.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/llm/default-prompt.ts` | Added English-only instruction to both `DEFAULT_SYSTEM_PROMPT` and `DEFAULT_REALTIME_SYSTEM_PROMPT` |
+| `src/lib/tools/overseerr-tools.ts` | `overseerr_list_requests` handler: parallel `getDetails` enrichment for `thumbPath`, `seasons`, `seasonCount`; updated `llmSummary` to include `thumbPath` and compact seasons |
+| `src/__tests__/lib/tool-enrichment.test.ts` | Added 4 tests for `overseerr_list_requests` enrichment; updated `listRequests` mock to be configurable per-test |
