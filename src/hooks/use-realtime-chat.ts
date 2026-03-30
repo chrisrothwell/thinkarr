@@ -261,11 +261,14 @@ export function useRealtimeChat(modelId: string, options: UseRealtimeChatOptions
       const REALTIME_HISTORY_TURNS = 10;
 
       dc.onopen = () => {
-        // Enable input audio transcription so user speech is surfaced as text
+        // Enable input audio transcription so user speech is surfaced as text.
+        // Locking language to "en" prevents Whisper from misidentifying English
+        // speech as another language (e.g. Welsh) and transcribing incorrectly,
+        // which would cause the model to respond in that language.
         sendEvent({
           type: "session.update",
           session: {
-            input_audio_transcription: { model: "whisper-1" },
+            input_audio_transcription: { model: "whisper-1", language: "en" },
           },
         });
 

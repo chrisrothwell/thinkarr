@@ -2046,3 +2046,17 @@ Fixed by applying the same `getDetails` enrichment pattern already used in `over
 | `src/lib/llm/default-prompt.ts` | Added English-only instruction to both `DEFAULT_SYSTEM_PROMPT` and `DEFAULT_REALTIME_SYSTEM_PROMPT` |
 | `src/lib/tools/overseerr-tools.ts` | `overseerr_list_requests` handler: parallel `getDetails` enrichment for `thumbPath`, `seasons`, `seasonCount`; updated `llmSummary` to include `thumbPath` and compact seasons |
 | `src/__tests__/lib/tool-enrichment.test.ts` | Added 4 tests for `overseerr_list_requests` enrichment; updated `listRequests` mock to be configurable per-test |
+
+---
+
+### Phase N+18 (addendum) — Fix Whisper language misdetection (#258)
+
+The root cause of the Welsh TTS issue was Whisper's language auto-detection, not the model's response language. Whisper misidentified English speech as Welsh (especially on short/ambiguous utterances) and transcribed it in Welsh, causing the Realtime model to respond in Welsh.
+
+Fixed by passing `language: "en"` in the `input_audio_transcription` session update sent via the WebRTC data channel on connect. This locks Whisper to English transcription and prevents misdetection entirely. The English-only system prompt instruction (added earlier in this phase) remains as a secondary defence.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/hooks/use-realtime-chat.ts` | Added `language: "en"` to `input_audio_transcription` in the `session.update` event sent on `dc.onopen` |
