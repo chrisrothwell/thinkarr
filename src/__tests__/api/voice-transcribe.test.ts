@@ -54,10 +54,11 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-function makeFormData(audio?: Blob, modelId = "ep1:gpt-4.1"): FormData {
+function makeFormData(audio?: Blob, modelId = "ep1:gpt-4.1", language?: string): FormData {
   const fd = new FormData();
   if (audio) fd.append("audio", audio, "recording.webm");
   fd.append("modelId", modelId);
+  if (language) fd.append("language", language);
   return fd;
 }
 
@@ -95,6 +96,36 @@ describe("POST /api/voice/transcribe", () => {
     const body = await res.json();
     expect(body.success).toBe(true);
     expect(body.data.transcript).toBe("hello world");
+  });
+
+  it("passes language to Whisper when a specific language is set", async () => {
+    const req = new Request("http://localhost/api/voice/transcribe", {
+      method: "POST",
+      body: makeFormData(new Blob(["audio"], { type: "audio/webm" }), "ep1:gpt-4.1", "en"),
+    });
+    await POST(req);
+    const callArgs = mockTranscriptionsCreate.mock.calls[0][0] as Record<string, unknown>;
+    expect(callArgs.language).toBe("en");
+  });
+
+  it("does not pass language to Whisper when language is 'auto'", async () => {
+    const req = new Request("http://localhost/api/voice/transcribe", {
+      method: "POST",
+      body: makeFormData(new Blob(["audio"], { type: "audio/webm" }), "ep1:gpt-4.1", "auto"),
+    });
+    await POST(req);
+    const callArgs = mockTranscriptionsCreate.mock.calls[0][0] as Record<string, unknown>;
+    expect(callArgs.language).toBeUndefined();
+  });
+
+  it("does not pass language to Whisper when language is omitted", async () => {
+    const req = new Request("http://localhost/api/voice/transcribe", {
+      method: "POST",
+      body: makeFormData(new Blob(["audio"], { type: "audio/webm" })),
+    });
+    await POST(req);
+    const callArgs = mockTranscriptionsCreate.mock.calls[0][0] as Record<string, unknown>;
+    expect(callArgs.language).toBeUndefined();
   });
 
   it("returns 500 when transcription API throws", async () => {
