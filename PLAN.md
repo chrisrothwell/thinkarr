@@ -2004,4 +2004,41 @@ Each orchestrator run sets a **deterministic trace ID** equal to the user messag
 | `src/__tests__/lib/langfuse.test.ts` | Fix `startTrace` calls to include `traceId`; add tests for `scoreTrace()` and `getLangfuseBaseUrl()` |
 | `src/__tests__/api/report-issue.test.ts` | Add 4 new tests: no-op when unconfigured, correct traceId used, GitHub body includes Langfuse section + omits transcript, log omits `issueBody` |
 
+### Phase N+19 — Trim GitHub issue body and update /beta-logs skill to use Langfuse
+
+Completed the single observability stack: when Langfuse is enabled, GitHub issues contain only the user's description and actionable Langfuse API retrieval instructions — no transcript. The `/beta-logs` Claude skill is updated to fetch trace data directly from the Langfuse API when credentials are available, with application logs as the fallback for server-level issues.
+
+#### GitHub issue body (Langfuse active)
+
+Only contains:
+- Reporter, timestamp, version, base URL
+- User's issue description
+- Session ID, trace ID, Langfuse host
+- Exact `curl` command (with Basic auth) for Claude to retrieve the trace
+- Note on where to find credentials (`.claude/settings.json` or Settings → Logs)
+
+The transcript is entirely absent — all LLM input/output, tool call sequences, and token usage are fetched on demand from Langfuse.
+
+#### `/beta-logs` skill (`§ A — Fetch from Langfuse`)
+
+When `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are in the environment, the skill now uses the Langfuse REST API:
+
+| Goal | Endpoint |
+|------|----------|
+| Single trace (given trace ID) | `GET {host}/api/public/traces/{traceId}` |
+| All turns for a conversation | `GET {host}/api/public/traces?sessionId={conversationId}&limit=10` |
+| Scores (user-report, etc.) | `GET {host}/api/public/scores?traceId={traceId}` |
+| Recent traces by user | `GET {host}/api/public/traces?userId={userId}&limit=20` |
+
+Auth is HTTP Basic — public key as username, secret key as password. The skill includes setup instructions for adding credentials to `.claude/settings.json`.
+
+`§ B — Application logs` remains for server-level issues (startup errors, auth problems, migration failures) that don't appear in Langfuse traces.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/app/api/report-issue/route.ts` | Langfuse path: build minimal issue body (description + API retrieval block only); non-Langfuse path: unchanged full transcript |
+| `.claude/commands/beta-logs.md` | Restructured into § A (Langfuse API) and § B (application logs); § A is preferred when credentials available |
+
 
