@@ -111,12 +111,42 @@ export function registerOverseerrTools() {
     schema: z.object({
       page: pageParam,
     }),
-    handler: async (args) => overseerr.listRequests(args.page ?? 1),
+    handler: async (args) => {
+      const { results, hasMore } = await overseerr.listRequests(args.page ?? 1);
+      // Enrich each result with thumbPath and (for TV) per-season availability by
+      // calling getDetails in parallel. The /request endpoint does not reliably
+      // include posterPath in the media object, so this is the only way to get
+      // poster images and accurate season statuses for the title cards.
+      const enriched = await Promise.all(
+        results.map(async (r) => {
+          if (!r.overseerrId) return r;
+          try {
+            const mediaType = r.mediaType === "tv" ? "tv" : "movie";
+            const detail = await overseerr.getDetails(r.overseerrId, mediaType);
+            return {
+              ...r,
+              thumbPath: r.thumbPath ?? detail.thumbPath,
+              ...(mediaType === "tv" ? {
+                seasons: detail.seasons,
+                seasonCount: detail.seasonCount,
+              } : {}),
+            };
+          } catch {
+            return r;
+          }
+        }),
+      );
+      return { results: enriched, hasMore };
+    },
     llmSummary: (result: unknown) => {
-      const r = result as { results: OverseerrRequest[]; hasMore: boolean };
+      const r = result as { results: (OverseerrRequest & { seasons?: overseerr.OverseerrSeasonStatus[]; seasonCount?: number })[]; hasMore: boolean };
       return {
-        results: r.results.map(({ mediaType, title, year, status, mediaStatus, requestedBy, overseerrId, seasonsRequested }) => ({
+        results: r.results.map(({ mediaType, title, year, status, mediaStatus, requestedBy, overseerrId, seasonsRequested, thumbPath, seasons }) => ({
           mediaType, title, year, status, mediaStatus, requestedBy, overseerrId, seasonsRequested,
+          ...(thumbPath ? { thumbPath } : {}),
+          ...(seasons && seasons.length > 0
+            ? { seasons: seasons.map((s) => `S${s.seasonNumber}:${s.status.toLowerCase().replace(/ /g, "_")}`).join(" ") }
+            : {}),
         })),
         hasMore: r.hasMore,
       };

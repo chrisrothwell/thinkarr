@@ -42,6 +42,7 @@ interface LlmEndpoint {
   supportsVoice: boolean;
   supportsTts: boolean;
   ttsVoice: string;
+  transcriptionLanguage: string;
   supportsRealtime: boolean;
   realtimeModel: string;
   realtimeSystemPrompt: string;
@@ -182,6 +183,7 @@ export default function SettingsPage() {
                 supportsVoice: ep.supportsVoice ?? false,
                 supportsTts: ep.supportsTts ?? false,
                 ttsVoice: ep.ttsVoice ?? "alloy",
+                transcriptionLanguage: ep.transcriptionLanguage ?? "auto",
                 supportsRealtime: ep.supportsRealtime ?? false,
                 realtimeModel: ep.realtimeModel ?? "",
                 realtimeSystemPrompt: ep.realtimeSystemPrompt ?? "",
@@ -431,6 +433,7 @@ export default function SettingsPage() {
         supportsVoice: false,
         supportsTts: false,
         ttsVoice: "alloy",
+        transcriptionLanguage: "auto",
         supportsRealtime: false,
         realtimeModel: "",
         realtimeSystemPrompt: "",
@@ -909,6 +912,42 @@ export default function SettingsPage() {
                     </div>
                     <p className="text-xs text-muted-foreground">Click Test to auto-detect capabilities.</p>
                   </div>
+
+                  {/* Transcription language — shown when voice input or realtime is supported */}
+                  {(ep.supportsVoice || ep.supportsRealtime) && (
+                    <div className="space-y-1.5">
+                      <Label htmlFor={`ep-${ep.id}-transcriptionLanguage`}>Transcription Language</Label>
+                      <select
+                        id={`ep-${ep.id}-transcriptionLanguage`}
+                        name={`ep-${ep.id}-transcriptionLanguage`}
+                        value={ep.transcriptionLanguage ?? "auto"}
+                        onChange={(e) => updateEndpoint(ep.id, "transcriptionLanguage", e.target.value)}
+                        className="w-full rounded border bg-background px-2 py-1.5 text-sm"
+                      >
+                        {[
+                          { code: "auto", label: "Auto-detect" },
+                          { code: "en", label: "English" },
+                          { code: "es", label: "Spanish" },
+                          { code: "fr", label: "French" },
+                          { code: "de", label: "German" },
+                          { code: "it", label: "Italian" },
+                          { code: "pt", label: "Portuguese" },
+                          { code: "nl", label: "Dutch" },
+                          { code: "ja", label: "Japanese" },
+                          { code: "ko", label: "Korean" },
+                          { code: "zh", label: "Chinese" },
+                          { code: "ru", label: "Russian" },
+                          { code: "ar", label: "Arabic" },
+                          { code: "hi", label: "Hindi" },
+                          { code: "pl", label: "Polish" },
+                          { code: "cy", label: "Welsh" },
+                        ].map(({ code, label }) => (
+                          <option key={code} value={code}>{label}</option>
+                        ))}
+                      </select>
+                      <p className="text-xs text-muted-foreground">Language hint passed to Whisper for voice and realtime transcription. Auto-detect works well for most users but may misidentify short utterances.</p>
+                    </div>
+                  )}
 
                   {/* TTS voice selector — only shown when TTS is supported */}
                   {ep.supportsTts && (
