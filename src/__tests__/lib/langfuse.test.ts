@@ -95,6 +95,7 @@ describe("langfuse module", () => {
       delete process.env.LANGFUSE_PUBLIC_KEY;
       const { startTrace } = await importLangfuse();
       const result = startTrace({
+        traceId: "msg-test-1",
         conversationId: "conv-1",
         userId: "42",
         userMessage: "hello",

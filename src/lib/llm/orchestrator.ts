@@ -492,7 +492,6 @@ export async function* orchestrate(
           total: totalTokens,
           unit: "TOKENS",
         },
-        endTime: new Date(),
       });
 
       // Collect completed tool calls
@@ -615,7 +614,7 @@ export async function* orchestrate(
           logger.warn("Tool call error", { conversationId, toolName: tc.function.name, toolCallId: tc.id, error: result, timedOut, durationMs: Date.now() - startedAt });
         }
         const durationMs = Date.now() - startedAt;
-        toolSpan?.end({ output: result!, endTime: new Date(), level: isError ? "ERROR" : "DEFAULT" });
+        toolSpan?.end({ output: result!, level: isError ? "ERROR" : "DEFAULT" });
         return { tc, result: result!, isError, durationMs };
       }),
     );
