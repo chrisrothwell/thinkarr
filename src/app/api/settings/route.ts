@@ -103,6 +103,11 @@ export async function GET() {
       owner: getConfig("github.owner") || "",
       repo: getConfig("github.repo") || "",
     },
+    langfuse: {
+      secretKey: getConfig("langfuse.secretKey") ? "••••••••" : "",
+      publicKey: getConfig("langfuse.publicKey") ? "••••••••" : "",
+      baseUrl: getConfig("langfuse.baseUrl") || "",
+    },
   };
 
   return NextResponse.json<ApiResponse>({ success: true, data });
@@ -201,6 +206,36 @@ export async function PATCH(request: Request) {
     }
     if (changedKeys.length > 0) {
       logger.info("SETTINGS_CHANGE", { adminUserId: session.user.id, section: "github", changed: changedKeys });
+    }
+  }
+
+  // Handle Langfuse config
+  if (body.langfuse && typeof body.langfuse === "object") {
+    const lf = body.langfuse as Record<string, string>;
+    const changedKeys: string[] = [];
+    if (lf.secretKey && lf.secretKey !== "••••••••") {
+      setConfig("langfuse.secretKey", lf.secretKey, true);
+      changedKeys.push("secretKey=[redacted]");
+    }
+    if (lf.publicKey && lf.publicKey !== "••••••••") {
+      setConfig("langfuse.publicKey", lf.publicKey, true);
+      changedKeys.push("publicKey=[redacted]");
+    }
+    if (typeof lf.baseUrl === "string") {
+      if (lf.baseUrl) {
+        const check = validateServiceUrl(lf.baseUrl);
+        if (!check.valid) {
+          return NextResponse.json<ApiResponse>(
+            { success: false, error: `langfuse.baseUrl is invalid: ${check.error}` },
+            { status: 400 },
+          );
+        }
+      }
+      setConfig("langfuse.baseUrl", lf.baseUrl);
+      if (lf.baseUrl) changedKeys.push(`baseUrl=${lf.baseUrl}`);
+    }
+    if (changedKeys.length > 0) {
+      logger.info("SETTINGS_CHANGE", { adminUserId: session.user.id, section: "langfuse", changed: changedKeys });
     }
   }
 

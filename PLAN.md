@@ -1959,4 +1959,24 @@ Self-hosted Langfuse: a commented-out `langfuse-web` + `langfuse-db` service blo
 | `src/__tests__/lib/langfuse.test.ts` | New — 8 unit tests for `isLangfuseEnabled`, `startTrace`, `flushLangfuse` covering enabled/disabled states |
 | `src/__tests__/api/chat.test.ts` | Update orchestrator call assertion to include `userId` |
 
+### Phase N+17 — Langfuse configuration via Settings UI
+
+Extended the Phase N+16 Langfuse integration so keys can be entered through the admin Settings page rather than requiring environment variables. Env vars still take precedence if set (useful for server-managed deployments); the UI is the primary path for self-hosted users.
+
+#### What changed
+
+- **`src/lib/llm/langfuse.ts`** — `resolveKeys()` now reads `langfuse.secretKey`, `langfuse.publicKey`, and `langfuse.baseUrl` from the DB `app_config` table as a fallback when env vars are absent. Client is cached and re-created if the keys change.
+- **`src/app/api/settings/route.ts`** — GET returns masked Langfuse keys; PATCH saves `secretKey` + `publicKey` (both encrypted) and `baseUrl` (plain, URL-validated).
+- **`src/app/settings/page.tsx`** — New "Langfuse Observability" card in the Logs tab: Secret Key, Public Key, and Host URL fields. Saved via the existing Save button. Notes that env vars take precedence.
+- **`src/__tests__/lib/langfuse.test.ts`** — 2 new tests: DB config path enables tracing; env var keys take precedence over DB keys. Total: 10 unit tests.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/llm/langfuse.ts` | `resolveKeys()` reads from DB config as fallback; client cache keyed by resolved values |
+| `src/app/api/settings/route.ts` | Add `langfuse` section to GET response and PATCH handler |
+| `src/app/settings/page.tsx` | Add `langfuseConfig` state, load, save, and Langfuse Observability card in Logs tab |
+| `src/__tests__/lib/langfuse.test.ts` | Mock `@/lib/config`; add tests for DB config path and env var precedence |
+
 
