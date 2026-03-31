@@ -16,6 +16,7 @@ type VoicePhase = "idle" | "listening" | "processing";
 interface VoiceConversationProps {
   modelId: string;
   ttsVoice?: string;
+  transcriptionLanguage?: string;
   /** Called when transcription completes — sends the query to the chat */
   onSend: (text: string) => void;
   /** Called when the user explicitly exits voice mode */
@@ -29,6 +30,7 @@ interface VoiceConversationProps {
 export function VoiceConversation({
   modelId,
   ttsVoice = "alloy",
+  transcriptionLanguage = "auto",
   onSend,
   onCancel,
   streaming,
@@ -75,13 +77,13 @@ export function VoiceConversation({
   // transitions away from the listening state without needing a separate effect.
   const handleStopListening = useCallback(async () => {
     setPhase("processing");
-    const text = await stopAndTranscribe(modelId);
+    const text = await stopAndTranscribe(modelId, transcriptionLanguage);
     if (text) {
       onSend(text);
     } else {
       setPhase("idle");
     }
-  }, [stopAndTranscribe, modelId, onSend]);
+  }, [stopAndTranscribe, modelId, transcriptionLanguage, onSend]);
 
   const { secondsRemaining } = useSilenceDetection({
     stream: recording ? stream : null,

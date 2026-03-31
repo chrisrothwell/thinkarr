@@ -363,12 +363,13 @@ describe("POST /api/chat — SSE streaming", () => {
     expect(events).toContainEqual({ type: "error", message: "LLM endpoint unreachable" });
   });
 
-  it("passes conversationId, userMessage, and optional modelId to the orchestrator", async () => {
+  it("passes conversationId, userMessage, optional modelId, and userId to the orchestrator", async () => {
     await POST(chatRequest({ conversationId: convId, message: "specific question", modelId: "gpt-4o" }));
     expect(orchestrate).toHaveBeenCalledWith({
       conversationId: convId,
       userMessage: "specific question",
       modelId: "gpt-4o",
+      userId: uid,
     });
   });
 });

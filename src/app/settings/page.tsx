@@ -42,6 +42,7 @@ interface LlmEndpoint {
   supportsVoice: boolean;
   supportsTts: boolean;
   ttsVoice: string;
+  transcriptionLanguage: string;
   supportsRealtime: boolean;
   realtimeModel: string;
   realtimeSystemPrompt: string;
@@ -141,6 +142,9 @@ export default function SettingsPage() {
   // GitHub config (admin only)
   const [githubConfig, setGithubConfig] = useState({ token: "", owner: "", repo: "" });
 
+  // Langfuse config (admin only)
+  const [langfuseConfig, setLangfuseConfig] = useState({ secretKey: "", publicKey: "", baseUrl: "" });
+
   // Log state (admin only)
   const [logFiles, setLogFiles] = useState<{ name: string; size: number; modified: string }[]>([]);
   const [logFilesLoading, setLogFilesLoading] = useState(false);
@@ -182,6 +186,7 @@ export default function SettingsPage() {
                 supportsVoice: ep.supportsVoice ?? false,
                 supportsTts: ep.supportsTts ?? false,
                 ttsVoice: ep.ttsVoice ?? "alloy",
+                transcriptionLanguage: ep.transcriptionLanguage ?? "auto",
                 supportsRealtime: ep.supportsRealtime ?? false,
                 realtimeModel: ep.realtimeModel ?? "",
                 realtimeSystemPrompt: ep.realtimeSystemPrompt ?? "",
@@ -203,6 +208,11 @@ export default function SettingsPage() {
               token: d.github?.token || "",
               owner: d.github?.owner || "",
               repo: d.github?.repo || "",
+            });
+            setLangfuseConfig({
+              secretKey: d.langfuse?.secretKey || "",
+              publicKey: d.langfuse?.publicKey || "",
+              baseUrl: d.langfuse?.baseUrl || "",
             });
             // Snapshot the freshly loaded config so we can detect unsaved changes later
             savedConfigRef.current = JSON.stringify({
@@ -279,6 +289,7 @@ export default function SettingsPage() {
       })),
       plex: { url: plexConfig.url, token: plexConfig.token },
       github: githubConfig,
+      langfuse: langfuseConfig,
     };
     for (const svc of ARR_SERVICES) {
       body[svc.key] = arrConfigs[svc.key];
@@ -320,7 +331,7 @@ export default function SettingsPage() {
     } finally {
       setSaving(false);
     }
-  }, [endpoints, plexConfig, arrConfigs, githubConfig, isInitialSetup, redirectCountdown]);
+  }, [endpoints, plexConfig, arrConfigs, githubConfig, langfuseConfig, isInitialSetup, redirectCountdown]);
 
   // --- Plex server discovery ---
   async function discoverPlexServers() {
@@ -431,6 +442,7 @@ export default function SettingsPage() {
         supportsVoice: false,
         supportsTts: false,
         ttsVoice: "alloy",
+        transcriptionLanguage: "auto",
         supportsRealtime: false,
         realtimeModel: "",
         realtimeSystemPrompt: "",
@@ -909,6 +921,42 @@ export default function SettingsPage() {
                     </div>
                     <p className="text-xs text-muted-foreground">Click Test to auto-detect capabilities.</p>
                   </div>
+
+                  {/* Transcription language — shown when voice input or realtime is supported */}
+                  {(ep.supportsVoice || ep.supportsRealtime) && (
+                    <div className="space-y-1.5">
+                      <Label htmlFor={`ep-${ep.id}-transcriptionLanguage`}>Transcription Language</Label>
+                      <select
+                        id={`ep-${ep.id}-transcriptionLanguage`}
+                        name={`ep-${ep.id}-transcriptionLanguage`}
+                        value={ep.transcriptionLanguage ?? "auto"}
+                        onChange={(e) => updateEndpoint(ep.id, "transcriptionLanguage", e.target.value)}
+                        className="w-full rounded border bg-background px-2 py-1.5 text-sm"
+                      >
+                        {[
+                          { code: "auto", label: "Auto-detect" },
+                          { code: "en", label: "English" },
+                          { code: "es", label: "Spanish" },
+                          { code: "fr", label: "French" },
+                          { code: "de", label: "German" },
+                          { code: "it", label: "Italian" },
+                          { code: "pt", label: "Portuguese" },
+                          { code: "nl", label: "Dutch" },
+                          { code: "ja", label: "Japanese" },
+                          { code: "ko", label: "Korean" },
+                          { code: "zh", label: "Chinese" },
+                          { code: "ru", label: "Russian" },
+                          { code: "ar", label: "Arabic" },
+                          { code: "hi", label: "Hindi" },
+                          { code: "pl", label: "Polish" },
+                          { code: "cy", label: "Welsh" },
+                        ].map(({ code, label }) => (
+                          <option key={code} value={code}>{label}</option>
+                        ))}
+                      </select>
+                      <p className="text-xs text-muted-foreground">Language hint passed to Whisper for voice and realtime transcription. Auto-detect works well for most users but may misidentify short utterances.</p>
+                    </div>
+                  )}
 
                   {/* TTS voice selector — only shown when TTS is supported */}
                   {ep.supportsTts && (
@@ -1585,6 +1633,68 @@ export default function SettingsPage() {
                   <code className="font-mono text-xs">GITHUB_OWNER</code>, and{" "}
                   <code className="font-mono text-xs">GITHUB_REPO</code> environment variables
                   take precedence over these settings.
+                </p>
+              </CardContent>
+            </Card>
+
+            {/* Langfuse observability */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">Langfuse Observability</CardTitle>
+                <CardDescription>
+                  Connect to{" "}
+                  <a
+                    href="https://langfuse.com"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline"
+                  >
+                    Langfuse
+                  </a>{" "}
+                  to trace LLM requests, tool calls, and token usage. Supports both
+                  Langfuse Cloud and self-hosted instances. Leave blank to disable.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="langfuse-secret-key">Secret Key</Label>
+                    <Input
+                      id="langfuse-secret-key"
+                      type="password"
+                      placeholder="sk-lf-••••••••"
+                      value={langfuseConfig.secretKey}
+                      onChange={(e) => { setLangfuseConfig((prev) => ({ ...prev, secretKey: e.target.value })); setSaved(false); }}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="langfuse-public-key">Public Key</Label>
+                    <Input
+                      id="langfuse-public-key"
+                      type="password"
+                      placeholder="pk-lf-••••••••"
+                      value={langfuseConfig.publicKey}
+                      onChange={(e) => { setLangfuseConfig((prev) => ({ ...prev, publicKey: e.target.value })); setSaved(false); }}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="langfuse-base-url">Host URL</Label>
+                  <Input
+                    id="langfuse-base-url"
+                    placeholder="https://cloud.langfuse.com"
+                    value={langfuseConfig.baseUrl}
+                    onChange={(e) => { setLangfuseConfig((prev) => ({ ...prev, baseUrl: e.target.value })); setSaved(false); }}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Leave blank for Langfuse Cloud. Set to your self-hosted instance URL (e.g.{" "}
+                    <code className="font-mono">http://langfuse-web:3000</code>).
+                  </p>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Environment variables <code className="font-mono">LANGFUSE_SECRET_KEY</code>,{" "}
+                  <code className="font-mono">LANGFUSE_PUBLIC_KEY</code>, and{" "}
+                  <code className="font-mono">LANGFUSE_HOST</code> take precedence over these settings.
                 </p>
               </CardContent>
             </Card>

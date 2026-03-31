@@ -1,6 +1,7 @@
 /**
  * Unit tests for the enrichment logic added in issue #253:
  *  - overseerr_search / overseerr_discover auto-call getDetails for each result
+ *  - overseerr_list_requests enriches with getDetails for thumbPath and seasons (#258)
  *  - sonarr_search_series enriches with Plex (primary) then Overseerr (fallback)
  *  - radarr_search_movie enriches with Plex (primary) then Overseerr via tmdbId (fallback)
  */
@@ -13,11 +14,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const mockOverseerrSearch = vi.fn();
 const mockOverseerrGetDetails = vi.fn();
 const mockOverseerrDiscover = vi.fn();
+const mockOverseerrListRequests = vi.fn();
 vi.mock("@/lib/services/overseerr", () => ({
   search: (...a: unknown[]) => mockOverseerrSearch(...a),
   getDetails: (...a: unknown[]) => mockOverseerrGetDetails(...a),
   discover: (...a: unknown[]) => mockOverseerrDiscover(...a),
-  listRequests: vi.fn().mockResolvedValue({ results: [], hasMore: false }),
+  listRequests: (...a: unknown[]) => mockOverseerrListRequests(...a),
   normalizeMediaStatus: vi.fn((s: string) => s.toLowerCase().replace(/ /g, "_")),
 }));
 
@@ -106,6 +108,7 @@ beforeEach(() => {
   mockOverseerrSearch.mockResolvedValue({ results: [BASE_SEARCH_RESULT], hasMore: false });
   mockOverseerrGetDetails.mockResolvedValue(BASE_DETAIL);
   mockOverseerrDiscover.mockResolvedValue({ results: [BASE_SEARCH_RESULT], hasMore: false });
+  mockOverseerrListRequests.mockResolvedValue({ results: [], hasMore: false });
   mockPlexSearchLibrary.mockResolvedValue({ results: [], hasMore: false });
   mockSonarrSearchSeries.mockResolvedValue([]);
   mockRadarrSearchMovie.mockResolvedValue([]);
@@ -298,5 +301,99 @@ describe("radarr_search_movie — Plex-first enrichment (#253)", () => {
     expect(mockOverseerrSearch).toHaveBeenCalled();
     expect(results[0].overseerrId).toBe(550);
     expect(results[0].imdbId).toBe("tt0137523");
+  });
+});
+
+// ===========================================================================
+// overseerr_list_requests enrichment (#258)
+// ===========================================================================
+describe("overseerr_list_requests — enrichment with getDetails (#258)", () => {
+  const MOVIE_REQUEST = {
+    id: 706,
+    mediaType: "movie",
+    title: "Fight Club",
+    year: "1999",
+    status: "Approved",
+    mediaStatus: "pending",
+    requestedBy: "alice",
+    requestedAt: "2026-01-01T00:00:00.000Z",
+    overseerrId: 550,
+    tmdbId: 550,
+  };
+
+  const TV_REQUEST = {
+    id: 707,
+    mediaType: "tv",
+    title: "Breaking Bad",
+    year: "2008",
+    status: "Approved",
+    mediaStatus: "pending",
+    requestedBy: "bob",
+    requestedAt: "2026-01-02T00:00:00.000Z",
+    overseerrId: 1396,
+    tmdbId: 1396,
+    seasonsRequested: [1],
+  };
+
+  it("calls getDetails for each request result and merges thumbPath", async () => {
+    mockOverseerrListRequests.mockResolvedValueOnce({ results: [MOVIE_REQUEST], hasMore: false });
+    mockOverseerrGetDetails.mockResolvedValueOnce(BASE_DETAIL);
+
+    const { registerOverseerrTools } = await import("@/lib/tools/overseerr-tools");
+    const { defineTool, executeTool } = await import("@/lib/tools/registry");
+    (defineTool as unknown as { _registry?: Map<string, unknown> })._registry?.clear?.();
+    registerOverseerrTools();
+
+    const raw = await executeTool("overseerr_list_requests", JSON.stringify({}));
+    const { results } = JSON.parse(raw) as { results: Record<string, unknown>[] };
+
+    expect(mockOverseerrGetDetails).toHaveBeenCalledWith(550, "movie");
+    expect(results[0].thumbPath).toBe("https://image.tmdb.org/t/p/w300/poster.jpg");
+  });
+
+  it("merges seasons and seasonCount for TV request results", async () => {
+    mockOverseerrListRequests.mockResolvedValueOnce({ results: [TV_REQUEST], hasMore: false });
+    mockOverseerrGetDetails.mockResolvedValueOnce(TV_DETAIL);
+
+    const { registerOverseerrTools } = await import("@/lib/tools/overseerr-tools");
+    const { defineTool, executeTool } = await import("@/lib/tools/registry");
+    (defineTool as unknown as { _registry?: Map<string, unknown> })._registry?.clear?.();
+    registerOverseerrTools();
+
+    const raw = await executeTool("overseerr_list_requests", JSON.stringify({}));
+    const { results } = JSON.parse(raw) as { results: Record<string, unknown>[] };
+
+    expect(mockOverseerrGetDetails).toHaveBeenCalledWith(1396, "tv");
+    expect(results[0].seasonCount).toBe(5);
+    expect((results[0].seasons as unknown[]).length).toBe(2);
+  });
+
+  it("skips enrichment for requests with no overseerrId", async () => {
+    const requestNoId = { ...MOVIE_REQUEST, overseerrId: undefined };
+    mockOverseerrListRequests.mockResolvedValueOnce({ results: [requestNoId], hasMore: false });
+
+    const { registerOverseerrTools } = await import("@/lib/tools/overseerr-tools");
+    const { defineTool, executeTool } = await import("@/lib/tools/registry");
+    (defineTool as unknown as { _registry?: Map<string, unknown> })._registry?.clear?.();
+    registerOverseerrTools();
+
+    await executeTool("overseerr_list_requests", JSON.stringify({}));
+    expect(mockOverseerrGetDetails).not.toHaveBeenCalled();
+  });
+
+  it("returns base result without enrichment if getDetails throws", async () => {
+    mockOverseerrListRequests.mockResolvedValueOnce({ results: [MOVIE_REQUEST], hasMore: false });
+    mockOverseerrGetDetails.mockRejectedValueOnce(new Error("Overseerr down"));
+
+    const { registerOverseerrTools } = await import("@/lib/tools/overseerr-tools");
+    const { defineTool, executeTool } = await import("@/lib/tools/registry");
+    (defineTool as unknown as { _registry?: Map<string, unknown> })._registry?.clear?.();
+    registerOverseerrTools();
+
+    const raw = await executeTool("overseerr_list_requests", JSON.stringify({}));
+    const { results } = JSON.parse(raw) as { results: Record<string, unknown>[] };
+
+    expect(results[0].title).toBe("Fight Club");
+    expect(results[0].thumbPath).toBeUndefined();
   });
 });
