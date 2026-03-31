@@ -6,6 +6,8 @@ import { eq, asc } from "drizzle-orm";
 import { initializeTools } from "@/lib/tools/init";
 import { getOpenAITools, executeTool, hasTools, getToolLlmContent } from "@/lib/tools/registry";
 import { logger } from "@/lib/logger";
+import { startTrace, flushLangfuse } from "./langfuse";
+import type { LangfuseTraceClient } from "./langfuse";
 import type {
   TextDeltaEvent,
   ToolCallStartEvent,
@@ -26,6 +28,7 @@ interface OrchestratorParams {
   conversationId: string;
   userMessage: string;
   modelId?: string;
+  userId?: number;
 }
 
 type ChatMessage = OpenAI.ChatCompletionMessageParam;
@@ -369,8 +372,9 @@ export async function* orchestrate(
   // Ensure tools are registered
   initializeTools();
 
-  // 1. Save user message
-  saveMessage(conversationId, "user", userMessage);
+  // 1. Save user message — ID becomes the Langfuse traceId so the report-issue
+  //    endpoint can attach a score to this exact trace later.
+  const userMessageId = saveMessage(conversationId, "user", userMessage);
 
   // 2. Build messages array
   // Resolve client and model — use override if provided
@@ -395,6 +399,17 @@ export async function* orchestrate(
   ];
   const tools = hasTools() ? getOpenAITools() : undefined;
 
+  // Start a Langfuse trace for this request (no-op if not configured).
+  // traceId = userMessageId so the report-issue endpoint can score this trace
+  // by querying the last user message ID for the conversation.
+  const trace: LangfuseTraceClient | null = startTrace({
+    traceId: userMessageId,
+    conversationId,
+    userId: params.userId !== undefined ? String(params.userId) : conversationId,
+    userMessage,
+    model,
+  });
+
   // 3. Tool call loop
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     let fullContent = "";
@@ -406,6 +421,12 @@ export async function* orchestrate(
 
     try {
       const llmStart = Date.now();
+      const generation = trace?.generation({
+        name: `llm-round-${round}`,
+        model,
+        input: apiMessages,
+        startTime: new Date(llmStart),
+      }) ?? null;
       const stream = await callWithRateLimitRetry(
         () =>
           client.chat.completions.create({
@@ -462,6 +483,17 @@ export async function* orchestrate(
 
       llmDurationMs = Date.now() - llmStart;
 
+      // Close the Langfuse generation span with output and token usage
+      generation?.end({
+        output: fullContent || null,
+        usage: {
+          input: promptTokens,
+          output: completionTokens,
+          total: totalTokens,
+          unit: "TOKENS",
+        },
+      });
+
       // Collect completed tool calls
       for (const [, tc] of toolCallDeltas) {
         if (tc.id && tc.name) {
@@ -477,6 +509,8 @@ export async function* orchestrate(
         : /401|403|unauthorized|forbidden/i.test(msg) ? "auth_error"
         : "llm_error";
       logger.error("LLM request failed", { conversationId, round, error: msg, errorCategory });
+      trace?.update({ output: `error: ${errorCategory}` });
+      flushLangfuse();
       yield { type: "error", message: sanitizeLlmError(msg) };
       return;
     }
@@ -495,6 +529,8 @@ export async function* orchestrate(
         completionTokens,
         totalTokens,
       });
+      trace?.update({ output: fullContent });
+      flushLangfuse();
       yield { type: "done", messageId, llmDurationMs, promptTokens, completionTokens, totalTokens };
       return;
     }
@@ -556,6 +592,11 @@ export async function* orchestrate(
     const toolResults = await Promise.all(
       toolCalls.map(async (tc) => {
         const startedAt = startedAts.get(tc.id) ?? Date.now();
+        const toolSpan = trace?.span({
+          name: `tool:${tc.function.name}`,
+          input: { arguments: tc.function.arguments },
+          startTime: new Date(startedAt),
+        }) ?? null;
         let result: string;
         let isError = false;
         try {
@@ -573,6 +614,7 @@ export async function* orchestrate(
           logger.warn("Tool call error", { conversationId, toolName: tc.function.name, toolCallId: tc.id, error: result, timedOut, durationMs: Date.now() - startedAt });
         }
         const durationMs = Date.now() - startedAt;
+        toolSpan?.end({ output: result!, level: isError ? "ERROR" : "DEFAULT" });
         return { tc, result: result!, isError, durationMs };
       }),
     );
@@ -620,6 +662,8 @@ export async function* orchestrate(
   }
 
   // Safety: if we exhausted max rounds, yield what we have
+  trace?.update({ output: "error: tool call limit reached" });
+  flushLangfuse();
   yield { type: "error", message: "Tool call limit reached" };
 }
 

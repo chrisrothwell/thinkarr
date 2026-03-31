@@ -1927,6 +1927,7 @@ History is injected after `session.update` so transcription is enabled before th
 
 
 
+
 ---
 
 ### Phase N+16 — Fix realtime VAD sensitivity, chat naming, and form accessibility (#242, #252, #236)
@@ -2098,3 +2099,127 @@ Replaced the hardcoded `language: "en"` Whisper setting with a per-endpoint **Tr
 | `src/app/api/voice/transcribe/route.ts` | Reads `language` from FormData; passes to Whisper when not "auto" |
 | `src/lib/llm/default-prompt.ts` | Removed hardcoded English-only instructions from both default prompts |
 | `src/__tests__/api/voice-transcribe.test.ts` | Added 3 tests: language passed, "auto" omitted, omitted field omitted |
+
+---
+
+### Phase N+19 — Langfuse observability integration
+
+Added opt-in LLM observability via [Langfuse](https://langfuse.com). When `LANGFUSE_SECRET_KEY` and `LANGFUSE_PUBLIC_KEY` environment variables are set, every chat request is traced with per-round LLM generation spans and per-tool-call spans. If the env vars are absent, all tracing is a silent no-op with zero latency impact.
+
+#### What is traced
+
+| Observation | Fields captured |
+|-------------|----------------|
+| Root trace (`chat`) | `sessionId` = conversationId, `userId`, `input` = user message, `output` = final assistant response |
+| LLM generation (`llm-round-N`) | `model`, `input` messages, `output` content, token usage (`input`/`output`/`total`), start + end time |
+| Tool span (`tool:<name>`) | `input` = raw arguments JSON, `output` = tool result JSON, duration, error level if failed |
+
+#### Configuration
+
+| Env var | Required | Default | Description |
+|---------|----------|---------|-------------|
+| `LANGFUSE_SECRET_KEY` | Yes (to enable) | — | Secret key from Langfuse project settings |
+| `LANGFUSE_PUBLIC_KEY` | Yes (to enable) | — | Public key from Langfuse project settings |
+| `LANGFUSE_HOST` | No | `https://cloud.langfuse.com` | Override for self-hosted Langfuse |
+
+Self-hosted Langfuse: a commented-out `langfuse-web` + `langfuse-db` service block is included in `docker-compose.yml` for users who want to run Langfuse alongside Thinkarr.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `package.json` | Add `langfuse` dependency |
+| `src/lib/llm/langfuse.ts` | New — Langfuse client singleton, `startTrace()`, `flushLangfuse()`, `isLangfuseEnabled()` |
+| `src/lib/llm/orchestrator.ts` | Import langfuse module; add `userId?` to `OrchestratorParams`; create root trace, generation spans per LLM round, tool spans per tool call; flush on completion/error |
+| `src/app/api/chat/route.ts` | Pass `userId: session.user.id` to `orchestrate()` |
+| `docker-compose.yml` | Add `LANGFUSE_*` env var comments to thinkarr service; add commented-out self-hosted Langfuse service block |
+| `src/__tests__/lib/langfuse.test.ts` | New — 8 unit tests for `isLangfuseEnabled`, `startTrace`, `flushLangfuse` covering enabled/disabled states |
+| `src/__tests__/api/chat.test.ts` | Update orchestrator call assertion to include `userId` |
+
+---
+
+### Phase N+20 — Langfuse configuration via Settings UI
+
+Extended the Phase N+19 Langfuse integration so keys can be entered through the admin Settings page rather than requiring environment variables. Env vars still take precedence if set (useful for server-managed deployments); the UI is the primary path for self-hosted users.
+
+#### What changed
+
+- **`src/lib/llm/langfuse.ts`** — `resolveKeys()` now reads `langfuse.secretKey`, `langfuse.publicKey`, and `langfuse.baseUrl` from the DB `app_config` table as a fallback when env vars are absent. Client is cached and re-created if the keys change.
+- **`src/app/api/settings/route.ts`** — GET returns masked Langfuse keys; PATCH saves `secretKey` + `publicKey` (both encrypted) and `baseUrl` (plain, URL-validated).
+- **`src/app/settings/page.tsx`** — New "Langfuse Observability" card in the Logs tab: Secret Key, Public Key, and Host URL fields. Saved via the existing Save button. Notes that env vars take precedence.
+- **`src/__tests__/lib/langfuse.test.ts`** — 2 new tests: DB config path enables tracing; env var keys take precedence over DB keys. Total: 10 unit tests.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/llm/langfuse.ts` | `resolveKeys()` reads from DB config as fallback; client cache keyed by resolved values |
+| `src/app/api/settings/route.ts` | Add `langfuse` section to GET response and PATCH handler |
+| `src/app/settings/page.tsx` | Add `langfuseConfig` state, load, save, and Langfuse Observability card in Logs tab |
+| `src/__tests__/lib/langfuse.test.ts` | Mock `@/lib/config`; add tests for DB config path and env var precedence |
+
+---
+
+### Phase N+21 — Connect report-issue to Langfuse as single observability + eval stack
+
+When a user reports an issue, the description is now attached to the Langfuse trace as a `user-report` score (value 0) so that both the issue text and the full LLM trace (inputs, outputs, tool calls, token usage) are in one place. GitHub issues include a Langfuse reference section instead of a verbose transcript when Langfuse is active, keeping issues concise. Logs are similarly trimmed when Langfuse holds the trace detail.
+
+#### Mechanism
+
+Each orchestrator run sets a **deterministic trace ID** equal to the user message UUID (saved first in `orchestrate()`). The `report-issue` endpoint can therefore recover the trace ID by querying the last user message for the conversation — no extra DB columns needed.
+
+#### Behaviour by Langfuse state
+
+| State | `scoreTrace` called | GitHub issue | Logger |
+|-------|-------------------|--------------|--------|
+| Langfuse configured | Yes — score attached to last chat turn's trace | Langfuse section (session ID, trace ID, host); transcript omitted | Compact: metadata + `langfuseTraceId` only |
+| Langfuse not configured | No | Full transcript as before | Verbose: includes `issueBody` with full transcript |
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/llm/langfuse.ts` | Add `traceId` param to `startTrace()`; add `scoreTrace({ traceId, comment })`; add `getLangfuseBaseUrl()` |
+| `src/lib/llm/orchestrator.ts` | Capture user message ID from `saveMessage()`; pass as `traceId` to `startTrace()` |
+| `src/app/api/report-issue/route.ts` | Query last user message ID when Langfuse active; call `scoreTrace()`; add Langfuse section to GitHub issue body; trim transcript and log when Langfuse configured |
+| `src/__tests__/lib/langfuse.test.ts` | Fix `startTrace` calls to include `traceId`; add tests for `scoreTrace()` and `getLangfuseBaseUrl()` |
+| `src/__tests__/api/report-issue.test.ts` | Add 4 new tests: no-op when unconfigured, correct traceId used, GitHub body includes Langfuse section + omits transcript, log omits `issueBody` |
+
+---
+
+### Phase N+22 — Trim GitHub issue body and update /beta-logs skill to use Langfuse
+
+Completed the single observability stack: when Langfuse is enabled, GitHub issues contain only the user's description and actionable Langfuse API retrieval instructions — no transcript. The `/beta-logs` Claude skill is updated to fetch trace data directly from the Langfuse API when credentials are available, with application logs as the fallback for server-level issues.
+
+#### GitHub issue body (Langfuse active)
+
+Only contains:
+- Reporter, timestamp, version, base URL
+- User's issue description
+- Session ID, trace ID, Langfuse host
+- Exact `curl` command (with Basic auth) for Claude to retrieve the trace
+- Note on where to find credentials (`.claude/settings.json` or Settings → Logs)
+
+The transcript is entirely absent — all LLM input/output, tool call sequences, and token usage are fetched on demand from Langfuse.
+
+#### `/beta-logs` skill (`§ A — Fetch from Langfuse`)
+
+When `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are in the environment, the skill now uses the Langfuse REST API:
+
+| Goal | Endpoint |
+|------|----------|
+| Single trace (given trace ID) | `GET {host}/api/public/traces/{traceId}` |
+| All turns for a conversation | `GET {host}/api/public/traces?sessionId={conversationId}&limit=10` |
+| Scores (user-report, etc.) | `GET {host}/api/public/scores?traceId={traceId}` |
+| Recent traces by user | `GET {host}/api/public/traces?userId={userId}&limit=20` |
+
+Auth is HTTP Basic — public key as username, secret key as password. The skill includes setup instructions for adding credentials to `.claude/settings.json`.
+
+`§ B — Application logs` remains for server-level issues (startup errors, auth problems, migration failures) that don't appear in Langfuse traces.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/app/api/report-issue/route.ts` | Langfuse path: build minimal issue body (description + API retrieval block only); non-Langfuse path: unchanged full transcript |
+| `.claude/commands/beta-logs.md` | Restructured into § A (Langfuse API) and § B (application logs); § A is preferred when credentials available |

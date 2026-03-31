@@ -334,3 +334,98 @@ describe("POST /api/report-issue — GitHub integration", () => {
     expect((meta.issueBody as string)).toContain("Base URL");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Langfuse integration
+// ---------------------------------------------------------------------------
+const { mockScoreTrace, mockGetLangfuseBaseUrl } = vi.hoisted(() => ({
+  mockScoreTrace: vi.fn(),
+  mockGetLangfuseBaseUrl: vi.fn(() => null as string | null),
+}));
+
+vi.mock("@/lib/llm/langfuse", () => ({
+  scoreTrace: mockScoreTrace,
+  getLangfuseBaseUrl: mockGetLangfuseBaseUrl,
+}));
+
+describe("POST /api/report-issue — Langfuse integration", () => {
+  beforeEach(() => {
+    mockScoreTrace.mockReset();
+    mockGetLangfuseBaseUrl.mockReturnValue(null);
+  });
+
+  it("does not call scoreTrace when Langfuse is not configured", async () => {
+    const uid = seedUser(testDb, { plexUsername: "alice" });
+    mockState.sessionCookie = seedSession(testDb, uid);
+    const convId = seedConversation(testDb, uid, "Test chat");
+    seedMessage(testDb, convId, { role: "user", content: "Is Inception available?" });
+
+    await POST(makeRequest({ conversationId: convId, description: "wrong answer" }));
+
+    expect(mockScoreTrace).not.toHaveBeenCalled();
+  });
+
+  it("calls scoreTrace with the last user message ID when Langfuse is configured", async () => {
+    mockGetLangfuseBaseUrl.mockReturnValue("https://cloud.langfuse.com");
+    const uid = seedUser(testDb, { plexUsername: "alice" });
+    mockState.sessionCookie = seedSession(testDb, uid);
+    const convId = seedConversation(testDb, uid, "Test chat");
+    seedMessage(testDb, convId, { role: "user", content: "First message", createdAt: new Date(Date.now() - 2000) });
+    const lastMsgId = seedMessage(testDb, convId, { role: "user", content: "Last message", createdAt: new Date() });
+
+    await POST(makeRequest({ conversationId: convId, description: "LLM hallucinated" }));
+
+    expect(mockScoreTrace).toHaveBeenCalledWith({
+      traceId: lastMsgId,
+      comment: "LLM hallucinated",
+    });
+  });
+
+  it("includes Langfuse section in GitHub issue body when configured", async () => {
+    mockGetLangfuseBaseUrl.mockReturnValue("https://cloud.langfuse.com");
+    process.env.GITHUB_TOKEN = "ghp_test";
+    process.env.GITHUB_OWNER = "testowner";
+    process.env.GITHUB_REPO = "testrepo";
+
+    const uid = seedUser(testDb, { plexUsername: "alice" });
+    mockState.sessionCookie = seedSession(testDb, uid);
+    const convId = seedConversation(testDb, uid, "Test chat");
+    seedMessage(testDb, convId, { role: "user", content: "Find Dune" });
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ html_url: "https://github.com/testowner/testrepo/issues/9", number: 9 }),
+    });
+
+    await POST(makeRequest({ conversationId: convId, description: "bad response" }));
+
+    const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string);
+    expect(body.body).toContain("Langfuse");
+    expect(body.body).toContain(convId); // session ID present
+    // Transcript should be omitted when Langfuse is active
+    expect(body.body).not.toContain("## Transcript");
+
+    delete process.env.GITHUB_TOKEN;
+    delete process.env.GITHUB_OWNER;
+    delete process.env.GITHUB_REPO;
+  });
+
+  it("omits issueBody from log and includes langfuseTraceId when Langfuse is configured", async () => {
+    mockGetLangfuseBaseUrl.mockReturnValue("https://cloud.langfuse.com");
+    const uid = seedUser(testDb, { plexUsername: "alice" });
+    mockState.sessionCookie = seedSession(testDb, uid);
+    const convId = seedConversation(testDb, uid, "Test chat");
+    seedMessage(testDb, convId, { role: "user", content: "Hello" });
+
+    await POST(makeRequest({ conversationId: convId, description: "something wrong" }));
+
+    const logCall = logInfoSpy.mock.calls.find(
+      (args) => typeof args[0] === "string" && args[0].includes("report-issue: report logged"),
+    );
+    expect(logCall).toBeDefined();
+    const meta = logCall![1] as Record<string, unknown>;
+    expect(meta.issueBody).toBeUndefined();
+    expect(typeof meta.langfuseTraceId).toBe("string");
+  });
+});
