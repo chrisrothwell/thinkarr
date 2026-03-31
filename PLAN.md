@@ -1925,3 +1925,38 @@ History is injected after `session.update` so transcription is enabled before th
 |------|--------|
 | `src/hooks/use-realtime-chat.ts` | Inject last 20 text turns as `conversation.item.create` events in `dc.onopen` |
 
+### Phase N+16 — Langfuse observability integration
+
+Added opt-in LLM observability via [Langfuse](https://langfuse.com). When `LANGFUSE_SECRET_KEY` and `LANGFUSE_PUBLIC_KEY` environment variables are set, every chat request is traced with per-round LLM generation spans and per-tool-call spans. If the env vars are absent, all tracing is a silent no-op with zero latency impact.
+
+#### What is traced
+
+| Observation | Fields captured |
+|-------------|----------------|
+| Root trace (`chat`) | `sessionId` = conversationId, `userId`, `input` = user message, `output` = final assistant response |
+| LLM generation (`llm-round-N`) | `model`, `input` messages, `output` content, token usage (`input`/`output`/`total`), start + end time |
+| Tool span (`tool:<name>`) | `input` = raw arguments JSON, `output` = tool result JSON, duration, error level if failed |
+
+#### Configuration
+
+| Env var | Required | Default | Description |
+|---------|----------|---------|-------------|
+| `LANGFUSE_SECRET_KEY` | Yes (to enable) | — | Secret key from Langfuse project settings |
+| `LANGFUSE_PUBLIC_KEY` | Yes (to enable) | — | Public key from Langfuse project settings |
+| `LANGFUSE_HOST` | No | `https://cloud.langfuse.com` | Override for self-hosted Langfuse |
+
+Self-hosted Langfuse: a commented-out `langfuse-web` + `langfuse-db` service block is included in `docker-compose.yml` for users who want to run Langfuse alongside Thinkarr.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `package.json` | Add `langfuse` dependency |
+| `src/lib/llm/langfuse.ts` | New — Langfuse client singleton, `startTrace()`, `flushLangfuse()`, `isLangfuseEnabled()` |
+| `src/lib/llm/orchestrator.ts` | Import langfuse module; add `userId?` to `OrchestratorParams`; create root trace, generation spans per LLM round, tool spans per tool call; flush on completion/error |
+| `src/app/api/chat/route.ts` | Pass `userId: session.user.id` to `orchestrate()` |
+| `docker-compose.yml` | Add `LANGFUSE_*` env var comments to thinkarr service; add commented-out self-hosted Langfuse service block |
+| `src/__tests__/lib/langfuse.test.ts` | New — 8 unit tests for `isLangfuseEnabled`, `startTrace`, `flushLangfuse` covering enabled/disabled states |
+| `src/__tests__/api/chat.test.ts` | Update orchestrator call assertion to include `userId` |
+
+

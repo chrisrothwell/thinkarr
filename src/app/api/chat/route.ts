@@ -124,6 +124,7 @@ export async function POST(request: Request) {
           conversationId: body.conversationId,
           userMessage: body.message,
           modelId: body.modelId,
+          userId: session.user.id,
         })) {
           enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
         }
