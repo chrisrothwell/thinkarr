@@ -1,6 +1,6 @@
 # Thinkarr
 
-Details of the build are in PLAN.MD - refer to this for details of file structure and what has been built.
+Architecture, file structure, API routes, config keys, and design decisions are in `ARCHITECTURE.md`. Refer to that for current state; git history is the record of what changed and when.
 
 ## Rule: branch and merge strategy
 
@@ -117,16 +117,16 @@ docker run --rm \
 
 Only open the `dev → beta` PR once all three pass locally.
 
-## Rule: keep PLAN.md up to date
+## Rule: keep ARCHITECTURE.md up to date
 
-For every PR, update `PLAN.md` to reflect what was built or changed:
+For every PR, update `ARCHITECTURE.md` to reflect the current state of the codebase:
 
-- Add a new phase section (or append to the current one) documenting features and bug fixes
-- Update the **file structure** if new files were added
-- Update the **config keys table** if new `app_config` keys were introduced
-- Update the **API routes table** if new routes were added or existing ones changed
+- Update the **file structure** if new files were added or removed
+- Update the **app_config keys table** if new keys were introduced
+- Update the **API routes table** if routes were added or changed
+- Update the **design decisions** section if a meaningful architectural choice was made
 
-Do this as a separate commit on the same branch before pushing, so the PR includes the documentation alongside the code.
+Do not add history, changelogs, or phase entries — git history is the record of what changed and when. Do this as a separate commit on the same branch before pushing.
 
 ## Rule: CodeQL is a required gate on dev, beta, and main
 
