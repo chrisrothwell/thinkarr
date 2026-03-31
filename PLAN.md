@@ -1979,4 +1979,29 @@ Extended the Phase N+16 Langfuse integration so keys can be entered through the 
 | `src/app/settings/page.tsx` | Add `langfuseConfig` state, load, save, and Langfuse Observability card in Logs tab |
 | `src/__tests__/lib/langfuse.test.ts` | Mock `@/lib/config`; add tests for DB config path and env var precedence |
 
+### Phase N+18 — Connect report-issue to Langfuse as single observability + eval stack
+
+When a user reports an issue, the description is now attached to the Langfuse trace as a `user-report` score (value 0) so that both the issue text and the full LLM trace (inputs, outputs, tool calls, token usage) are in one place. GitHub issues include a Langfuse reference section instead of a verbose transcript when Langfuse is active, keeping issues concise. Logs are similarly trimmed when Langfuse holds the trace detail.
+
+#### Mechanism
+
+Each orchestrator run sets a **deterministic trace ID** equal to the user message UUID (saved first in `orchestrate()`). The `report-issue` endpoint can therefore recover the trace ID by querying the last user message for the conversation — no extra DB columns needed.
+
+#### Behaviour by Langfuse state
+
+| State | `scoreTrace` called | GitHub issue | Logger |
+|-------|-------------------|--------------|--------|
+| Langfuse configured | Yes — score attached to last chat turn's trace | Langfuse section (session ID, trace ID, host); transcript omitted | Compact: metadata + `langfuseTraceId` only |
+| Langfuse not configured | No | Full transcript as before | Verbose: includes `issueBody` with full transcript |
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/lib/llm/langfuse.ts` | Add `traceId` param to `startTrace()`; add `scoreTrace({ traceId, comment })`; add `getLangfuseBaseUrl()` |
+| `src/lib/llm/orchestrator.ts` | Capture user message ID from `saveMessage()`; pass as `traceId` to `startTrace()` |
+| `src/app/api/report-issue/route.ts` | Query last user message ID when Langfuse active; call `scoreTrace()`; add Langfuse section to GitHub issue body; trim transcript and log when Langfuse configured |
+| `src/__tests__/lib/langfuse.test.ts` | Fix `startTrace` calls to include `traceId`; add tests for `scoreTrace()` and `getLangfuseBaseUrl()` |
+| `src/__tests__/api/report-issue.test.ts` | Add 4 new tests: no-op when unconfigured, correct traceId used, GitHub body includes Langfuse section + omits transcript, log omits `issueBody` |
+
 

@@ -61,8 +61,19 @@ export function isLangfuseEnabled(): boolean {
   return resolveKeys() !== null;
 }
 
-/** Start a root trace for one chat request. Returns null if Langfuse is not configured. */
+/** Returns the resolved Langfuse base URL, or null if Langfuse is not configured. */
+export function getLangfuseBaseUrl(): string | null {
+  return resolveKeys()?.baseUrl ?? null;
+}
+
+/**
+ * Start a root trace for one chat request.
+ * Pass traceId (= the user message ID) to create a deterministic ID that can
+ * be referenced later (e.g. when scoring from the report-issue endpoint).
+ * Returns null if Langfuse is not configured.
+ */
 export function startTrace(params: {
+  traceId: string;
   conversationId: string;
   userId: string;
   userMessage: string;
@@ -72,12 +83,36 @@ export function startTrace(params: {
   if (!client) return null;
 
   return client.trace({
+    id: params.traceId,
     name: "chat",
     sessionId: params.conversationId,
     userId: params.userId,
     input: params.userMessage,
     metadata: { model: params.model },
   });
+}
+
+/**
+ * Attach a user-report score (value = 0) to a trace. Used by the report-issue
+ * endpoint to link the user's description to the Langfuse trace.
+ * Fire-and-forget — never throws.
+ */
+export function scoreTrace(params: { traceId: string; comment: string }): void {
+  const client = getClient();
+  if (!client) return;
+
+  try {
+    client.score({
+      traceId: params.traceId,
+      name: "user-report",
+      value: 0,
+      comment: params.comment,
+    });
+  } catch {
+    // Best-effort — never throw
+  }
+
+  client.flushAsync().catch(() => {});
 }
 
 /** Flush buffered events. Call fire-and-forget at the end of a request. */

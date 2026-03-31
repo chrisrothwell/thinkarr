@@ -112,6 +112,7 @@ describe("langfuse module", () => {
       const { startTrace } = await importLangfuse();
 
       const result = startTrace({
+        traceId: "msg-uuid-1",
         conversationId: "conv-1",
         userId: "42",
         userMessage: "find Inception",
@@ -120,6 +121,7 @@ describe("langfuse module", () => {
 
       expect(result).toBe(fakeTrace);
       expect(mockTrace).toHaveBeenCalledWith({
+        id: "msg-uuid-1",
         name: "chat",
         sessionId: "conv-1",
         userId: "42",
@@ -141,6 +143,7 @@ describe("langfuse module", () => {
       const { startTrace } = await importLangfuse();
 
       const result = startTrace({
+        traceId: "msg-uuid-db",
         conversationId: "conv-2",
         userId: "7",
         userMessage: "test",
@@ -166,6 +169,71 @@ describe("langfuse module", () => {
   });
 
   // ---------------------------------------------------------------------------
+  // scoreTrace
+  // ---------------------------------------------------------------------------
+  describe("scoreTrace", () => {
+    it("does nothing when Langfuse is not configured", async () => {
+      delete process.env.LANGFUSE_SECRET_KEY;
+      delete process.env.LANGFUSE_PUBLIC_KEY;
+      const { scoreTrace } = await importLangfuse();
+      expect(() => scoreTrace({ traceId: "msg-1", comment: "it broke" })).not.toThrow();
+    });
+
+    it("calls client.score with correct params when configured", async () => {
+      process.env.LANGFUSE_SECRET_KEY = "sk-lf-test";
+      process.env.LANGFUSE_PUBLIC_KEY = "pk-lf-test";
+      const mockScore = vi.fn();
+      // Override the mock class to expose score
+      vi.doMock("langfuse", () => ({
+        default: class MockLangfuseWithScore {
+          trace = mockTrace;
+          flushAsync = mockFlushAsync;
+          score = mockScore;
+        },
+      }));
+      vi.resetModules();
+      const { scoreTrace: scoreTraceFresh } = await importLangfuse();
+
+      scoreTraceFresh({ traceId: "msg-abc", comment: "wrong answer given" });
+
+      expect(mockScore).toHaveBeenCalledWith({
+        traceId: "msg-abc",
+        name: "user-report",
+        value: 0,
+        comment: "wrong answer given",
+      });
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // getLangfuseBaseUrl
+  // ---------------------------------------------------------------------------
+  describe("getLangfuseBaseUrl", () => {
+    it("returns null when not configured", async () => {
+      delete process.env.LANGFUSE_SECRET_KEY;
+      delete process.env.LANGFUSE_PUBLIC_KEY;
+      const { getLangfuseBaseUrl } = await importLangfuse();
+      expect(getLangfuseBaseUrl()).toBeNull();
+    });
+
+    it("returns the default cloud URL when only keys are set", async () => {
+      process.env.LANGFUSE_SECRET_KEY = "sk-lf-test";
+      process.env.LANGFUSE_PUBLIC_KEY = "pk-lf-test";
+      delete process.env.LANGFUSE_HOST;
+      const { getLangfuseBaseUrl } = await importLangfuse();
+      expect(getLangfuseBaseUrl()).toBe("https://cloud.langfuse.com");
+    });
+
+    it("returns the custom host when LANGFUSE_HOST is set", async () => {
+      process.env.LANGFUSE_SECRET_KEY = "sk-lf-test";
+      process.env.LANGFUSE_PUBLIC_KEY = "pk-lf-test";
+      process.env.LANGFUSE_HOST = "https://langfuse.example.com";
+      const { getLangfuseBaseUrl } = await importLangfuse();
+      expect(getLangfuseBaseUrl()).toBe("https://langfuse.example.com");
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // flushLangfuse
   // ---------------------------------------------------------------------------
   describe("flushLangfuse", () => {
@@ -181,7 +249,7 @@ describe("langfuse module", () => {
       process.env.LANGFUSE_PUBLIC_KEY = "pk-lf-test";
       const { startTrace, flushLangfuse } = await importLangfuse();
       mockTrace.mockReturnValue({ id: "t1" });
-      startTrace({ conversationId: "c1", userId: "1", userMessage: "hi", model: "m" });
+      startTrace({ traceId: "msg-1", conversationId: "c1", userId: "1", userMessage: "hi", model: "m" });
       flushLangfuse();
       await new Promise((r) => setTimeout(r, 0));
       expect(mockFlushAsync).toHaveBeenCalled();

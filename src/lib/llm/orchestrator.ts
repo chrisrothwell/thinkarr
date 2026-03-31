@@ -372,8 +372,9 @@ export async function* orchestrate(
   // Ensure tools are registered
   initializeTools();
 
-  // 1. Save user message
-  saveMessage(conversationId, "user", userMessage);
+  // 1. Save user message — ID becomes the Langfuse traceId so the report-issue
+  //    endpoint can attach a score to this exact trace later.
+  const userMessageId = saveMessage(conversationId, "user", userMessage);
 
   // 2. Build messages array
   // Resolve client and model — use override if provided
@@ -398,8 +399,11 @@ export async function* orchestrate(
   ];
   const tools = hasTools() ? getOpenAITools() : undefined;
 
-  // Start a Langfuse trace for this request (no-op if not configured)
+  // Start a Langfuse trace for this request (no-op if not configured).
+  // traceId = userMessageId so the report-issue endpoint can score this trace
+  // by querying the last user message ID for the conversation.
   const trace: LangfuseTraceClient | null = startTrace({
+    traceId: userMessageId,
     conversationId,
     userId: params.userId !== undefined ? String(params.userId) : conversationId,
     userMessage,
