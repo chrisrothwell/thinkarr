@@ -247,6 +247,12 @@ Tools defined with Zod schemas, converted to JSON Schema → OpenAI function for
 ### Orphaned Tool Call Repair
 If the server crashes between saving an assistant message with `tool_calls` and saving the tool results, the LLM rejects the conversation on next load. `loadHistory()` in the orchestrator detects orphaned `tool_call_ids` and injects synthetic error tool messages so the conversation is always recoverable.
 
+### Agentic Tool Call Limit
+`MAX_TOOL_ROUNDS = 8` in `orchestrator.ts`. If the loop exhausts all rounds without the LLM producing a final text response, the stream ends with `{ type: "error", message: "Tool call limit reached" }` and the Langfuse trace is updated accordingly.
+
+### Sonarr Series Title Matching
+`getSeriesStatus()` in `sonarr.ts` prefers an exact (case-insensitive) title match against the `/series` list before falling back to substring matching. This prevents titles like "Celebrity Race Across the World" from being returned when the user asks about "Race Across the World".
+
 ### Multi-Endpoint LLM Support
 `llm.endpoints` JSON array stores per-endpoint config including capabilities. Legacy single-key config preserved for backward compat. Capability auto-detection: `testLlm()` probes Whisper, realtime (model list scan + OpenAI-only guard), and TTS. Per-user model override via `user.{id}.defaultModel` + `canChangeModel`.
 
