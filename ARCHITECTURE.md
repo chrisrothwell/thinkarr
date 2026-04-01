@@ -226,7 +226,7 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 | Plex | `plex_search_library`, `plex_get_on_deck`, `plex_get_recently_added`, `plex_check_availability`, `plex_search_collection`, `plex_search_by_tag`, `plex_get_title_tags` |
 | Sonarr | `sonarr_search_series`, `sonarr_get_series_status`, `sonarr_get_calendar`, `sonarr_get_queue` |
 | Radarr | `radarr_search_movie`, `radarr_get_movie_status`, `radarr_get_queue` |
-| Overseerr | `overseerr_search`, `overseerr_list_requests` |
+| Overseerr | `overseerr_search`, `overseerr_get_details`, `overseerr_list_requests`, `overseerr_discover`, `overseerr_get_season_episodes` |
 | Built-in | `display_titles` — renders TitleCarousel in chat (always registered) |
 
 External MCP access via bearer token (`mcp.bearerToken`). Optional `X-User-Id` header scopes operations to a user's permission level. Per-user tokens stored as `user.{id}.mcpToken`.

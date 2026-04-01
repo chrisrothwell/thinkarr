@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { defineTool } from "./registry";
 import * as overseerr from "@/lib/services/overseerr";
-import type { OverseerrSearchResult, OverseerrRequest, OverseerrDetails, OverseerrDiscoverResult } from "@/lib/services/overseerr";
+import type { OverseerrSearchResult, OverseerrRequest, OverseerrDetails, OverseerrDiscoverResult, OverseerrEpisode } from "@/lib/services/overseerr";
 
 const pageParam = z.number().int().min(1).optional().describe("Page number (1-based). Omit or use 1 for the first page. Use hasMore from the previous response to know whether a next page exists.");
 
@@ -149,6 +149,28 @@ export function registerOverseerrTools() {
             : {}),
         })),
         hasMore: r.hasMore,
+      };
+    },
+  });
+
+  defineTool({
+    name: "overseerr_get_season_episodes",
+    description: "Get episode-level details (air dates, names, runtimes) for a specific season of a TV show from Overseerr. Use this when the user asks about episode air dates, premiere dates, or individual episode schedules — especially for pending or requested shows not yet in the library. Requires overseerrId and season number from a prior overseerr_search or overseerr_get_details call.",
+    schema: z.object({
+      id: z.number().int().describe("Overseerr TV show ID (overseerrId from search or details)"),
+      seasonNumber: z.number().int().min(1).describe("Season number to fetch episodes for"),
+    }),
+    handler: async (args) => overseerr.getSeasonEpisodes(args.id, args.seasonNumber),
+    llmSummary: (result: unknown) => {
+      const r = result as { seasonNumber: number; episodes: OverseerrEpisode[] };
+      return {
+        seasonNumber: r.seasonNumber,
+        episodes: r.episodes.map(({ episodeNumber, name, airDate, runtime }) => ({
+          episodeNumber,
+          name,
+          ...(airDate ? { airDate } : {}),
+          ...(runtime ? { runtime } : {}),
+        })),
       };
     },
   });

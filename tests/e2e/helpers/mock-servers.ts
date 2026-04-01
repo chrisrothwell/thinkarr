@@ -31,6 +31,8 @@ export const TRIGGER_AVAILABLE = "e2e show available movie";
 export const TRIGGER_UNAVAILABLE = "e2e show unavailable movie";
 /** User message trigger → LLM returns display_titles with multiple movies (carousel) */
 export const TRIGGER_MULTIPLE = "e2e show multiple movies";
+/** User message trigger → LLM returns display_titles with a pending TV show (has overseerrId + imdbId, no plexKey) */
+export const TRIGGER_PENDING = "e2e show pending tv";
 
 // ---------------------------------------------------------------------------
 // Plex mock
@@ -284,6 +286,26 @@ function llmHandler(req: http.IncomingMessage, res: http.ServerResponse) {
                 overseerrMediaType: "movie",
                 rating: 8.8,
                 summary: "Dreams within dreams.",
+              },
+            ],
+          });
+          sendToolCallResponse(res, args);
+          return;
+        }
+
+        if (lastUserContent.includes(TRIGGER_PENDING)) {
+          // Return a display_titles tool call: single pending TV show with overseerrId + imdbId
+          const args = JSON.stringify({
+            titles: [
+              {
+                mediaType: "tv",
+                title: "Star City",
+                year: 2026,
+                mediaStatus: "pending",
+                overseerrId: 252107,
+                overseerrMediaType: "tv",
+                imdbId: "tt32140872",
+                summary: "A space race drama set behind the Iron Curtain.",
               },
             ],
           });
