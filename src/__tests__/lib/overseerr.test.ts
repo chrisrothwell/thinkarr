@@ -633,6 +633,73 @@ describe("listRequests — issue #89: titles should not return Unknown", () => {
   });
 });
 
+describe("getSeasonEpisodes — issue #272: episode air dates for pending shows", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("returns episode list with air dates and runtimes", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        seasonNumber: 1,
+        episodes: [
+          { episodeNumber: 1, name: "Pilot", airDate: "2026-03-15", overview: "The beginning.", runtime: 60 },
+          { episodeNumber: 2, name: "Episode Two", airDate: "2026-03-22", overview: "Things escalate.", runtime: 55 },
+        ],
+      }),
+    }));
+
+    const { getSeasonEpisodes } = await import("@/lib/services/overseerr");
+    const result = await getSeasonEpisodes(252107, 1);
+    expect(result.seasonNumber).toBe(1);
+    expect(result.episodes).toHaveLength(2);
+    expect(result.episodes[0]).toMatchObject({ episodeNumber: 1, name: "Pilot", airDate: "2026-03-15", runtime: 60 });
+    expect(result.episodes[1]).toMatchObject({ episodeNumber: 2, name: "Episode Two", airDate: "2026-03-22" });
+  });
+
+  it("omits undefined fields (no airDate or runtime)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        seasonNumber: 1,
+        episodes: [
+          { episodeNumber: 1, name: "TBA", airDate: null, overview: null, runtime: 0 },
+        ],
+      }),
+    }));
+
+    const { getSeasonEpisodes } = await import("@/lib/services/overseerr");
+    const result = await getSeasonEpisodes(252107, 1);
+    expect(result.episodes[0].airDate).toBeUndefined();
+    expect(result.episodes[0].runtime).toBeUndefined();
+    expect(result.episodes[0].overview).toBeUndefined();
+  });
+
+  it("returns empty episodes array when API returns no episodes", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ seasonNumber: 1 }),
+    }));
+
+    const { getSeasonEpisodes } = await import("@/lib/services/overseerr");
+    const result = await getSeasonEpisodes(252107, 1);
+    expect(result.episodes).toHaveLength(0);
+  });
+
+  it("calls the correct Overseerr endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ seasonNumber: 2, episodes: [] }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { getSeasonEpisodes } = await import("@/lib/services/overseerr");
+    await getSeasonEpisodes(252107, 2);
+    expect(fetchMock.mock.calls[0][0]).toContain("/tv/252107/season/2");
+  });
+});
+
 describe("discover — issue #207", () => {
   beforeEach(() => {
     vi.resetModules();

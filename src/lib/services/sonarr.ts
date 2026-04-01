@@ -93,8 +93,15 @@ export interface SonarrSeriesStatus {
  */
 export async function getSeriesStatus(title: string): Promise<SonarrSeriesStatus | null> {
   const allSeries = await sonarrFetch("/series");
-  const match = (allSeries || []).find((s: Record<string, unknown>) =>
-    (s.title as string).toLowerCase().includes(title.toLowerCase()),
+  const needle = title.toLowerCase();
+  // Prefer exact title match; fall back to substring only if nothing exact is found.
+  const match = (
+    (allSeries || []).find((s: Record<string, unknown>) =>
+      (s.title as string).toLowerCase() === needle,
+    ) ??
+    (allSeries || []).find((s: Record<string, unknown>) =>
+      (s.title as string).toLowerCase().includes(needle),
+    )
   ) as Record<string, unknown> | undefined;
 
   if (!match || !match.id) return null;

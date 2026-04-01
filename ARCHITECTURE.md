@@ -226,7 +226,7 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 | Plex | `plex_search_library`, `plex_get_on_deck`, `plex_get_recently_added`, `plex_check_availability`, `plex_search_collection`, `plex_search_by_tag`, `plex_get_title_tags` |
 | Sonarr | `sonarr_search_series`, `sonarr_get_series_status`, `sonarr_get_calendar`, `sonarr_get_queue` |
 | Radarr | `radarr_search_movie`, `radarr_get_movie_status`, `radarr_get_queue` |
-| Overseerr | `overseerr_search`, `overseerr_list_requests` |
+| Overseerr | `overseerr_search`, `overseerr_get_details`, `overseerr_list_requests`, `overseerr_discover`, `overseerr_get_season_episodes` |
 | Built-in | `display_titles` — renders TitleCarousel in chat (always registered) |
 
 External MCP access via bearer token (`mcp.bearerToken`). Optional `X-User-Id` header scopes operations to a user's permission level. Per-user tokens stored as `user.{id}.mcpToken`.
@@ -246,6 +246,12 @@ Tools defined with Zod schemas, converted to JSON Schema → OpenAI function for
 
 ### Orphaned Tool Call Repair
 If the server crashes between saving an assistant message with `tool_calls` and saving the tool results, the LLM rejects the conversation on next load. `loadHistory()` in the orchestrator detects orphaned `tool_call_ids` and injects synthetic error tool messages so the conversation is always recoverable.
+
+### Agentic Tool Call Limit
+`MAX_TOOL_ROUNDS = 8` in `orchestrator.ts`. If the loop exhausts all rounds without the LLM producing a final text response, the stream ends with `{ type: "error", message: "Tool call limit reached" }` and the Langfuse trace is updated accordingly.
+
+### Sonarr Series Title Matching
+`getSeriesStatus()` in `sonarr.ts` prefers an exact (case-insensitive) title match against the `/series` list before falling back to substring matching. This prevents titles like "Celebrity Race Across the World" from being returned when the user asks about "Race Across the World".
 
 ### Multi-Endpoint LLM Support
 `llm.endpoints` JSON array stores per-endpoint config including capabilities. Legacy single-key config preserved for backward compat. Capability auto-detection: `testLlm()` probes Whisper, realtime (model list scan + OpenAI-only guard), and TTS. Per-user model override via `user.{id}.defaultModel` + `canChangeModel`.
