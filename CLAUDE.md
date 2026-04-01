@@ -33,9 +33,10 @@ feature branches → dev → beta → main
 1. `git checkout dev && git pull origin dev`
 2. `git checkout -b claude/<description>-<id>`
 3. Make changes, commit
-4. `git push -u origin claude/<description>-<id>`
-5. Open a PR targeting `dev` using `gh pr create --base dev`
-6. Stop — do not merge the PR. Wait for CI to pass and the human to approve.
+4. **Check version parity**: compare `package.json` on this branch vs `origin/beta`. If they match, bump the version on this branch (same logic as the version bump rule below) and include it as a final commit before pushing.
+5. `git push -u origin claude/<description>-<id>`
+6. Open a PR targeting `dev` using `gh pr create --base dev`
+7. Stop — do not merge the PR. Wait for CI to pass and the human to approve.
 
 ### Never do these
 - `git push origin dev`, `git push origin beta`, or `git push origin main`
@@ -70,7 +71,7 @@ Only the human manages the release flow. All version bumps go through PRs — ne
 ### Workflow
 
 1. Compare `package.json` on `dev` vs `beta` (or `beta` vs `main` for a full release).
-2. If the versions match, raise a `claude/bump-version-*` PR to `dev` first and wait for it to be merged before opening the release PR.
+2. If the versions match, the feature branch that last landed on `dev` should have included the bump (see workflow step 4 above). If it didn't, raise a `claude/bump-version-*` PR to `dev` and wait for it to be merged before opening the release PR.
 3. When raising the `dev → beta` PR, use `?template=dev-to-beta.md` so the checklist pre-fills.
 
 ### Rules
