@@ -5,8 +5,23 @@ available (richer trace data); falls back to application logs otherwise.
 
 ## Step 1 — Check whether Langfuse is configured
 
-If `LANGFUSE_SECRET_KEY` and `LANGFUSE_PUBLIC_KEY` are set in your environment,
-use the Langfuse API (§ A). Otherwise use application logs (§ B).
+Check whether `LANGFUSE_SECRET_KEY` and `LANGFUSE_PUBLIC_KEY` are set in your
+environment (e.g. via `.claude/settings.json` `env` block).
+
+- **If both keys are present** → use the Langfuse API (§ A).
+- **If either key is missing** → use `AskUserQuestion` to request them from the
+  user before proceeding. Ask:
+
+  > "Langfuse credentials aren't configured. Please provide your
+  > `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` (find them in the beta admin
+  > UI under **Settings → Logs → Langfuse Observability**), and I'll add them to
+  > `.claude/settings.json` for you."
+
+  Once the user supplies the keys, write them into `.claude/settings.json` under
+  `env` (creating the file if it doesn't exist), then proceed to § A.
+  Do **not** fall back to application logs (§ B) when Langfuse credentials are
+  missing and a Langfuse trace ID or session ID is available — logs lack the
+  per-trace detail needed to diagnose LLM issues.
 
 ---
 
@@ -38,19 +53,18 @@ curl -s -u "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" \
 
 ### If Langfuse credentials are missing:
 
-1. Open the beta admin UI and go to **Settings → Logs → Langfuse Observability**
-2. Copy the Secret Key and Public Key
-3. Add them to `.claude/settings.json` under `env`:
-   ```json
-   {
-     "env": {
-       "LANGFUSE_PUBLIC_KEY": "pk-lf-...",
-       "LANGFUSE_SECRET_KEY": "sk-lf-...",
-       "LANGFUSE_HOST": "https://cloud.langfuse.com"
-     }
-   }
-   ```
-4. Re-run this command
+This case is handled in Step 1 — use `AskUserQuestion` to request the keys from
+the user, then write them to `.claude/settings.json` under `env`:
+
+```json
+{
+  "env": {
+    "LANGFUSE_PUBLIC_KEY": "pk-lf-...",
+    "LANGFUSE_SECRET_KEY": "sk-lf-...",
+    "LANGFUSE_HOST": "https://cloud.langfuse.com"
+  }
+}
+```
 
 Do not commit or log key values.
 

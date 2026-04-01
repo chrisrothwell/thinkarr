@@ -33,7 +33,7 @@ interface OrchestratorParams {
 
 type ChatMessage = OpenAI.ChatCompletionMessageParam;
 
-const MAX_TOOL_ROUNDS = 5;
+const MAX_TOOL_ROUNDS = 8;
 
 /**
  * Retry an LLM API call on 429 rate-limit responses with exponential backoff.

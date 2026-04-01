@@ -378,6 +378,30 @@ export async function discover(
   return { results, hasMore };
 }
 
+export interface OverseerrEpisode {
+  episodeNumber: number;
+  name: string;
+  airDate?: string;
+  overview?: string;
+  runtime?: number;
+}
+
+export async function getSeasonEpisodes(
+  tvId: number,
+  seasonNumber: number,
+): Promise<{ seasonNumber: number; episodes: OverseerrEpisode[] }> {
+  const data = await overseerrFetch(`/tv/${tvId}/season/${seasonNumber}`);
+  const rawEpisodes = (data?.episodes as Record<string, unknown>[]) ?? [];
+  const episodes: OverseerrEpisode[] = rawEpisodes.map((ep) => ({
+    episodeNumber: ep.episodeNumber as number,
+    name: ep.name as string,
+    airDate: (ep.airDate as string | undefined) || undefined,
+    overview: (ep.overview as string | undefined)?.substring(0, 200) || undefined,
+    runtime: (ep.runtime as number | undefined) || undefined,
+  }));
+  return { seasonNumber, episodes };
+}
+
 function requestStatusLabel(status: number): string {
   switch (status) {
     case 1: return "Pending Approval";

@@ -21,6 +21,7 @@ import {
   TRIGGER_AVAILABLE,
   TRIGGER_UNAVAILABLE,
   TRIGGER_MULTIPLE,
+  TRIGGER_PENDING,
 } from "./helpers/mock-servers";
 
 // ---------------------------------------------------------------------------
@@ -163,6 +164,37 @@ test.describe("Title card — multiple titles (carousel)", () => {
     await expect(cards.nth(0).getByTestId("title-status")).toHaveText("Available");
     await expect(cards.nth(1).getByTestId("title-status")).toHaveText("Pending");
     await expect(cards.nth(2).getByTestId("title-status")).toHaveText("Not Requested");
+  });
+});
+
+test.describe("Title card — pending TV show", () => {
+  test("renders 'More Info' button but no Request button for pending items", async ({ page }) => {
+    await page.goto("/chat");
+
+    await sendMessage(page, TRIGGER_PENDING);
+
+    await expect(page.getByTestId("message-assistant")).toBeVisible({ timeout: 20_000 });
+
+    const card = page.getByTestId("title-card").first();
+    await expect(card).toBeVisible({ timeout: 10_000 });
+
+    await expect(card).toContainText("Star City");
+
+    // Status badge shows "Pending"
+    await expect(card.getByTestId("title-status")).toHaveText("Pending");
+
+    // More Info button is visible (imdbId is set)
+    await expect(card.getByTestId("more-info-button")).toBeVisible();
+
+    // More Info links to IMDb when imdbId is present
+    const moreInfoHref = await card.getByTestId("more-info-button").getAttribute("href");
+    expect(moreInfoHref).toContain("imdb.com/title/tt32140872");
+
+    // Request button must NOT appear — item is already requested
+    await expect(card.getByTestId("request-button")).not.toBeVisible();
+
+    // Watch Now button absent — not in Plex yet
+    await expect(card.getByTestId("watch-now-button")).not.toBeVisible();
   });
 });
 

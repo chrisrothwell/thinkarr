@@ -93,6 +93,12 @@ export function TitleCard({ title }: TitleCardProps) {
     title.overseerrId != null &&
     title.overseerrMediaType != null;
 
+  const moreInfoHref = title.imdbId
+    ? `https://www.imdb.com/title/${title.imdbId}`
+    : title.overseerrId && title.overseerrMediaType
+      ? `https://www.themoviedb.org/${title.overseerrMediaType === "movie" ? "movie" : "tv"}/${title.overseerrId}`
+      : null;
+
   return (
     <div className="flex gap-3 rounded-xl border border-border bg-card p-3 w-full" data-testid="title-card">
       {/* Thumbnail */}
@@ -156,19 +162,29 @@ export function TitleCard({ title }: TitleCardProps) {
             </a>
           )}
 
+          {/* More Info standalone: show for pending/partial/available titles (no request button) */}
+          {!showRequestButton && moreInfoHref && (
+            <a
+              href={moreInfoHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs px-3 py-1 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors font-medium whitespace-nowrap"
+              data-testid="more-info-button"
+            >
+              More Info
+            </a>
+          )}
+
           {/* More Info + Request/Requested kept together so they never split across lines */}
           {showRequestButton && (
             <div className="flex gap-2 flex-nowrap">
-              {(title.imdbId || (title.overseerrId && title.overseerrMediaType)) && (
+              {moreInfoHref && (
                 <a
-                  href={
-                    title.imdbId
-                      ? `https://www.imdb.com/title/${title.imdbId}`
-                      : `https://www.themoviedb.org/${title.overseerrMediaType === "movie" ? "movie" : "tv"}/${title.overseerrId}`
-                  }
+                  href={moreInfoHref}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-xs px-3 py-1 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors font-medium whitespace-nowrap"
+                  data-testid="more-info-button"
                 >
                   More Info
                 </a>
