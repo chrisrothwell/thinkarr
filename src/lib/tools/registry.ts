@@ -19,6 +19,21 @@ export interface ToolDefinition {
 
 const tools: Map<string, ToolDefinition> = new Map();
 
+/** Levenshtein distance — used to suggest close tool name matches. */
+function levenshtein(a: string, b: string): number {
+  const m = a.length, n = b.length;
+  const dp: number[][] = Array.from({ length: m + 1 }, (_, i) => [i, ...Array(n).fill(0)]);
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = a[i - 1] === b[j - 1]
+        ? dp[i - 1][j - 1]
+        : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+    }
+  }
+  return dp[m][n];
+}
+
 /** Register a tool with name, description, Zod parameter schema, and handler. */
 export function defineTool<T extends z.ZodType>(def: {
   name: string;
@@ -55,7 +70,15 @@ export async function executeTool(
 ): Promise<string> {
   const tool = tools.get(name);
   if (!tool) {
-    return JSON.stringify({ error: `Unknown tool: ${name}` });
+    // Suggest the closest registered name so the LLM can self-correct on the next round.
+    const registered = Array.from(tools.keys());
+    const suggestion = registered.find(
+      (k) => k.replace(/_/g, "").toLowerCase() === name.replace(/_/g, "").toLowerCase()
+        || levenshtein(k, name) <= 2,
+    );
+    const hint = suggestion ? ` Did you mean "${suggestion}"?` : ` Available tools: ${registered.join(", ")}.`;
+    logger.warn("Unknown tool called", { name, suggestion });
+    return JSON.stringify({ error: `Unknown tool: "${name}".${hint}` });
   }
 
   try {

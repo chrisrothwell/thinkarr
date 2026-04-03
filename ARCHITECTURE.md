@@ -253,6 +253,9 @@ If the server crashes between saving an assistant message with `tool_calls` and 
 ### Sonarr Series Title Matching
 `getSeriesStatus()` in `sonarr.ts` prefers an exact (case-insensitive) title match against the `/series` list before falling back to substring matching. This prevents titles like "Celebrity Race Across the World" from being returned when the user asks about "Race Across the World".
 
+### mediaStatus Normalization
+Overseerr's API returns title-cased status strings (`"Processing"`, `"Not Requested"`, `"Partially Available"`) which conflict with the lowercase enum expected by `display_titles` (`"pending"`, `"not_requested"`, `"partial"`). `normalizeMediaStatus()` in `overseerr.ts` handles the mapping. The `overseerr_search` and `overseerr_discover` tool handlers apply this function before returning results so the LLM always sees display_titles-compatible values. `enrichSonarrSeries()` in `sonarr-tools.ts` also pre-computes `mediaStatus` — `"available"` when found in Plex, normalized Overseerr status when found there, otherwise `"pending"` if monitored or `"not_requested"` if not.
+
 ### Multi-Endpoint LLM Support
 `llm.endpoints` JSON array stores per-endpoint config including capabilities. Legacy single-key config preserved for backward compat. Capability auto-detection: `testLlm()` probes Whisper, realtime (model list scan + OpenAI-only guard), and TTS. Per-user model override via `user.{id}.defaultModel` + `canChangeModel`.
 
