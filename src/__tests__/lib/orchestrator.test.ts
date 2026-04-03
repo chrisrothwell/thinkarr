@@ -901,42 +901,52 @@ describe("orchestrator — Gemini parallel tool calls at same index", () => {
   it("executes both tool calls separately when Gemini sends parallel calls at index 0", async () => {
     // Gemini sends two tool calls both at index: 0 with distinct ids.
     // The fix keys by id (not index) so each call gets its own entry.
+    let llmCallCount = 0;
     vi.doMock("@/lib/llm/client", () => ({
       getLlmClient: () => ({
         chat: {
           completions: {
             create: vi.fn(async () => {
-              return (async function* () {
+              llmCallCount++;
+              if (llmCallCount === 1) {
                 // Round 1: two parallel tool calls, both at index 0
-                yield {
-                  choices: [{
-                    delta: {
-                      tool_calls: [{
-                        index: 0,
-                        id: "call_sonarr",
-                        function: { name: "sonarr_search_series", arguments: '{"term":"The Young Offenders"}' },
-                      }],
-                    },
-                  }],
-                  usage: null,
-                };
-                yield {
-                  choices: [{
-                    delta: {
-                      tool_calls: [{
-                        index: 0,
-                        id: "call_plex",
-                        function: { name: "plex_search_library", arguments: '{"query":"The Young Offenders"}' },
-                      }],
-                    },
-                  }],
-                  usage: null,
-                };
-                yield {
-                  choices: [{ delta: {} }],
-                  usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
-                };
-              })();
+                return (async function* () {
+                  yield {
+                    choices: [{
+                      delta: {
+                        tool_calls: [{
+                          index: 0,
+                          id: "call_sonarr",
+                          function: { name: "sonarr_search_series", arguments: '{"term":"The Young Offenders"}' },
+                        }],
+                      },
+                    }],
+                    usage: null,
+                  };
+                  yield {
+                    choices: [{
+                      delta: {
+                        tool_calls: [{
+                          index: 0,
+                          id: "call_plex",
+                          function: { name: "plex_search_library", arguments: '{"query":"The Young Offenders"}' },
+                        }],
+                      },
+                    }],
+                    usage: null,
+                  };
+                  yield {
+                    choices: [{ delta: {} }],
+                    usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+                  };
+                })();
+              } else {
+                // Round 2+: text response after seeing tool results
+                return (async function* () {
+                  yield { choices: [{ delta: { content: "The Young Offenders is available." } }], usage: null };
+                  yield { choices: [{ delta: {} }], usage: { prompt_tokens: 20, completion_tokens: 8, total_tokens: 28 } };
+                })();
+              }
             }),
           },
         },
