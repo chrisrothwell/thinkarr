@@ -34,9 +34,10 @@ feature branches → dev → beta → main
 2. `git checkout -b claude/<description>-<id>`
 3. Make changes, commit
 4. **Check version parity**: compare `package.json` on this branch vs `origin/beta`. If they match, bump the version on this branch (same logic as the version bump rule below) and include it as a final commit before pushing.
-5. `git push -u origin claude/<description>-<id>`
-6. Open a PR targeting `dev` using `gh pr create --base dev`
-7. Stop — do not merge the PR. Wait for CI to pass and the human to approve.
+5. **Run local checks** (see Rule below) — type-check and unit tests must pass before opening a PR.
+6. `git push -u origin claude/<description>-<id>`
+7. Open a PR targeting `dev` using `gh pr create --base dev`
+8. Stop — do not merge the PR. Wait for CI to pass and the human to approve.
 
 ### Never do these
 - `git push origin dev`, `git push origin beta`, or `git push origin main`
@@ -174,6 +175,25 @@ For every feature or bug fix, check whether a unit or E2E test already covers th
 - E2E tests live in `tests/e2e/` and use Playwright.
 - Prefer unit tests for logic/API behaviour; prefer E2E tests only for UI interactions that can't be covered at the unit level.
 - If an existing test already covers the behaviour, no new test is needed — but do not remove or weaken existing tests.
+
+## Rule: run type-check and unit tests before every PR
+
+Before pushing and opening any PR (not just `dev → beta`), run both checks locally:
+
+### 1. Type-check
+```bash
+npx tsc --noEmit
+# Ignore pre-existing errors caused by missing node_modules (Cannot find module 'zod', etc.)
+# Fix any NEW errors introduced by your changes
+```
+
+### 2. Unit tests
+```bash
+npx vitest run
+# All tests must pass — fix failures before opening the PR
+```
+
+If `node_modules` is not installed in the current environment, the type-check will report module-not-found errors for every package. These are pre-existing environment noise — ignore them. Only fix errors that point to files you changed. Unit tests require `node_modules` to run; if they cannot run, note this explicitly in the PR description so the human knows to rely on CI.
 
 ## Rule: two E2E tiers — full suite vs. Docker smoke
 
