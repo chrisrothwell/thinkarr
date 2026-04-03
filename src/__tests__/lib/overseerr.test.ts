@@ -785,3 +785,35 @@ describe("discover — issue #207", () => {
     expect(url).toContain("/discover/movies/upcoming");
   });
 });
+
+describe("normalizeMediaStatus — issues #281 #282: title-cased Overseerr values must map to display_titles enum", () => {
+  it("normalizes 'Processing' to 'pending'", async () => {
+    const { normalizeMediaStatus } = await import("@/lib/services/overseerr");
+    expect(normalizeMediaStatus("Processing")).toBe("pending");
+  });
+
+  it("normalizes 'Pending' to 'pending'", async () => {
+    const { normalizeMediaStatus } = await import("@/lib/services/overseerr");
+    expect(normalizeMediaStatus("Pending")).toBe("pending");
+  });
+
+  it("normalizes 'Available' to 'available'", async () => {
+    const { normalizeMediaStatus } = await import("@/lib/services/overseerr");
+    expect(normalizeMediaStatus("Available")).toBe("available");
+  });
+
+  it("normalizes 'Partially Available' to 'partial'", async () => {
+    const { normalizeMediaStatus } = await import("@/lib/services/overseerr");
+    expect(normalizeMediaStatus("Partially Available")).toBe("partial");
+  });
+
+  it("normalizes 'Not Requested' to 'not_requested'", async () => {
+    const { normalizeMediaStatus } = await import("@/lib/services/overseerr");
+    expect(normalizeMediaStatus("Not Requested")).toBe("not_requested");
+  });
+
+  it("normalizes unknown values to 'not_requested'", async () => {
+    const { normalizeMediaStatus } = await import("@/lib/services/overseerr");
+    expect(normalizeMediaStatus("SomeUnknownStatus")).toBe("not_requested");
+  });
+});

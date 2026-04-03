@@ -40,6 +40,7 @@ export interface SonarrSeries {
   overseerrId?: number;
   cast?: string[];
   imdbId?: string;
+  mediaStatus?: string;
 }
 
 export async function searchSeries(term: string): Promise<SonarrSeries[]> {

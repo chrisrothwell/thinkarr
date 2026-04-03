@@ -20,7 +20,15 @@ vi.mock("@/lib/services/overseerr", () => ({
   getDetails: (...a: unknown[]) => mockOverseerrGetDetails(...a),
   discover: (...a: unknown[]) => mockOverseerrDiscover(...a),
   listRequests: (...a: unknown[]) => mockOverseerrListRequests(...a),
-  normalizeMediaStatus: vi.fn((s: string) => s.toLowerCase().replace(/ /g, "_")),
+  normalizeMediaStatus: vi.fn((s: string) => {
+    switch (s) {
+      case "Available": return "available";
+      case "Partially Available": return "partial";
+      case "Pending":
+      case "Processing": return "pending";
+      default: return "not_requested";
+    }
+  }),
 }));
 
 const mockPlexSearchLibrary = vi.fn();
@@ -395,5 +403,121 @@ describe("overseerr_list_requests — enrichment with getDetails (#258)", () => 
 
     expect(results[0].title).toBe("Fight Club");
     expect(results[0].thumbPath).toBeUndefined();
+  });
+});
+
+// ===========================================================================
+// overseerr_search mediaStatus normalization (issues #281, #282)
+// ===========================================================================
+describe("overseerr_search — mediaStatus normalization (#281 #282)", () => {
+  it("normalizes 'Processing' from Overseerr to 'pending' before returning to LLM", async () => {
+    // Simulate Overseerr returning "Processing" (title-cased) — display_titles rejects this.
+    // The tool must normalize it to "pending" so the LLM can pass it directly to display_titles.
+    mockOverseerrSearch.mockResolvedValueOnce({
+      results: [{ ...BASE_SEARCH_RESULT, mediaStatus: "Processing" }],
+      hasMore: false,
+    });
+
+    const { registerOverseerrTools } = await import("@/lib/tools/overseerr-tools");
+    const { defineTool, executeTool } = await import("@/lib/tools/registry");
+    (defineTool as unknown as { _registry?: Map<string, unknown> })._registry?.clear?.();
+    registerOverseerrTools();
+
+    const raw = await executeTool("overseerr_search", JSON.stringify({ query: "Star City" }));
+    const { results } = JSON.parse(raw) as { results: Record<string, unknown>[] };
+    expect(results[0].mediaStatus).toBe("pending");
+  });
+
+  it("normalizes 'Not Requested' to 'not_requested'", async () => {
+    mockOverseerrSearch.mockResolvedValueOnce({
+      results: [{ ...BASE_SEARCH_RESULT, mediaStatus: "Not Requested" }],
+      hasMore: false,
+    });
+
+    const { registerOverseerrTools } = await import("@/lib/tools/overseerr-tools");
+    const { defineTool, executeTool } = await import("@/lib/tools/registry");
+    (defineTool as unknown as { _registry?: Map<string, unknown> })._registry?.clear?.();
+    registerOverseerrTools();
+
+    const raw = await executeTool("overseerr_search", JSON.stringify({ query: "Some Movie" }));
+    const { results } = JSON.parse(raw) as { results: Record<string, unknown>[] };
+    expect(results[0].mediaStatus).toBe("not_requested");
+  });
+});
+
+// ===========================================================================
+// sonarr_search_series pre-computed mediaStatus (issue #280)
+// ===========================================================================
+describe("sonarr_search_series — pre-computed mediaStatus (#280)", () => {
+  const SONARR_SERIES = { id: 10, title: "Breaking Bad", year: 2008, seasonCount: 5, monitored: true, tvdbId: 81189 };
+
+  it("sets mediaStatus 'available' when the show is found in Plex", async () => {
+    const PLEX_RESULT = {
+      title: "Breaking Bad", year: 2008, mediaType: "tv",
+      plexKey: "/library/metadata/77", thumbPath: "/library/metadata/77/thumb",
+      cast: ["Bryan Cranston"],
+    };
+    mockSonarrSearchSeries.mockResolvedValueOnce([SONARR_SERIES]);
+    mockPlexSearchLibrary.mockResolvedValueOnce({ results: [PLEX_RESULT], hasMore: false });
+
+    const { registerSonarrTools } = await import("@/lib/tools/sonarr-tools");
+    const { defineTool, executeTool } = await import("@/lib/tools/registry");
+    (defineTool as unknown as { _registry?: Map<string, unknown> })._registry?.clear?.();
+    registerSonarrTools();
+
+    const raw = await executeTool("sonarr_search_series", JSON.stringify({ term: "Breaking Bad" }));
+    const results = JSON.parse(raw) as Record<string, unknown>[];
+    expect(results[0].mediaStatus).toBe("available");
+  });
+
+  it("sets mediaStatus from Overseerr (normalized) when not in Plex", async () => {
+    mockSonarrSearchSeries.mockResolvedValueOnce([SONARR_SERIES]);
+    mockPlexSearchLibrary.mockResolvedValueOnce({ results: [], hasMore: false });
+    mockOverseerrSearch.mockResolvedValueOnce({
+      results: [{ ...TV_SEARCH_RESULT, mediaStatus: "Processing" }],
+      hasMore: false,
+    });
+    mockOverseerrGetDetails.mockResolvedValueOnce(TV_DETAIL);
+
+    const { registerSonarrTools } = await import("@/lib/tools/sonarr-tools");
+    const { defineTool, executeTool } = await import("@/lib/tools/registry");
+    (defineTool as unknown as { _registry?: Map<string, unknown> })._registry?.clear?.();
+    registerSonarrTools();
+
+    const raw = await executeTool("sonarr_search_series", JSON.stringify({ term: "Breaking Bad" }));
+    const results = JSON.parse(raw) as Record<string, unknown>[];
+    // normalizeMediaStatus is mocked as s.toLowerCase().replace(/ /g, "_")
+    // so "Processing" → "processing" — confirms normalization is called, not raw value passed through.
+    expect(results[0].mediaStatus).not.toBe("Processing");
+  });
+
+  it("sets mediaStatus 'pending' for monitored show not found in Plex or Overseerr", async () => {
+    mockSonarrSearchSeries.mockResolvedValueOnce([{ ...SONARR_SERIES, monitored: true }]);
+    mockPlexSearchLibrary.mockRejectedValueOnce(new Error("Plex unavailable"));
+    mockOverseerrSearch.mockRejectedValueOnce(new Error("Overseerr unavailable"));
+
+    const { registerSonarrTools } = await import("@/lib/tools/sonarr-tools");
+    const { defineTool, executeTool } = await import("@/lib/tools/registry");
+    (defineTool as unknown as { _registry?: Map<string, unknown> })._registry?.clear?.();
+    registerSonarrTools();
+
+    const raw = await executeTool("sonarr_search_series", JSON.stringify({ term: "Breaking Bad" }));
+    const results = JSON.parse(raw) as Record<string, unknown>[];
+    expect(results[0].mediaStatus).toBe("pending");
+  });
+
+  it("sets mediaStatus 'not_requested' for unmonitored show not found in Plex or Overseerr", async () => {
+    mockSonarrSearchSeries.mockResolvedValueOnce([{ ...SONARR_SERIES, monitored: false }]);
+    mockPlexSearchLibrary.mockRejectedValueOnce(new Error("Plex unavailable"));
+    mockOverseerrSearch.mockRejectedValueOnce(new Error("Overseerr unavailable"));
+
+    const { registerSonarrTools } = await import("@/lib/tools/sonarr-tools");
+    const { defineTool, executeTool } = await import("@/lib/tools/registry");
+    (defineTool as unknown as { _registry?: Map<string, unknown> })._registry?.clear?.();
+    registerSonarrTools();
+
+    const raw = await executeTool("sonarr_search_series", JSON.stringify({ term: "Breaking Bad" }));
+    const results = JSON.parse(raw) as Record<string, unknown>[];
+    expect(results[0].mediaStatus).toBe("not_requested");
   });
 });

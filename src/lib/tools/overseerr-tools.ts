@@ -52,7 +52,13 @@ export function registerOverseerrTools() {
           }
         }),
       );
-      return { results: enriched, hasMore };
+      // Normalize mediaStatus to lowercase display_titles-compatible values so the
+      // LLM never sees title-cased strings like "Processing" or "Not Requested"
+      // that would cause display_titles validation to fail (issues #281, #282).
+      return {
+        results: enriched.map((r) => ({ ...r, mediaStatus: overseerr.normalizeMediaStatus(r.mediaStatus) })),
+        hasMore,
+      };
     },
     llmSummary: (result: unknown) => {
       const r = result as { results: (OverseerrSearchResult & { cast?: string[]; imdbId?: string; seasons?: overseerr.OverseerrSeasonStatus[] })[]; hasMore: boolean };
@@ -206,7 +212,11 @@ export function registerOverseerrTools() {
           }
         }),
       );
-      return { results: enriched, hasMore };
+      // Normalize mediaStatus for the same reason as overseerr_search (issues #281, #282).
+      return {
+        results: enriched.map((r) => ({ ...r, mediaStatus: overseerr.normalizeMediaStatus(r.mediaStatus) })),
+        hasMore,
+      };
     },
     llmSummary: (result: unknown) => {
       const r = result as { results: (OverseerrDiscoverResult & { cast?: string[]; imdbId?: string; seasons?: overseerr.OverseerrSeasonStatus[] })[]; hasMore: boolean };

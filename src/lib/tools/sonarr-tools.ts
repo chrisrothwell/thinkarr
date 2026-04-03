@@ -28,6 +28,7 @@ async function enrichSonarrSeries(s: SonarrSeries): Promise<SonarrSeries> {
         thumbPath: match.thumbPath ? plex.buildThumbUrl(match.thumbPath) : undefined,
         plexKey: match.plexKey,
         cast: match.cast,
+        mediaStatus: "available",
       };
     }
   } catch { /* Plex not configured or unavailable */ }
@@ -51,17 +52,20 @@ async function enrichSonarrSeries(s: SonarrSeries): Promise<SonarrSeries> {
         overseerrId: match.overseerrId,
         cast: detail.cast,
         imdbId: detail.imdbId,
+        // Normalize so the LLM sees display_titles-compatible values (issue #280)
+        mediaStatus: overseerr.normalizeMediaStatus(match.mediaStatus),
       };
     }
   } catch { /* Overseerr not configured or unavailable */ }
 
-  return s;
+  // Not found in Plex or Overseerr — derive from Sonarr's monitored flag
+  return { ...s, mediaStatus: s.monitored ? "pending" : "not_requested" };
 }
 
 export function registerSonarrTools() {
   defineTool({
     name: "sonarr_search_series",
-    description: "Search for a TV series by title. Returns results from Sonarr's lookup including monitored status, season count, and whether it's in the Sonarr library. Each result is automatically enriched with thumbPath (poster), plexKey (if available in Plex), overseerrId (if found in Overseerr), cast, and imdbId — pass these directly to display_titles. For mediaStatus: use 'available' if the show is in Plex (plexKey present), 'pending' if monitored in Sonarr but plexKey absent, or derive from the Overseerr mediaStatus field if present.",
+    description: "Search for a TV series by title. Returns results from Sonarr's lookup including monitored status, season count, and whether it's in the Sonarr library. Each result is automatically enriched with thumbPath (poster), plexKey (if available in Plex), overseerrId (if found in Overseerr), cast, imdbId, and a pre-computed mediaStatus — pass these directly to display_titles without manual status inference.",
     schema: z.object({
       term: z.string().describe("Search term (TV show title)"),
     }),
