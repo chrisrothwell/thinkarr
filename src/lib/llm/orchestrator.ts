@@ -441,7 +441,13 @@ export async function* orchestrate(
       );
 
       // Accumulate streaming chunks
-      const toolCallDeltas: Map<number, { id: string; name: string; args: string }> = new Map();
+      // Key by tool-call id rather than stream index. OpenAI uses distinct
+      // indices for parallel tool calls; Gemini sends all at index 0 with
+      // distinct ids. Keying by id handles both — indexToCurrentId maps an
+      // index to whichever id arrived most recently at that index, so
+      // continuation chunks (empty id) are associated correctly.
+      const toolCallDeltas: Map<string, { id: string; name: string; args: string }> = new Map();
+      const indexToCurrentId: Map<number, string> = new Map();
 
       for await (const chunk of stream) {
         // Token usage is sent in the final chunk
@@ -470,11 +476,18 @@ export async function* orchestrate(
         if (delta?.tool_calls) {
           for (const tc of delta.tool_calls) {
             const idx = tc.index;
-            if (!toolCallDeltas.has(idx)) {
-              toolCallDeltas.set(idx, { id: tc.id || "", name: "", args: "" });
+            // A non-empty id signals the start of a new tool call at this index.
+            // Update the index→id mapping so subsequent continuation chunks
+            // (which arrive with an empty id) attach to the right entry.
+            if (tc.id) {
+              indexToCurrentId.set(idx, tc.id);
+              if (!toolCallDeltas.has(tc.id)) {
+                toolCallDeltas.set(tc.id, { id: tc.id, name: "", args: "" });
+              }
             }
-            const entry = toolCallDeltas.get(idx)!;
-            if (tc.id) entry.id = tc.id;
+            const currentId = indexToCurrentId.get(idx);
+            if (!currentId) continue;
+            const entry = toolCallDeltas.get(currentId)!;
             if (tc.function?.name) entry.name += tc.function.name;
             if (tc.function?.arguments) entry.args += tc.function.arguments;
           }
