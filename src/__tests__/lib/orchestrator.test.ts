@@ -882,3 +882,107 @@ describe("orchestrator — 429 rate-limit retry", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Gemini parallel tool calls at index 0 (trace 84002b4f)
+// ---------------------------------------------------------------------------
+
+describe("orchestrator — Gemini parallel tool calls at same index", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    sqlite = new Database(":memory:");
+    testDb = drizzle(sqlite, { schema });
+    migrate(testDb, { migrationsFolder: path.resolve(process.cwd(), "drizzle") });
+  });
+  afterEach(() => {
+    sqlite.close();
+  });
+
+  it("executes both tool calls separately when Gemini sends parallel calls at index 0", async () => {
+    // Gemini sends two tool calls both at index: 0 with distinct ids.
+    // The fix keys by id (not index) so each call gets its own entry.
+    let llmCallCount = 0;
+    vi.doMock("@/lib/llm/client", () => ({
+      getLlmClient: () => ({
+        chat: {
+          completions: {
+            create: vi.fn(async () => {
+              llmCallCount++;
+              if (llmCallCount === 1) {
+                // Round 1: two parallel tool calls, both at index 0
+                return (async function* () {
+                  yield {
+                    choices: [{
+                      delta: {
+                        tool_calls: [{
+                          index: 0,
+                          id: "call_sonarr",
+                          function: { name: "sonarr_search_series", arguments: '{"term":"The Young Offenders"}' },
+                        }],
+                      },
+                    }],
+                    usage: null,
+                  };
+                  yield {
+                    choices: [{
+                      delta: {
+                        tool_calls: [{
+                          index: 0,
+                          id: "call_plex",
+                          function: { name: "plex_search_library", arguments: '{"query":"The Young Offenders"}' },
+                        }],
+                      },
+                    }],
+                    usage: null,
+                  };
+                  yield {
+                    choices: [{ delta: {} }],
+                    usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+                  };
+                })();
+              } else {
+                // Round 2+: text response after seeing tool results
+                return (async function* () {
+                  yield { choices: [{ delta: { content: "The Young Offenders is available." } }], usage: null };
+                  yield { choices: [{ delta: {} }], usage: { prompt_tokens: 20, completion_tokens: 8, total_tokens: 28 } };
+                })();
+              }
+            }),
+          },
+        },
+      }),
+      getLlmModel: () => "gemini-2.5-flash-lite",
+      getLlmClientForEndpoint: vi.fn(),
+    }));
+
+    const mockExecuteTool = vi.fn().mockResolvedValue(JSON.stringify({ results: [] }));
+    vi.doMock("@/lib/tools/registry", () => ({
+      hasTools: () => true,
+      getOpenAITools: () => [
+        { type: "function", function: { name: "sonarr_search_series", description: "", parameters: {} } },
+        { type: "function", function: { name: "plex_search_library", description: "", parameters: {} } },
+      ],
+      executeTool: mockExecuteTool,
+      getToolLlmContent: (_name: string, result: string) => result,
+    }));
+
+    const userId = seedUser(testDb);
+    const conversationId = seedConversation(testDb, userId);
+    const { orchestrate } = await import("@/lib/llm/orchestrator");
+
+    const events: { type: string; toolName?: string }[] = [];
+    for await (const event of orchestrate({ conversationId, userMessage: "Is there a new series of young offenders?" })) {
+      events.push(event as { type: string; toolName?: string });
+    }
+
+    const toolStartEvents = events.filter((e) => e.type === "tool_call_start");
+    // Both tool calls must be executed separately — not concatenated into one
+    expect(toolStartEvents).toHaveLength(2);
+    const toolNames = toolStartEvents.map((e) => e.toolName).sort();
+    expect(toolNames).toEqual(["plex_search_library", "sonarr_search_series"]);
+
+    // executeTool must be called with each individual tool name
+    const calledNames = mockExecuteTool.mock.calls.map((c: unknown[]) => c[0]).sort();
+    expect(calledNames).toEqual(["plex_search_library", "sonarr_search_series"]);
+  });
+});

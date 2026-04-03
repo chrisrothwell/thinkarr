@@ -40,7 +40,7 @@ async function enrichSonarrSeries(s: SonarrSeries): Promise<SonarrSeries> {
       (r) =>
         r.overseerrMediaType === "tv" &&
         r.title.toLowerCase() === titleLower &&
-        (!s.year || !r.year || r.year === String(s.year)),
+        (!s.year || !r.year || r.year === s.year),
     );
     if (match) {
       // getDetails gives accurate cast and imdbId; thumbPath is already on the search result

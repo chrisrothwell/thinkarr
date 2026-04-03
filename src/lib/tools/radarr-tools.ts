@@ -55,7 +55,7 @@ async function enrichRadarrMovie(m: RadarrMovie): Promise<RadarrMovie> {
       (r) =>
         r.overseerrMediaType === "movie" &&
         r.title.toLowerCase() === titleLower &&
-        (!m.year || !r.year || r.year === String(m.year)),
+        (!m.year || !r.year || r.year === m.year),
     );
     if (match) {
       const detail = await overseerr.getDetails(match.overseerrId, "movie");

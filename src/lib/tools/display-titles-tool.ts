@@ -7,7 +7,7 @@ import type { DisplayTitle } from "@/types/titles";
 const titleInputSchema = z.object({
   mediaType: z.enum(["movie", "tv", "episode"]),
   title: z.string(),
-  year: z.number().nullish(),
+  year: z.coerce.number().nullish(),
   summary: z.string().nullish(),
   rating: z.number().nullish(),
   thumbPath: z.string().nullish(),

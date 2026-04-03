@@ -54,7 +54,7 @@ export interface OverseerrSearchResult {
   overseerrId: number;          // Overseerr media ID — pass directly as overseerrId to display_titles
   overseerrMediaType: string;   // "movie" | "tv" — pass directly as overseerrMediaType to display_titles
   title: string;
-  year?: string;
+  year?: number;
   summary?: string;             // Synopsis — pass directly as summary to display_titles
   rating?: number;              // TMDB audience rating (0–10) — pass directly as rating to display_titles
   mediaStatus: string;
@@ -67,7 +67,7 @@ export interface OverseerrDetails {
   overseerrId: number;
   overseerrMediaType: string;
   title: string;
-  year?: string;
+  year?: number;
   imdbId?: string;
   thumbPath?: string;            // Full TMDB poster URL — pass directly as thumbPath to display_titles
   cast?: string[];              // Top 10 cast members
@@ -77,6 +77,12 @@ export interface OverseerrDetails {
   seasonCount?: number;
   seasons?: OverseerrSeasonStatus[];   // Per-season availability
   requests?: OverseerrRequestSummary[]; // Pending/active requests
+}
+
+function yearFromDate(date: string | undefined): number | undefined {
+  if (!date) return undefined;
+  const n = parseInt(date.substring(0, 4), 10);
+  return isNaN(n) ? undefined : n;
 }
 
 function mediaStatusLabel(info?: Record<string, unknown>): string {
@@ -135,7 +141,7 @@ export async function search(query: string, page = 1): Promise<{ results: Overse
       overseerrId: r.id as number,
       overseerrMediaType: r.mediaType as string,
       title: (r.title || r.name) as string,
-      year: ((r.releaseDate || r.firstAirDate) as string | undefined)?.substring(0, 4),
+      year: yearFromDate((r.releaseDate || r.firstAirDate) as string | undefined),
       summary: (r.overview as string | undefined)?.substring(0, 300),
       rating: r.voteAverage as number | undefined,
       mediaStatus: mediaStatusLabel(mediaInfo),
@@ -192,7 +198,7 @@ export async function getDetails(id: number, mediaType: "movie" | "tv"): Promise
     overseerrId: id,
     overseerrMediaType: mediaType,
     title,
-    year: releaseDate?.substring(0, 4),
+    year: yearFromDate(releaseDate),
     imdbId,
     thumbPath: posterPath ? `https://image.tmdb.org/t/p/w300${posterPath}` : undefined,
     cast: cast.length > 0 ? cast : undefined,
@@ -223,7 +229,7 @@ export interface OverseerrRequest {
   id: number;           // Request ID (for tracking/admin purposes)
   mediaType: string;    // "movie" | "tv"
   title: string;
-  year?: string;
+  year?: number;
   status: string;
   mediaStatus: string;  // "pending" | "not_requested" — maps directly to display_titles mediaStatus
   requestedBy: string;
@@ -293,7 +299,7 @@ export async function listRequests(page = 1): Promise<{ results: OverseerrReques
       id: r.id as number,
       mediaType: r.type as string,
       title: (titleMap.get(r.id as number) ?? "Unknown") as string,
-      year: ((media?.releaseDate || media?.firstAirDate) as string | undefined)?.substring(0, 4),
+      year: yearFromDate((media?.releaseDate || media?.firstAirDate) as string | undefined),
       status: requestStatusLabel(r.status as number),
       mediaStatus,
       requestedBy: ((r.requestedBy as Record<string, unknown>)?.displayName || "Unknown") as string,
@@ -315,7 +321,7 @@ export interface OverseerrDiscoverResult {
   overseerrId: number;
   overseerrMediaType: string;
   title: string;
-  year?: string;
+  year?: number;
   summary?: string;
   rating?: number;
   mediaStatus: string;
@@ -366,7 +372,7 @@ export async function discover(
       overseerrId: (r.id || r.tmdbId) as number,
       overseerrMediaType: mediaType,
       title: (r.title || r.name) as string,
-      year: ((r.releaseDate || r.firstAirDate) as string | undefined)?.substring(0, 4),
+      year: yearFromDate((r.releaseDate || r.firstAirDate) as string | undefined),
       summary: (r.overview as string | undefined)?.substring(0, 300),
       rating: r.voteAverage as number | undefined,
       mediaStatus: mediaStatusLabel(mediaInfo),
