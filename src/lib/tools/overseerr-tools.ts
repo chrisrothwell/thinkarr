@@ -106,6 +106,7 @@ export function registerOverseerrTools() {
         runtime: r.runtime,
         episodeRuntime: r.episodeRuntime,
         seasonCount: r.seasonCount,
+        ...(r.thumbPath ? { thumbPath: r.thumbPath } : {}),
         ...(seasonsCompact ? { seasons: seasonsCompact } : {}),
       };
     },
