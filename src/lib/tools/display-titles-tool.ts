@@ -52,6 +52,8 @@ export function registerDisplayTitlesTool() {
     name: "display_titles",
     description: `Display rich title cards for movies, TV shows, or episodes in the chat UI. Call after searching Plex or Overseerr — even when titles are not in Plex. All search tools return field names that map directly to this schema — pass them through without renaming.
 
+IMPORTANT: The exact function name is display_titles (snake_case, all lowercase). Always call it as display_titles({ titles: [...] }) — the argument must be an object with a "titles" array.
+
 TV shows from overseerr_search or overseerr_discover: use the returned seasonCount and seasons fields to create one card per season (title = 'Show Name — Season N', seasonNumber set, mediaStatus from the seasons compact string). Never create a single card for an entire multi-season show — the Request button requires seasonNumber.
 
 For overseerr_list_requests results: one card per request is correct (no season split needed).`,
@@ -143,7 +145,10 @@ For overseerr_list_requests results: one card per request is correct (no season 
         plexUrl: baseUrl,
         plexMachineId: machineId,
         overseerrId: t.overseerrId ?? undefined,
-        overseerrMediaType: t.overseerrMediaType ?? undefined,
+        // Infer overseerrMediaType from mediaType when the LLM omits it but provides
+        // overseerrId — ensures Request button and More Info link always render.
+        overseerrMediaType: t.overseerrMediaType ??
+          (t.overseerrId != null ? (t.mediaType === "movie" ? "movie" : "tv") : undefined),
         imdbId: t.imdbId ?? undefined,
         mediaStatus: t.mediaStatus,
         cast: t.cast ?? undefined,

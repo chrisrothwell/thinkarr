@@ -390,6 +390,8 @@ export interface OverseerrEpisode {
   airDate?: string;
   overview?: string;
   runtime?: number;
+  /** Full TMDB still image URL (https://image.tmdb.org/t/p/w300...) for the episode thumbnail. */
+  thumbPath?: string;
 }
 
 export async function getSeasonEpisodes(
@@ -398,13 +400,17 @@ export async function getSeasonEpisodes(
 ): Promise<{ seasonNumber: number; episodes: OverseerrEpisode[] }> {
   const data = await overseerrFetch(`/tv/${tvId}/season/${seasonNumber}`);
   const rawEpisodes = (data?.episodes as Record<string, unknown>[]) ?? [];
-  const episodes: OverseerrEpisode[] = rawEpisodes.map((ep) => ({
-    episodeNumber: ep.episodeNumber as number,
-    name: ep.name as string,
-    airDate: (ep.airDate as string | undefined) || undefined,
-    overview: (ep.overview as string | undefined)?.substring(0, 200) || undefined,
-    runtime: (ep.runtime as number | undefined) || undefined,
-  }));
+  const episodes: OverseerrEpisode[] = rawEpisodes.map((ep) => {
+    const stillPath = ep.stillPath as string | undefined;
+    return {
+      episodeNumber: ep.episodeNumber as number,
+      name: ep.name as string,
+      airDate: (ep.airDate as string | undefined) || undefined,
+      overview: (ep.overview as string | undefined)?.substring(0, 200) || undefined,
+      runtime: (ep.runtime as number | undefined) || undefined,
+      thumbPath: stillPath ? `https://image.tmdb.org/t/p/w300${stillPath}` : undefined,
+    };
+  });
   return { seasonNumber, episodes };
 }
 
