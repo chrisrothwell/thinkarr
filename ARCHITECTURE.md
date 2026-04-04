@@ -285,3 +285,6 @@ Manifest + service worker (network-first). Platform-aware install UI: Android na
 
 ### Conversation History Cap
 Last 20 messages sent to LLM. Prevents unbounded token growth on long conversations.
+
+### Gemini Parallel Tool-Call Concatenation Repair
+Some Gemini variants (e.g. `gemini-2.5-flash-lite`) emit parallel tool calls as a single concatenated call: the tool name becomes two registered names joined (e.g. `sonarr_search_seriesplex_search_library`) and the arguments become two JSON objects concatenated (`{"term":"X"}{"query":"X"}`). `trySplitConcatenatedCall()` and `trySplitJsonArgs()` in `orchestrator.ts` detect this pattern and split it back into two valid calls before execution. The system prompt also includes an explicit instruction not to concatenate tool calls.

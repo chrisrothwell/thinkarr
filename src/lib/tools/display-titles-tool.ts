@@ -5,47 +5,56 @@ import { getConfig } from "@/lib/config";
 import type { DisplayTitle } from "@/types/titles";
 
 const titleInputSchema = z.object({
-  mediaType: z.enum(["movie", "tv", "episode"]),
-  title: z.string(),
-  year: z.coerce.number().nullish(),
-  summary: z.string().nullish(),
-  rating: z.number().nullish(),
-  thumbPath: z.string().nullish(),
-  plexKey: z.string().nullish(),
-  overseerrId: z.number().nullish(),
-  overseerrMediaType: z.enum(["movie", "tv"]).nullish(),
-  imdbId: z.string().nullish(),
-  mediaStatus: z.enum(["available", "partial", "pending", "not_requested"]),
-  cast: z.array(z.string()).nullish(),
-  airDate: z.string().nullish(),
-  showTitle: z.string().nullish(),
-  seasonNumber: z.number().nullish(),
-  episodeNumber: z.number().nullish(),
+  mediaType: z.enum(["movie", "tv", "episode"]).describe(
+    "Media type: 'movie', 'tv' (whole show or a season card), or 'episode'",
+  ),
+  title: z.string().describe(
+    "Display title. For season cards: 'Show Name — Season N'. For episode cards: episode title.",
+  ),
+  year: z.coerce.number().nullish().describe(
+    "Release year (movie) or first air year (TV show)",
+  ),
+  summary: z.string().nullish().describe("Short plot summary or description"),
+  rating: z.number().nullish().describe("Audience/critic rating (e.g. 7.5)"),
+  thumbPath: z.string().nullish().describe(
+    "Poster image. Pass Plex '/library/metadata/N/thumb/...' path, or full https://image.tmdb.org URL from Overseerr. Field is named 'thumbPath' — never 'posterUrl'.",
+  ),
+  plexKey: z.string().nullish().describe(
+    "Plex metadata key (e.g. '/library/metadata/123') from a Plex search result — required for the Watch Now button.",
+  ),
+  overseerrId: z.number().nullish().describe(
+    "Overseerr numeric ID — required for the Request button. Pass 'overseerrId' from Overseerr search/details results.",
+  ),
+  overseerrMediaType: z.enum(["movie", "tv"]).nullish().describe(
+    "'movie' or 'tv' — required alongside overseerrId for the Request button.",
+  ),
+  imdbId: z.string().nullish().describe(
+    "IMDb ID (e.g. 'tt1234567') — enables the More Info button.",
+  ),
+  mediaStatus: z.enum(["available", "partial", "pending", "not_requested"]).describe(
+    "'available': in Plex library | 'partial': in Plex but not all seasons — do NOT show Request button | 'pending': requested in Overseerr but not yet downloaded | 'not_requested': not in Plex and not in Overseerr",
+  ),
+  cast: z.array(z.string()).nullish().describe("Top cast member names"),
+  airDate: z.string().nullish().describe("Air date string — for episode cards"),
+  showTitle: z.string().nullish().describe(
+    "Parent show name — required for episode cards",
+  ),
+  seasonNumber: z.number().nullish().describe(
+    "Season number (1-based) — required on every season card; omit for movies and episode cards",
+  ),
+  episodeNumber: z.number().nullish().describe(
+    "Episode number within the season — required for episode cards",
+  ),
 });
 
 export function registerDisplayTitlesTool() {
   defineTool({
     name: "display_titles",
-    description: `Display rich title cards for movies, TV shows, or episodes in the chat UI.
-Call this tool after searching Plex or Overseerr — even when titles are not in Plex.
+    description: `Display rich title cards for movies, TV shows, or episodes in the chat UI. Call after searching Plex or Overseerr — even when titles are not in Plex. All search tools return field names that map directly to this schema — pass them through without renaming.
 
-All Plex and Overseerr tools now return field names that map directly to this tool's input — no translation needed:
-- plexKey ← Plex result "plexKey" field
-- thumbPath ← Plex result "thumbPath" OR Overseerr result "thumbPath"
-- overseerrId ← Overseerr result "overseerrId"
-- overseerrMediaType ← Overseerr result "overseerrMediaType"
-- summary ← Plex result "summary" OR Overseerr result "summary"
-- rating ← Plex result "rating" OR Overseerr result "rating"
-- cast ← Plex result "cast" OR Overseerr result "cast"
+TV shows from overseerr_search or overseerr_discover: use the returned seasonCount and seasons fields to create one card per season (title = 'Show Name — Season N', seasonNumber set, mediaStatus from the seasons compact string). Never create a single card for an entire multi-season show — the Request button requires seasonNumber.
 
-mediaStatus mapping:
-- "available": title exists in the Plex library
-- "partial": TV show exists in Plex but not all seasons
-- "pending": requested in Overseerr but not yet downloaded
-- "not_requested": not in Plex and not in Overseerr
-
-IMPORTANT — multi-season TV shows:
-For any TV show from Overseerr (overseerrMediaType = 'tv'), always call overseerr_get_details first to get the accurate seasonCount (the search result's seasonCount is unreliable for untracked shows). Then call this tool with one entry per season (S1 through S{seasonCount}), never one entry for the whole show. Set seasonNumber on each entry. Do NOT create a single card for a multi-season show — it will cause the request to fail.`,
+For overseerr_list_requests results: one card per request is correct (no season split needed).`,
     schema: z.object({
       titles: z.array(titleInputSchema).min(1).max(50),
     }),
