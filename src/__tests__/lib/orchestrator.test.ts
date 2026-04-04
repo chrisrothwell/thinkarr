@@ -37,6 +37,7 @@ vi.mock("@/lib/tools/registry", () => ({
   getOpenAITools: () => [],
   executeTool: vi.fn(),
   getToolLlmContent: (_name: string, result: string) => result,
+  getRegisteredToolNames: () => [],
 }));
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -964,6 +965,7 @@ describe("orchestrator — Gemini parallel tool calls at same index", () => {
       ],
       executeTool: mockExecuteTool,
       getToolLlmContent: (_name: string, result: string) => result,
+      getRegisteredToolNames: () => ["sonarr_search_series", "plex_search_library"],
     }));
 
     const userId = seedUser(testDb);
