@@ -145,7 +145,10 @@ For overseerr_list_requests results: one card per request is correct (no season 
         plexUrl: baseUrl,
         plexMachineId: machineId,
         overseerrId: t.overseerrId ?? undefined,
-        overseerrMediaType: t.overseerrMediaType ?? undefined,
+        // Infer overseerrMediaType from mediaType when the LLM omits it but provides
+        // overseerrId — ensures Request button and More Info link always render.
+        overseerrMediaType: t.overseerrMediaType ??
+          (t.overseerrId != null ? (t.mediaType === "movie" ? "movie" : "tv") : undefined),
         imdbId: t.imdbId ?? undefined,
         mediaStatus: t.mediaStatus,
         cast: t.cast ?? undefined,
