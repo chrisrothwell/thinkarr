@@ -288,3 +288,15 @@ Last 20 messages sent to LLM. Prevents unbounded token growth on long conversati
 
 ### Gemini Parallel Tool-Call Concatenation Repair
 Some Gemini variants (e.g. `gemini-2.5-flash-lite`) emit parallel tool calls as a single concatenated call: the tool name becomes two registered names joined (e.g. `sonarr_search_seriesplex_search_library`) and the arguments become two JSON objects concatenated (`{"term":"X"}{"query":"X"}`). `trySplitConcatenatedCall()` and `trySplitJsonArgs()` in `orchestrator.ts` detect this pattern and split it back into two valid calls before execution. The system prompt also includes an explicit instruction not to concatenate tool calls.
+
+### Gemini Tool Name & Argument Normalization
+`gemini-2.5-flash-lite` sometimes emits PascalCase tool names (e.g. `DisplayTitles`) or appends the first parameter name to the tool name (e.g. `DisplayTitlesTitles` = `display_titles` + `titles` param). `resolveToolName()` in `registry.ts` handles this via:
+1. Direct lookup
+2. Case-insensitive/underscore-stripped exact match
+3. PascalCase → snake_case conversion (`DisplayTitles` → `display_titles`)
+4. Prefix match after snake_case conversion (`display_titles_titles` starts with `display_titles`)
+
+Additionally, `executeTool()` detects when `display_titles` receives a flat single-title object (e.g. `{title: "...", mediaStatus: "..."}`) instead of the correct `{titles: [{...}]}` wrapper and auto-wraps it before Zod parsing.
+
+### Episode Thumbnails from Overseerr
+`overseerr.getSeasonEpisodes()` now maps the `stillPath` field from the TMDB/Overseerr season endpoint to a full `thumbPath` URL (`https://image.tmdb.org/t/p/w300{stillPath}`) on each `OverseerrEpisode`. The `overseerr_get_season_episodes` tool's `llmSummary` includes `thumbPath` so the LLM passes it to `display_titles` for episode cards.

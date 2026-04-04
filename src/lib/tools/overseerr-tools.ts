@@ -171,11 +171,12 @@ export function registerOverseerrTools() {
       const r = result as { seasonNumber: number; episodes: OverseerrEpisode[] };
       return {
         seasonNumber: r.seasonNumber,
-        episodes: r.episodes.map(({ episodeNumber, name, airDate, runtime }) => ({
+        episodes: r.episodes.map(({ episodeNumber, name, airDate, runtime, thumbPath }) => ({
           episodeNumber,
           name,
           ...(airDate ? { airDate } : {}),
           ...(runtime ? { runtime } : {}),
+          ...(thumbPath ? { thumbPath } : {}),
         })),
       };
     },
