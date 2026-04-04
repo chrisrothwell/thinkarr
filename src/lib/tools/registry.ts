@@ -113,3 +113,8 @@ export function getToolLlmContent(name: string, fullResultJson: string): string 
 export function hasTools(): boolean {
   return tools.size > 0;
 }
+
+/** Get the names of all registered tools. */
+export function getRegisteredToolNames(): string[] {
+  return Array.from(tools.keys());
+}

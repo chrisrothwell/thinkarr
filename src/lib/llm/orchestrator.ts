@@ -4,7 +4,7 @@ import { buildSystemPrompt } from "./system-prompt";
 import { getDb, schema } from "@/lib/db";
 import { eq, asc } from "drizzle-orm";
 import { initializeTools } from "@/lib/tools/init";
-import { getOpenAITools, executeTool, hasTools, getToolLlmContent } from "@/lib/tools/registry";
+import { getOpenAITools, executeTool, hasTools, getToolLlmContent, getRegisteredToolNames } from "@/lib/tools/registry";
 import { logger } from "@/lib/logger";
 import { startTrace, flushLangfuse } from "./langfuse";
 import type { LangfuseTraceClient } from "./langfuse";
@@ -360,6 +360,65 @@ function saveMessage(
   return id;
 }
 
+type RawToolCall = { id: string; function: { name: string; arguments: string } };
+
+/**
+ * Find the boundary between two back-to-back JSON objects in a string.
+ * Gemini occasionally concatenates parallel tool-call argument objects, e.g.
+ * '{"term":"X"}{"query":"X"}'. Returns [first, second] when found, null otherwise.
+ */
+export function trySplitJsonArgs(args: string): [string, string] | null {
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = 0; i < args.length; i++) {
+    const ch = args[i];
+    if (escape) { escape = false; continue; }
+    if (ch === "\\" && inString) { escape = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === "{") { depth++; continue; }
+    if (ch === "}") {
+      depth--;
+      if (depth === 0 && i < args.length - 1) {
+        const second = args.slice(i + 1).trimStart();
+        if (second.startsWith("{")) {
+          return [args.slice(0, i + 1), second];
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Detect and repair the Gemini parallel-tool-call concatenation bug.
+ * Some Gemini variants emit two tool calls as a single call with a concatenated
+ * name (e.g. "sonarr_search_seriesplex_search_library") and concatenated JSON
+ * arguments. This splits those back into two correct calls.
+ * Returns the split pair on match, null if no split is needed.
+ */
+export function trySplitConcatenatedCall(
+  tc: RawToolCall,
+  registeredNames: string[],
+): RawToolCall[] | null {
+  const { name, arguments: args } = tc.function;
+  if (registeredNames.includes(name)) return null; // valid tool, nothing to do
+
+  for (const nameA of registeredNames) {
+    if (!name.startsWith(nameA)) continue;
+    const nameB = name.slice(nameA.length);
+    if (!registeredNames.includes(nameB)) continue;
+    const argsSplit = trySplitJsonArgs(args);
+    if (!argsSplit) continue;
+    return [
+      { id: `${tc.id}-0`, function: { name: nameA, arguments: argsSplit[0] } },
+      { id: `${tc.id}-1`, function: { name: nameB, arguments: argsSplit[1] } },
+    ];
+  }
+  return null;
+}
+
 /**
  * Chat orchestrator: streams LLM response with tool call support.
  * Yields SSE-compatible events.
@@ -507,13 +566,25 @@ export async function* orchestrate(
         },
       });
 
-      // Collect completed tool calls
+      // Collect completed tool calls, repairing Gemini's concatenation bug
+      // where two parallel calls are emitted as one (e.g. name =
+      // "sonarr_search_seriesplex_search_library"). trySplitConcatenatedCall
+      // detects this pattern and returns the two correct calls instead.
+      const registeredNames = getRegisteredToolNames();
       for (const [, tc] of toolCallDeltas) {
         if (tc.id && tc.name) {
-          toolCalls.push({
-            id: tc.id,
-            function: { name: tc.name, arguments: tc.args },
-          });
+          const raw: RawToolCall = { id: tc.id, function: { name: tc.name, arguments: tc.args } };
+          const split = trySplitConcatenatedCall(raw, registeredNames);
+          if (split) {
+            logger.warn("Gemini concatenated tool calls detected, splitting", {
+              conversationId,
+              concatenated: tc.name,
+              into: split.map((s) => s.function.name),
+            });
+            toolCalls.push(...split);
+          } else {
+            toolCalls.push(raw);
+          }
         }
       }
     } catch (e: unknown) {

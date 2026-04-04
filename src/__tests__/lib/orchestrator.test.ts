@@ -37,6 +37,7 @@ vi.mock("@/lib/tools/registry", () => ({
   getOpenAITools: () => [],
   executeTool: vi.fn(),
   getToolLlmContent: (_name: string, result: string) => result,
+  getRegisteredToolNames: () => [],
 }));
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -719,6 +720,7 @@ describe("orchestrator — premature text suppression (issue #239)", () => {
       getOpenAITools: () => [{ type: "function", function: { name: "plex_search_library", description: "", parameters: {} } }],
       executeTool: vi.fn().mockResolvedValue(JSON.stringify({ results: [] })),
       getToolLlmContent: (_name: string, result: string) => result,
+      getRegisteredToolNames: () => ["plex_search_library"],
     }));
 
     const userId = seedUser(testDb);
@@ -744,6 +746,13 @@ describe("orchestrator — premature text suppression (issue #239)", () => {
   });
 
   it("yields text_delta when the LLM responds with text only (no tool calls)", async () => {
+    vi.doMock("@/lib/tools/registry", () => ({
+      hasTools: () => false,
+      getOpenAITools: () => [],
+      executeTool: vi.fn(),
+      getToolLlmContent: (_name: string, result: string) => result,
+      getRegisteredToolNames: () => [],
+    }));
     vi.doMock("@/lib/llm/client", () => ({
       getLlmClient: () => ({
         chat: {
@@ -793,6 +802,13 @@ describe("orchestrator — 429 rate-limit retry", () => {
   it("retries on 429 and succeeds when second attempt works", async () => {
     let callCount = 0;
 
+    vi.doMock("@/lib/tools/registry", () => ({
+      hasTools: () => false,
+      getOpenAITools: () => [],
+      executeTool: vi.fn(),
+      getToolLlmContent: (_name: string, result: string) => result,
+      getRegisteredToolNames: () => [],
+    }));
     vi.doMock("@/lib/llm/client", () => ({
       getLlmClient: () => ({
         chat: {
@@ -964,6 +980,7 @@ describe("orchestrator — Gemini parallel tool calls at same index", () => {
       ],
       executeTool: mockExecuteTool,
       getToolLlmContent: (_name: string, result: string) => result,
+      getRegisteredToolNames: () => ["sonarr_search_series", "plex_search_library"],
     }));
 
     const userId = seedUser(testDb);
