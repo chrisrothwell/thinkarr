@@ -63,32 +63,103 @@ export function getOpenAITools(): OpenAI.ChatCompletionTool[] {
   });
 }
 
+/**
+ * Convert PascalCase or camelCase to snake_case.
+ * e.g. "DisplayTitlesTitles" → "display_titles_titles"
+ */
+function toSnakeCase(s: string): string {
+  return s
+    .replace(/([A-Z])([A-Z][a-z])/g, "$1_$2")
+    .replace(/([a-z\d])([A-Z])/g, "$1_$2")
+    .toLowerCase();
+}
+
+/**
+ * Try to resolve a (possibly mangled) tool name to a registered tool.
+ *
+ * Gemini Flash sometimes emits PascalCase names or appends parameter names to
+ * the tool name (e.g. "DisplayTitlesTitles" instead of "display_titles").
+ * Strategy:
+ *   1. Direct lookup — fastest path.
+ *   2. Case-insensitive / underscore-stripped exact match — catches minor casing drift.
+ *   3. snake_case conversion — "DisplayTitles" → "display_titles".
+ *   4. Prefix match after snake_case conversion — "DisplayTitlesTitles" →
+ *      "display_titles_titles" starts with registered name "display_titles".
+ * Returns [resolvedName, tool] or undefined if no match.
+ */
+function resolveToolName(name: string): [string, ToolDefinition] | undefined {
+  // 1. Direct
+  const direct = tools.get(name);
+  if (direct) return [name, direct];
+
+  const registered = Array.from(tools.entries());
+
+  // 2. Case-insensitive / stripped
+  const stripped = name.replace(/_/g, "").toLowerCase();
+  for (const [k, v] of registered) {
+    if (k.replace(/_/g, "").toLowerCase() === stripped) return [k, v];
+  }
+
+  // 3. snake_case conversion exact match
+  const snake = toSnakeCase(name);
+  const snakeTool = tools.get(snake);
+  if (snakeTool) return [snake, snakeTool];
+
+  // 4. Prefix match: snake_case name starts with a registered tool name
+  // e.g. "display_titles_titles" starts with "display_titles"
+  // Sort by descending name length to prefer the longest (most specific) match
+  const byLength = [...registered].sort((a, b) => b[0].length - a[0].length);
+  for (const [k, v] of byLength) {
+    if (snake.startsWith(k + "_") || snake === k) return [k, v];
+  }
+
+  return undefined;
+}
+
 /** Execute a tool by name with the given arguments string (JSON). */
 export async function executeTool(
   name: string,
   argsString: string,
 ): Promise<string> {
-  const tool = tools.get(name);
-  if (!tool) {
+  const resolved = resolveToolName(name);
+  if (!resolved) {
     // Suggest the closest registered name so the LLM can self-correct on the next round.
     const registered = Array.from(tools.keys());
-    const suggestion = registered.find(
-      (k) => k.replace(/_/g, "").toLowerCase() === name.replace(/_/g, "").toLowerCase()
-        || levenshtein(k, name) <= 2,
-    );
+    const suggestion = registered.find((k) => levenshtein(k, name) <= 2);
     const hint = suggestion ? ` Did you mean "${suggestion}"?` : ` Available tools: ${registered.join(", ")}.`;
     logger.warn("Unknown tool called", { name, suggestion });
     return JSON.stringify({ error: `Unknown tool: "${name}".${hint}` });
   }
 
+  const [resolvedName, tool] = resolved;
+  if (resolvedName !== name) {
+    logger.warn("Tool name normalized", { original: name, resolved: resolvedName });
+  }
+
   try {
-    const args = JSON.parse(argsString);
+    let args = JSON.parse(argsString);
+
+    // Fix Gemini flat-argument hallucination for display_titles.
+    // Gemini sometimes calls display_titles with the contents of a single title
+    // object spread at the top level (e.g. { title: "...", seasonNumber: 1 })
+    // instead of the correct { titles: [{ title: "...", seasonNumber: 1 }] }.
+    if (
+      resolvedName === "display_titles" &&
+      !Array.isArray(args.titles) &&
+      typeof args.title === "string"
+    ) {
+      logger.warn("display_titles: flat args detected, wrapping into {titles: [...]}", {
+        original: name,
+      });
+      args = { titles: [args] };
+    }
+
     const parsed = tool.schema.parse(args);
     const result = await tool.handler(parsed);
     return JSON.stringify(result);
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : "Tool execution failed";
-    logger.error("Tool execution error", { toolName: name, error: msg });
+    logger.error("Tool execution error", { toolName: resolvedName, error: msg });
     return JSON.stringify({ error: msg });
   }
 }

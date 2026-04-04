@@ -817,3 +817,65 @@ describe("normalizeMediaStatus — issues #281 #282: title-cased Overseerr value
     expect(normalizeMediaStatus("SomeUnknownStatus")).toBe("not_requested");
   });
 });
+
+describe("getSeasonEpisodes — issue #291: includes thumbPath from stillPath", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("maps stillPath to a full TMDB thumbPath URL for each episode", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        episodes: [
+          {
+            episodeNumber: 1,
+            name: "Pilot",
+            airDate: "2008-01-20",
+            overview: "A chemistry teacher is diagnosed with cancer.",
+            runtime: 58,
+            stillPath: "/still1.jpg",
+          },
+          {
+            episodeNumber: 2,
+            name: "Cat's in the Bag",
+            airDate: "2008-01-27",
+            overview: null,
+            runtime: 48,
+            stillPath: null,
+          },
+        ],
+      }),
+    }));
+
+    const { getSeasonEpisodes } = await import("@/lib/services/overseerr");
+    const result = await getSeasonEpisodes(1396, 1);
+    expect(result.seasonNumber).toBe(1);
+    expect(result.episodes).toHaveLength(2);
+
+    // Episode with stillPath → full TMDB URL
+    expect(result.episodes[0].thumbPath).toBe("https://image.tmdb.org/t/p/w300/still1.jpg");
+    expect(result.episodes[0].episodeNumber).toBe(1);
+    expect(result.episodes[0].name).toBe("Pilot");
+    expect(result.episodes[0].airDate).toBe("2008-01-20");
+    expect(result.episodes[0].runtime).toBe(58);
+
+    // Episode without stillPath → thumbPath is undefined
+    expect(result.episodes[1].thumbPath).toBeUndefined();
+  });
+
+  it("returns thumbPath as undefined when stillPath is missing from episode data", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        episodes: [
+          { episodeNumber: 1, name: "Episode 1", airDate: "2024-01-01" },
+        ],
+      }),
+    }));
+
+    const { getSeasonEpisodes } = await import("@/lib/services/overseerr");
+    const result = await getSeasonEpisodes(999, 2);
+    expect(result.episodes[0].thumbPath).toBeUndefined();
+  });
+});

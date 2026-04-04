@@ -230,3 +230,78 @@ describe("display_titles — issue #117: Plex side-query for available titles wi
     expect(displayTitles[0].plexKey).toBe("/library/metadata/300");
   });
 });
+
+describe("display_titles — overseerrMediaType inference", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  const noPlexFetch = vi.fn().mockResolvedValue({
+    ok: true, json: async () => ({ MediaContainer: { machineIdentifier: "server1" } }),
+  });
+
+  it("infers overseerrMediaType 'movie' from mediaType when not provided", async () => {
+    vi.stubGlobal("fetch", noPlexFetch);
+    const { registerDisplayTitlesTool } = await import("@/lib/tools/display-titles-tool");
+    const { executeTool } = await import("@/lib/tools/registry");
+    registerDisplayTitlesTool();
+
+    const raw = await executeTool("display_titles", JSON.stringify({
+      titles: [{ mediaType: "movie", title: "Inception", mediaStatus: "not_requested", overseerrId: 27205 }],
+    }));
+    const { displayTitles } = JSON.parse(raw) as { displayTitles: Array<{ overseerrMediaType?: string }> };
+    expect(displayTitles[0].overseerrMediaType).toBe("movie");
+  });
+
+  it("infers overseerrMediaType 'tv' from mediaType 'tv' when not provided", async () => {
+    vi.stubGlobal("fetch", noPlexFetch);
+    const { registerDisplayTitlesTool } = await import("@/lib/tools/display-titles-tool");
+    const { executeTool } = await import("@/lib/tools/registry");
+    registerDisplayTitlesTool();
+
+    const raw = await executeTool("display_titles", JSON.stringify({
+      titles: [{ mediaType: "tv", title: "Severance", mediaStatus: "not_requested", overseerrId: 88329 }],
+    }));
+    const { displayTitles } = JSON.parse(raw) as { displayTitles: Array<{ overseerrMediaType?: string }> };
+    expect(displayTitles[0].overseerrMediaType).toBe("tv");
+  });
+
+  it("infers overseerrMediaType 'tv' from mediaType 'episode' when not provided", async () => {
+    vi.stubGlobal("fetch", noPlexFetch);
+    const { registerDisplayTitlesTool } = await import("@/lib/tools/display-titles-tool");
+    const { executeTool } = await import("@/lib/tools/registry");
+    registerDisplayTitlesTool();
+
+    const raw = await executeTool("display_titles", JSON.stringify({
+      titles: [{ mediaType: "episode", title: "Pilot", mediaStatus: "available", overseerrId: 88329 }],
+    }));
+    const { displayTitles } = JSON.parse(raw) as { displayTitles: Array<{ overseerrMediaType?: string }> };
+    expect(displayTitles[0].overseerrMediaType).toBe("tv");
+  });
+
+  it("does not set overseerrMediaType when overseerrId is absent", async () => {
+    vi.stubGlobal("fetch", noPlexFetch);
+    const { registerDisplayTitlesTool } = await import("@/lib/tools/display-titles-tool");
+    const { executeTool } = await import("@/lib/tools/registry");
+    registerDisplayTitlesTool();
+
+    const raw = await executeTool("display_titles", JSON.stringify({
+      titles: [{ mediaType: "movie", title: "Fight Club", mediaStatus: "available" }],
+    }));
+    const { displayTitles } = JSON.parse(raw) as { displayTitles: Array<{ overseerrMediaType?: string }> };
+    expect(displayTitles[0].overseerrMediaType).toBeUndefined();
+  });
+
+  it("does not override an explicitly provided overseerrMediaType", async () => {
+    vi.stubGlobal("fetch", noPlexFetch);
+    const { registerDisplayTitlesTool } = await import("@/lib/tools/display-titles-tool");
+    const { executeTool } = await import("@/lib/tools/registry");
+    registerDisplayTitlesTool();
+
+    const raw = await executeTool("display_titles", JSON.stringify({
+      titles: [{ mediaType: "tv", title: "The Office", mediaStatus: "available", overseerrId: 2316, overseerrMediaType: "tv" }],
+    }));
+    const { displayTitles } = JSON.parse(raw) as { displayTitles: Array<{ overseerrMediaType?: string }> };
+    expect(displayTitles[0].overseerrMediaType).toBe("tv");
+  });
+});
