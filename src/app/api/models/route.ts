@@ -12,6 +12,7 @@ export interface ModelOption {
   supportsVoice: boolean;
   supportsTts: boolean;
   ttsVoice: string;
+  transcriptionLanguage: string;
   supportsRealtime: boolean;
 }
 
@@ -25,6 +26,7 @@ interface LlmEndpoint {
   supportsVoice?: boolean;
   supportsTts?: boolean;
   ttsVoice?: string;
+  transcriptionLanguage?: string;
   supportsRealtime?: boolean;
 }
 
@@ -72,6 +74,7 @@ export async function GET() {
       supportsVoice: ep.supportsVoice ?? false,
       supportsTts: ep.supportsTts ?? false,
       ttsVoice: ep.ttsVoice ?? "alloy",
+      transcriptionLanguage: ep.transcriptionLanguage ?? "auto",
       supportsRealtime: ep.supportsRealtime ?? false,
     }));
 

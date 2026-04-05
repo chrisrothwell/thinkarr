@@ -1,18 +1,80 @@
 import { z } from "zod";
 import { defineTool } from "./registry";
 import * as sonarr from "@/lib/services/sonarr";
+import * as plex from "@/lib/services/plex";
+import * as overseerr from "@/lib/services/overseerr";
 import type { SonarrSeries, SonarrSeriesStatus } from "@/lib/services/sonarr";
+
+/**
+ * Enrich a single Sonarr series result with poster, cast, and overseerrId by:
+ * 1. Checking Plex first (gives plexKey, thumbPath, cast — best quality)
+ * 2. Falling back to Overseerr search + getDetails (gives overseerrId, thumbPath, cast, imdbId)
+ * Non-fatal: returns the unmodified series if both lookups fail.
+ */
+async function enrichSonarrSeries(s: SonarrSeries): Promise<SonarrSeries> {
+  // --- Plex check ---
+  try {
+    const { results } = await plex.searchLibrary(s.title);
+    const titleLower = s.title.toLowerCase();
+    const match = results.find(
+      (r) =>
+        r.mediaType === "tv" &&
+        r.title.toLowerCase() === titleLower &&
+        (!s.year || !r.year || r.year === s.year),
+    );
+    if (match) {
+      return {
+        ...s,
+        thumbPath: match.thumbPath ? plex.buildThumbUrl(match.thumbPath) : undefined,
+        plexKey: match.plexKey,
+        cast: match.cast,
+        mediaStatus: "available",
+      };
+    }
+  } catch { /* Plex not configured or unavailable */ }
+
+  // --- Overseerr fallback ---
+  try {
+    const { results: ovrResults } = await overseerr.search(s.title, 1);
+    const titleLower = s.title.toLowerCase();
+    const match = ovrResults.find(
+      (r) =>
+        r.overseerrMediaType === "tv" &&
+        r.title.toLowerCase() === titleLower &&
+        (!s.year || !r.year || r.year === s.year),
+    );
+    if (match) {
+      // getDetails gives accurate cast and imdbId; thumbPath is already on the search result
+      const detail = await overseerr.getDetails(match.overseerrId, "tv");
+      return {
+        ...s,
+        thumbPath: match.thumbPath ?? detail.thumbPath,
+        overseerrId: match.overseerrId,
+        cast: detail.cast,
+        imdbId: detail.imdbId,
+        // Normalize so the LLM sees display_titles-compatible values (issue #280)
+        mediaStatus: overseerr.normalizeMediaStatus(match.mediaStatus),
+      };
+    }
+  } catch { /* Overseerr not configured or unavailable */ }
+
+  // Not found in Plex or Overseerr — derive from Sonarr's monitored flag
+  return { ...s, mediaStatus: s.monitored ? "pending" : "not_requested" };
+}
 
 export function registerSonarrTools() {
   defineTool({
     name: "sonarr_search_series",
-    description: "Search for a TV series by title. Returns results from Sonarr's lookup including monitored status, season count, and whether it's in the Sonarr library.",
+    description: "Search for a TV series by title. Returns results from Sonarr's lookup including monitored status, season count, and whether it's in the Sonarr library. Each result is automatically enriched with thumbPath (poster), plexKey (if available in Plex), overseerrId (if found in Overseerr), cast, imdbId, and a pre-computed mediaStatus — pass these directly to display_titles without manual status inference.",
     schema: z.object({
       term: z.string().describe("Search term (TV show title)"),
     }),
-    handler: async (args) => sonarr.searchSeries(args.term),
+    handler: async (args) => {
+      const results = await sonarr.searchSeries(args.term);
+      return Promise.all(results.map(enrichSonarrSeries));
+    },
     /** Strip overview from history — 200-char overview × 10 results is noise once the
-     *  LLM has already acted on the search. Keep all identity and status fields. */
+     *  LLM has already acted on the search. Keep all identity, status, and enrichment fields. */
     llmSummary: (result: unknown) => {
       return (result as SonarrSeries[]).map(
         ({ overview: _ov, ...rest }) => rest,

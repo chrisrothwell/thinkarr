@@ -509,7 +509,7 @@ describe("display_titles tool call arg compression", () => {
 describe("overseerr_list_requests llmSummary", () => {
   beforeEach(() => { vi.resetModules(); });
 
-  it("strips thumbPath, id, tmdbId, requestedAt; keeps display_titles-relevant fields", async () => {
+  it("strips id, tmdbId, requestedAt; keeps display_titles-relevant fields including thumbPath and seasons", async () => {
     const { registerOverseerrTools } = await import("@/lib/tools/overseerr-tools");
     const { getToolLlmContent } = await import("@/lib/tools/registry");
 
@@ -541,7 +541,8 @@ describe("overseerr_list_requests llmSummary", () => {
     expect(item.mediaStatus).toBe("pending");
     expect(item.requestedBy).toBe("alice");
     expect(item.overseerrId).toBe(550);
-    expect(item).not.toHaveProperty("thumbPath");
+    // thumbPath is now preserved — needed for follow-up display_titles calls without re-fetching
+    expect(item.thumbPath).toBe("https://image.tmdb.org/t/p/w300/poster.jpg");
     expect(item).not.toHaveProperty("requestedAt");
     expect(item).not.toHaveProperty("tmdbId");
     expect(item).not.toHaveProperty("id");

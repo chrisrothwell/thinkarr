@@ -4,8 +4,10 @@ import { buildSystemPrompt } from "./system-prompt";
 import { getDb, schema } from "@/lib/db";
 import { eq, asc } from "drizzle-orm";
 import { initializeTools } from "@/lib/tools/init";
-import { getOpenAITools, executeTool, hasTools, getToolLlmContent } from "@/lib/tools/registry";
+import { getOpenAITools, executeTool, hasTools, getToolLlmContent, getRegisteredToolNames } from "@/lib/tools/registry";
 import { logger } from "@/lib/logger";
+import { startTrace, flushLangfuse } from "./langfuse";
+import type { LangfuseTraceClient } from "./langfuse";
 import type {
   TextDeltaEvent,
   ToolCallStartEvent,
@@ -26,11 +28,12 @@ interface OrchestratorParams {
   conversationId: string;
   userMessage: string;
   modelId?: string;
+  userId?: number;
 }
 
 type ChatMessage = OpenAI.ChatCompletionMessageParam;
 
-const MAX_TOOL_ROUNDS = 5;
+const MAX_TOOL_ROUNDS = 8;
 
 /**
  * Retry an LLM API call on 429 rate-limit responses with exponential backoff.
@@ -357,6 +360,65 @@ function saveMessage(
   return id;
 }
 
+type RawToolCall = { id: string; function: { name: string; arguments: string } };
+
+/**
+ * Find the boundary between two back-to-back JSON objects in a string.
+ * Gemini occasionally concatenates parallel tool-call argument objects, e.g.
+ * '{"term":"X"}{"query":"X"}'. Returns [first, second] when found, null otherwise.
+ */
+export function trySplitJsonArgs(args: string): [string, string] | null {
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = 0; i < args.length; i++) {
+    const ch = args[i];
+    if (escape) { escape = false; continue; }
+    if (ch === "\\" && inString) { escape = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === "{") { depth++; continue; }
+    if (ch === "}") {
+      depth--;
+      if (depth === 0 && i < args.length - 1) {
+        const second = args.slice(i + 1).trimStart();
+        if (second.startsWith("{")) {
+          return [args.slice(0, i + 1), second];
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Detect and repair the Gemini parallel-tool-call concatenation bug.
+ * Some Gemini variants emit two tool calls as a single call with a concatenated
+ * name (e.g. "sonarr_search_seriesplex_search_library") and concatenated JSON
+ * arguments. This splits those back into two correct calls.
+ * Returns the split pair on match, null if no split is needed.
+ */
+export function trySplitConcatenatedCall(
+  tc: RawToolCall,
+  registeredNames: string[],
+): RawToolCall[] | null {
+  const { name, arguments: args } = tc.function;
+  if (registeredNames.includes(name)) return null; // valid tool, nothing to do
+
+  for (const nameA of registeredNames) {
+    if (!name.startsWith(nameA)) continue;
+    const nameB = name.slice(nameA.length);
+    if (!registeredNames.includes(nameB)) continue;
+    const argsSplit = trySplitJsonArgs(args);
+    if (!argsSplit) continue;
+    return [
+      { id: `${tc.id}-0`, function: { name: nameA, arguments: argsSplit[0] } },
+      { id: `${tc.id}-1`, function: { name: nameB, arguments: argsSplit[1] } },
+    ];
+  }
+  return null;
+}
+
 /**
  * Chat orchestrator: streams LLM response with tool call support.
  * Yields SSE-compatible events.
@@ -369,8 +431,9 @@ export async function* orchestrate(
   // Ensure tools are registered
   initializeTools();
 
-  // 1. Save user message
-  saveMessage(conversationId, "user", userMessage);
+  // 1. Save user message — ID becomes the Langfuse traceId so the report-issue
+  //    endpoint can attach a score to this exact trace later.
+  const userMessageId = saveMessage(conversationId, "user", userMessage);
 
   // 2. Build messages array
   // Resolve client and model — use override if provided
@@ -395,6 +458,17 @@ export async function* orchestrate(
   ];
   const tools = hasTools() ? getOpenAITools() : undefined;
 
+  // Start a Langfuse trace for this request (no-op if not configured).
+  // traceId = userMessageId so the report-issue endpoint can score this trace
+  // by querying the last user message ID for the conversation.
+  const trace: LangfuseTraceClient | null = startTrace({
+    traceId: userMessageId,
+    conversationId,
+    userId: params.userId !== undefined ? String(params.userId) : conversationId,
+    userMessage,
+    model,
+  });
+
   // 3. Tool call loop
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     let fullContent = "";
@@ -406,6 +480,12 @@ export async function* orchestrate(
 
     try {
       const llmStart = Date.now();
+      const generation = trace?.generation({
+        name: `llm-round-${round}`,
+        model,
+        input: apiMessages,
+        startTime: new Date(llmStart),
+      }) ?? null;
       const stream = await callWithRateLimitRetry(
         () =>
           client.chat.completions.create({
@@ -420,7 +500,13 @@ export async function* orchestrate(
       );
 
       // Accumulate streaming chunks
-      const toolCallDeltas: Map<number, { id: string; name: string; args: string }> = new Map();
+      // Key by tool-call id rather than stream index. OpenAI uses distinct
+      // indices for parallel tool calls; Gemini sends all at index 0 with
+      // distinct ids. Keying by id handles both — indexToCurrentId maps an
+      // index to whichever id arrived most recently at that index, so
+      // continuation chunks (empty id) are associated correctly.
+      const toolCallDeltas: Map<string, { id: string; name: string; args: string }> = new Map();
+      const indexToCurrentId: Map<number, string> = new Map();
 
       for await (const chunk of stream) {
         // Token usage is sent in the final chunk
@@ -449,11 +535,18 @@ export async function* orchestrate(
         if (delta?.tool_calls) {
           for (const tc of delta.tool_calls) {
             const idx = tc.index;
-            if (!toolCallDeltas.has(idx)) {
-              toolCallDeltas.set(idx, { id: tc.id || "", name: "", args: "" });
+            // A non-empty id signals the start of a new tool call at this index.
+            // Update the index→id mapping so subsequent continuation chunks
+            // (which arrive with an empty id) attach to the right entry.
+            if (tc.id) {
+              indexToCurrentId.set(idx, tc.id);
+              if (!toolCallDeltas.has(tc.id)) {
+                toolCallDeltas.set(tc.id, { id: tc.id, name: "", args: "" });
+              }
             }
-            const entry = toolCallDeltas.get(idx)!;
-            if (tc.id) entry.id = tc.id;
+            const currentId = indexToCurrentId.get(idx);
+            if (!currentId) continue;
+            const entry = toolCallDeltas.get(currentId)!;
             if (tc.function?.name) entry.name += tc.function.name;
             if (tc.function?.arguments) entry.args += tc.function.arguments;
           }
@@ -462,13 +555,36 @@ export async function* orchestrate(
 
       llmDurationMs = Date.now() - llmStart;
 
-      // Collect completed tool calls
+      // Close the Langfuse generation span with output and token usage
+      generation?.end({
+        output: fullContent || null,
+        usage: {
+          input: promptTokens,
+          output: completionTokens,
+          total: totalTokens,
+          unit: "TOKENS",
+        },
+      });
+
+      // Collect completed tool calls, repairing Gemini's concatenation bug
+      // where two parallel calls are emitted as one (e.g. name =
+      // "sonarr_search_seriesplex_search_library"). trySplitConcatenatedCall
+      // detects this pattern and returns the two correct calls instead.
+      const registeredNames = getRegisteredToolNames();
       for (const [, tc] of toolCallDeltas) {
         if (tc.id && tc.name) {
-          toolCalls.push({
-            id: tc.id,
-            function: { name: tc.name, arguments: tc.args },
-          });
+          const raw: RawToolCall = { id: tc.id, function: { name: tc.name, arguments: tc.args } };
+          const split = trySplitConcatenatedCall(raw, registeredNames);
+          if (split) {
+            logger.warn("Gemini concatenated tool calls detected, splitting", {
+              conversationId,
+              concatenated: tc.name,
+              into: split.map((s) => s.function.name),
+            });
+            toolCalls.push(...split);
+          } else {
+            toolCalls.push(raw);
+          }
         }
       }
     } catch (e: unknown) {
@@ -477,6 +593,8 @@ export async function* orchestrate(
         : /401|403|unauthorized|forbidden/i.test(msg) ? "auth_error"
         : "llm_error";
       logger.error("LLM request failed", { conversationId, round, error: msg, errorCategory });
+      trace?.update({ output: `error: ${errorCategory}` });
+      flushLangfuse();
       yield { type: "error", message: sanitizeLlmError(msg) };
       return;
     }
@@ -495,6 +613,8 @@ export async function* orchestrate(
         completionTokens,
         totalTokens,
       });
+      trace?.update({ output: fullContent });
+      flushLangfuse();
       yield { type: "done", messageId, llmDurationMs, promptTokens, completionTokens, totalTokens };
       return;
     }
@@ -556,6 +676,11 @@ export async function* orchestrate(
     const toolResults = await Promise.all(
       toolCalls.map(async (tc) => {
         const startedAt = startedAts.get(tc.id) ?? Date.now();
+        const toolSpan = trace?.span({
+          name: `tool:${tc.function.name}`,
+          input: { arguments: tc.function.arguments },
+          startTime: new Date(startedAt),
+        }) ?? null;
         let result: string;
         let isError = false;
         try {
@@ -573,6 +698,7 @@ export async function* orchestrate(
           logger.warn("Tool call error", { conversationId, toolName: tc.function.name, toolCallId: tc.id, error: result, timedOut, durationMs: Date.now() - startedAt });
         }
         const durationMs = Date.now() - startedAt;
+        toolSpan?.end({ output: result!, level: isError ? "ERROR" : "DEFAULT" });
         return { tc, result: result!, isError, durationMs };
       }),
     );
@@ -620,6 +746,8 @@ export async function* orchestrate(
   }
 
   // Safety: if we exhausted max rounds, yield what we have
+  trace?.update({ output: "error: tool call limit reached" });
+  flushLangfuse();
   yield { type: "error", message: "Tool call limit reached" };
 }
 

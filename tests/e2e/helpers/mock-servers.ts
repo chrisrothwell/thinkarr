@@ -31,6 +31,12 @@ export const TRIGGER_AVAILABLE = "e2e show available movie";
 export const TRIGGER_UNAVAILABLE = "e2e show unavailable movie";
 /** User message trigger → LLM returns display_titles with multiple movies (carousel) */
 export const TRIGGER_MULTIPLE = "e2e show multiple movies";
+/** User message trigger → LLM returns display_titles with a pending TV show (has overseerrId + imdbId, no plexKey) */
+export const TRIGGER_PENDING = "e2e show pending tv";
+/** User message trigger → LLM returns display_titles with no imdbId/overseerrId (Plex-only item, tests More Info fallback) */
+export const TRIGGER_NO_EXTERNAL_IDS = "e2e show plex only movie";
+/** User message trigger → LLM returns display_titles with overseerrId but no overseerrMediaType (tests inference) */
+export const TRIGGER_MISSING_MEDIA_TYPE = "e2e show missing mediatype";
 
 // ---------------------------------------------------------------------------
 // Plex mock
@@ -291,6 +297,26 @@ function llmHandler(req: http.IncomingMessage, res: http.ServerResponse) {
           return;
         }
 
+        if (lastUserContent.includes(TRIGGER_PENDING)) {
+          // Return a display_titles tool call: single pending TV show with overseerrId + imdbId
+          const args = JSON.stringify({
+            titles: [
+              {
+                mediaType: "tv",
+                title: "Star City",
+                year: 2026,
+                mediaStatus: "pending",
+                overseerrId: 252107,
+                overseerrMediaType: "tv",
+                imdbId: "tt32140872",
+                summary: "A space race drama set behind the Iron Curtain.",
+              },
+            ],
+          });
+          sendToolCallResponse(res, args);
+          return;
+        }
+
         if (lastUserContent.includes(TRIGGER_MULTIPLE)) {
           // Return a display_titles tool call: multiple movies (carousel path)
           const args = JSON.stringify({
@@ -315,6 +341,44 @@ function llmHandler(req: http.IncomingMessage, res: http.ServerResponse) {
                 mediaStatus: "not_requested",
                 overseerrId: 99901,
                 overseerrMediaType: "tv",
+              },
+            ],
+          });
+          sendToolCallResponse(res, args);
+          return;
+        }
+
+        if (lastUserContent.includes(TRIGGER_NO_EXTERNAL_IDS)) {
+          // Return a display_titles tool call: available Plex-only movie with no imdbId or overseerrId.
+          // Tests that More Info always renders (TMDB search fallback).
+          const args = JSON.stringify({
+            titles: [
+              {
+                mediaType: "movie",
+                title: "Local Favorite",
+                year: 2015,
+                mediaStatus: "available",
+                plexKey: "/library/metadata/500",
+                // no imdbId, no overseerrId
+              },
+            ],
+          });
+          sendToolCallResponse(res, args);
+          return;
+        }
+
+        if (lastUserContent.includes(TRIGGER_MISSING_MEDIA_TYPE)) {
+          // Return a display_titles tool call: not_requested with overseerrId but no overseerrMediaType.
+          // Tests that the handler infers overseerrMediaType so the Request button appears.
+          const args = JSON.stringify({
+            titles: [
+              {
+                mediaType: "tv",
+                title: "Unknown Type Show",
+                year: 2023,
+                mediaStatus: "not_requested",
+                overseerrId: 55555,
+                // no overseerrMediaType — tool handler should infer "tv"
               },
             ],
           });

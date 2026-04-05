@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Star } from "lucide-react";
+import { Star, Film, Tv } from "lucide-react";
 import type { DisplayTitle } from "@/types/titles";
 import { clientLog } from "@/lib/client-logger";
 
@@ -93,6 +93,14 @@ export function TitleCard({ title }: TitleCardProps) {
     title.overseerrId != null &&
     title.overseerrMediaType != null;
 
+  // More Info: prefer IMDb, fall back to TMDB direct page, then TMDB search.
+  // Always produces a non-null href so the button is always visible.
+  const moreInfoHref = title.imdbId
+    ? `https://www.imdb.com/title/${title.imdbId}`
+    : title.overseerrId && title.overseerrMediaType
+      ? `https://www.themoviedb.org/${title.overseerrMediaType === "movie" ? "movie" : "tv"}/${title.overseerrId}`
+      : `https://www.themoviedb.org/search/${title.mediaType === "movie" ? "movie" : "tv"}?query=${encodeURIComponent(title.title)}`;
+
   return (
     <div className="flex gap-3 rounded-xl border border-border bg-card p-3 w-full" data-testid="title-card">
       {/* Thumbnail */}
@@ -104,8 +112,8 @@ export function TitleCard({ title }: TitleCardProps) {
           className="w-24 h-36 object-cover rounded-lg shrink-0 bg-muted"
         />
       ) : (
-        <div className="w-24 h-36 rounded-lg shrink-0 bg-muted flex items-center justify-center text-muted-foreground text-xs text-center px-1">
-          No Image
+        <div className="w-24 h-36 rounded-lg shrink-0 bg-muted flex items-center justify-center text-muted-foreground/40">
+          {title.mediaType === "movie" ? <Film size={32} /> : <Tv size={32} />}
         </div>
       )}
 
@@ -144,65 +152,58 @@ export function TitleCard({ title }: TitleCardProps) {
 
         {/* Buttons */}
         <div className="flex flex-wrap gap-2 mt-auto pt-1">
+          {/* Watch Now — available or partial titles that have a Plex URL */}
           {(title.mediaStatus === "available" || title.mediaStatus === "partial") && plexWebUrl && (
             <a
               href={plexWebUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-xs px-3 py-1 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors font-medium"
+              className="text-xs px-3 py-1 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors font-medium whitespace-nowrap"
               data-testid="watch-now-button"
             >
               Watch Now
             </a>
           )}
 
-          {/* More Info + Request/Requested kept together so they never split across lines */}
-          {showRequestButton && (
-            <div className="flex gap-2 flex-nowrap">
-              {(title.imdbId || (title.overseerrId && title.overseerrMediaType)) && (
-                <a
-                  href={
-                    title.imdbId
-                      ? `https://www.imdb.com/title/${title.imdbId}`
-                      : `https://www.themoviedb.org/${title.overseerrMediaType === "movie" ? "movie" : "tv"}/${title.overseerrId}`
-                  }
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-xs px-3 py-1 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors font-medium whitespace-nowrap"
-                >
-                  More Info
-                </a>
+          {/* Request — not_requested titles with an Overseerr ID */}
+          {showRequestButton && requestStatus === "idle" && (
+            <button
+              onClick={handleRequest}
+              disabled={requesting}
+              className="text-xs px-3 py-1 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors font-medium disabled:opacity-50 flex items-center gap-1 whitespace-nowrap"
+              data-testid="request-button"
+            >
+              {requesting ? (
+                <>
+                  <span className="inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                  Requesting…
+                </>
+              ) : (
+                "Request"
               )}
-
-              {requestStatus === "idle" && (
-                <button
-                  onClick={handleRequest}
-                  disabled={requesting}
-                  className="text-xs px-3 py-1 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors font-medium disabled:opacity-50 flex items-center gap-1 whitespace-nowrap"
-                  data-testid="request-button"
-                >
-                  {requesting ? (
-                    <>
-                      <span className="inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
-                      Requesting…
-                    </>
-                  ) : (
-                    "Request"
-                  )}
-                </button>
-              )}
-
-              {requestStatus === "success" && (
-                <span className="text-xs px-3 py-1 rounded-lg bg-green-500/20 text-green-400 border border-green-500/30 font-medium whitespace-nowrap" data-testid="request-success">
-                  Requested
-                </span>
-              )}
-
-              {requestStatus === "error" && (
-                <span className="text-xs text-destructive whitespace-nowrap">{errorMsg}</span>
-              )}
-            </div>
+            </button>
           )}
+
+          {showRequestButton && requestStatus === "success" && (
+            <span className="text-xs px-3 py-1 rounded-lg bg-green-500/20 text-green-400 border border-green-500/30 font-medium whitespace-nowrap" data-testid="request-success">
+              Requested
+            </span>
+          )}
+
+          {showRequestButton && requestStatus === "error" && (
+            <span className="text-xs text-destructive whitespace-nowrap">{errorMsg}</span>
+          )}
+
+          {/* More Info — always shown; prefers IMDb → TMDB direct → TMDB search */}
+          <a
+            href={moreInfoHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs px-3 py-1 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors font-medium whitespace-nowrap"
+            data-testid="more-info-button"
+          >
+            More Info
+          </a>
         </div>
       </div>
     </div>

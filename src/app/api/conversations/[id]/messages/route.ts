@@ -4,6 +4,7 @@ import { getSession } from "@/lib/auth/session";
 import { getDb, schema } from "@/lib/db";
 import { eq, and } from "drizzle-orm";
 import { checkUserApiRateLimit } from "@/lib/security/api-rate-limit";
+import { generateTitle } from "@/lib/llm/orchestrator";
 import { logger } from "@/lib/logger";
 import type { ApiResponse } from "@/types/api";
 
@@ -87,7 +88,14 @@ export async function POST(
       role,
       messageId,
     });
-    return NextResponse.json<ApiResponse>({ success: true, data: { id: messageId } });
+
+    // Generate a title on the first user message (conversation still called "New Chat")
+    let newTitle: string | null = null;
+    if (role === "user" && conversation.title === "New Chat") {
+      newTitle = await generateTitle(id, content.trim());
+    }
+
+    return NextResponse.json<ApiResponse>({ success: true, data: { id: messageId, newTitle } });
   } catch (e: unknown) {
     const error = e instanceof Error ? e.message : "Database error";
     logger.error("Failed to save realtime message", { conversationId: id, userId: session.user.id, error });

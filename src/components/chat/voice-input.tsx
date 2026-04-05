@@ -8,21 +8,22 @@ import { useVoiceInput } from "@/hooks/use-voice-input";
 
 interface VoiceInputProps {
   modelId: string;
+  transcriptionLanguage?: string;
   onTranscript: (text: string) => void;
   disabled?: boolean;
 }
 
-export function VoiceInput({ modelId, onTranscript, disabled }: VoiceInputProps) {
+export function VoiceInput({ modelId, transcriptionLanguage = "auto", onTranscript, disabled }: VoiceInputProps) {
   const { recording, transcribing, startRecording, stopAndTranscribe, error } = useVoiceInput();
 
   const handleToggle = useCallback(async () => {
     if (recording) {
-      const text = await stopAndTranscribe(modelId);
+      const text = await stopAndTranscribe(modelId, transcriptionLanguage);
       if (text) onTranscript(text);
     } else {
       await startRecording();
     }
-  }, [recording, modelId, onTranscript, startRecording, stopAndTranscribe]);
+  }, [recording, modelId, transcriptionLanguage, onTranscript, startRecording, stopAndTranscribe]);
 
   return (
     <div className="flex flex-col items-center gap-3 py-4">

@@ -34,6 +34,13 @@ export interface SonarrSeries {
   seasonCount?: number;
   monitored?: boolean;
   tvdbId?: number;
+  // Enrichment fields — populated by the tool handler via Plex / Overseerr lookups
+  thumbPath?: string;
+  plexKey?: string;
+  overseerrId?: number;
+  cast?: string[];
+  imdbId?: string;
+  mediaStatus?: string;
 }
 
 export async function searchSeries(term: string): Promise<SonarrSeries[]> {
@@ -87,8 +94,15 @@ export interface SonarrSeriesStatus {
  */
 export async function getSeriesStatus(title: string): Promise<SonarrSeriesStatus | null> {
   const allSeries = await sonarrFetch("/series");
-  const match = (allSeries || []).find((s: Record<string, unknown>) =>
-    (s.title as string).toLowerCase().includes(title.toLowerCase()),
+  const needle = title.toLowerCase();
+  // Prefer exact title match; fall back to substring only if nothing exact is found.
+  const match = (
+    (allSeries || []).find((s: Record<string, unknown>) =>
+      (s.title as string).toLowerCase() === needle,
+    ) ??
+    (allSeries || []).find((s: Record<string, unknown>) =>
+      (s.title as string).toLowerCase().includes(needle),
+    )
   ) as Record<string, unknown> | undefined;
 
   if (!match || !match.id) return null;

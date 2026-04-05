@@ -633,6 +633,73 @@ describe("listRequests — issue #89: titles should not return Unknown", () => {
   });
 });
 
+describe("getSeasonEpisodes — issue #272: episode air dates for pending shows", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("returns episode list with air dates and runtimes", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        seasonNumber: 1,
+        episodes: [
+          { episodeNumber: 1, name: "Pilot", airDate: "2026-03-15", overview: "The beginning.", runtime: 60 },
+          { episodeNumber: 2, name: "Episode Two", airDate: "2026-03-22", overview: "Things escalate.", runtime: 55 },
+        ],
+      }),
+    }));
+
+    const { getSeasonEpisodes } = await import("@/lib/services/overseerr");
+    const result = await getSeasonEpisodes(252107, 1);
+    expect(result.seasonNumber).toBe(1);
+    expect(result.episodes).toHaveLength(2);
+    expect(result.episodes[0]).toMatchObject({ episodeNumber: 1, name: "Pilot", airDate: "2026-03-15", runtime: 60 });
+    expect(result.episodes[1]).toMatchObject({ episodeNumber: 2, name: "Episode Two", airDate: "2026-03-22" });
+  });
+
+  it("omits undefined fields (no airDate or runtime)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        seasonNumber: 1,
+        episodes: [
+          { episodeNumber: 1, name: "TBA", airDate: null, overview: null, runtime: 0 },
+        ],
+      }),
+    }));
+
+    const { getSeasonEpisodes } = await import("@/lib/services/overseerr");
+    const result = await getSeasonEpisodes(252107, 1);
+    expect(result.episodes[0].airDate).toBeUndefined();
+    expect(result.episodes[0].runtime).toBeUndefined();
+    expect(result.episodes[0].overview).toBeUndefined();
+  });
+
+  it("returns empty episodes array when API returns no episodes", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ seasonNumber: 1 }),
+    }));
+
+    const { getSeasonEpisodes } = await import("@/lib/services/overseerr");
+    const result = await getSeasonEpisodes(252107, 1);
+    expect(result.episodes).toHaveLength(0);
+  });
+
+  it("calls the correct Overseerr endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ seasonNumber: 2, episodes: [] }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { getSeasonEpisodes } = await import("@/lib/services/overseerr");
+    await getSeasonEpisodes(252107, 2);
+    expect(fetchMock.mock.calls[0][0]).toContain("/tv/252107/season/2");
+  });
+});
+
 describe("discover — issue #207", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -716,5 +783,99 @@ describe("discover — issue #207", () => {
 
     const url = fetchMock.mock.calls[0][0] as string;
     expect(url).toContain("/discover/movies/upcoming");
+  });
+});
+
+describe("normalizeMediaStatus — issues #281 #282: title-cased Overseerr values must map to display_titles enum", () => {
+  it("normalizes 'Processing' to 'pending'", async () => {
+    const { normalizeMediaStatus } = await import("@/lib/services/overseerr");
+    expect(normalizeMediaStatus("Processing")).toBe("pending");
+  });
+
+  it("normalizes 'Pending' to 'pending'", async () => {
+    const { normalizeMediaStatus } = await import("@/lib/services/overseerr");
+    expect(normalizeMediaStatus("Pending")).toBe("pending");
+  });
+
+  it("normalizes 'Available' to 'available'", async () => {
+    const { normalizeMediaStatus } = await import("@/lib/services/overseerr");
+    expect(normalizeMediaStatus("Available")).toBe("available");
+  });
+
+  it("normalizes 'Partially Available' to 'partial'", async () => {
+    const { normalizeMediaStatus } = await import("@/lib/services/overseerr");
+    expect(normalizeMediaStatus("Partially Available")).toBe("partial");
+  });
+
+  it("normalizes 'Not Requested' to 'not_requested'", async () => {
+    const { normalizeMediaStatus } = await import("@/lib/services/overseerr");
+    expect(normalizeMediaStatus("Not Requested")).toBe("not_requested");
+  });
+
+  it("normalizes unknown values to 'not_requested'", async () => {
+    const { normalizeMediaStatus } = await import("@/lib/services/overseerr");
+    expect(normalizeMediaStatus("SomeUnknownStatus")).toBe("not_requested");
+  });
+});
+
+describe("getSeasonEpisodes — issue #291: includes thumbPath from stillPath", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("maps stillPath to a full TMDB thumbPath URL for each episode", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        episodes: [
+          {
+            episodeNumber: 1,
+            name: "Pilot",
+            airDate: "2008-01-20",
+            overview: "A chemistry teacher is diagnosed with cancer.",
+            runtime: 58,
+            stillPath: "/still1.jpg",
+          },
+          {
+            episodeNumber: 2,
+            name: "Cat's in the Bag",
+            airDate: "2008-01-27",
+            overview: null,
+            runtime: 48,
+            stillPath: null,
+          },
+        ],
+      }),
+    }));
+
+    const { getSeasonEpisodes } = await import("@/lib/services/overseerr");
+    const result = await getSeasonEpisodes(1396, 1);
+    expect(result.seasonNumber).toBe(1);
+    expect(result.episodes).toHaveLength(2);
+
+    // Episode with stillPath → full TMDB URL
+    expect(result.episodes[0].thumbPath).toBe("https://image.tmdb.org/t/p/w300/still1.jpg");
+    expect(result.episodes[0].episodeNumber).toBe(1);
+    expect(result.episodes[0].name).toBe("Pilot");
+    expect(result.episodes[0].airDate).toBe("2008-01-20");
+    expect(result.episodes[0].runtime).toBe(58);
+
+    // Episode without stillPath → thumbPath is undefined
+    expect(result.episodes[1].thumbPath).toBeUndefined();
+  });
+
+  it("returns thumbPath as undefined when stillPath is missing from episode data", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        episodes: [
+          { episodeNumber: 1, name: "Episode 1", airDate: "2024-01-01" },
+        ],
+      }),
+    }));
+
+    const { getSeasonEpisodes } = await import("@/lib/services/overseerr");
+    const result = await getSeasonEpisodes(999, 2);
+    expect(result.episodes[0].thumbPath).toBeUndefined();
   });
 });

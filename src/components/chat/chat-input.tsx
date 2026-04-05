@@ -18,6 +18,7 @@ interface ChatInputProps {
   supportsRealtime: boolean;
   selectedModel: string;
   ttsVoice?: string;
+  transcriptionLanguage?: string;
   lastResponse?: string;
   conversationId?: string | null;
   onRealtimeTurn?: (role: "user" | "assistant", text: string) => void;
@@ -35,6 +36,7 @@ export function ChatInput({
   supportsRealtime,
   selectedModel,
   ttsVoice = "alloy",
+  transcriptionLanguage = "auto",
   lastResponse = "",
   conversationId,
   onRealtimeTurn,
@@ -121,6 +123,7 @@ export function ChatInput({
           <VoiceConversation
             modelId={selectedModel}
             ttsVoice={ttsVoice}
+            transcriptionLanguage={transcriptionLanguage}
             onSend={onSend}
             onCancel={() => onModeChange("text")}
             streaming={streaming ?? false}
@@ -132,11 +135,14 @@ export function ChatInput({
             conversationId={conversationId}
             onTurn={onRealtimeTurn}
             onMessagesUpdated={onRealtimeMessagesUpdated}
+            transcriptionLanguage={transcriptionLanguage}
           />
         ) : (
           <div className="flex items-end gap-2">
             <textarea
               ref={textareaRef}
+              id="chat-message-input"
+              name="message"
               className="flex-1 resize-none rounded-xl border border-input bg-card px-4 py-3 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50"
               placeholder="Type a message..."
               rows={1}

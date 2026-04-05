@@ -1,6 +1,6 @@
 # Thinkarr
 
-Details of the build are in PLAN.MD - refer to this for details of file structure and what has been built.
+Architecture, file structure, API routes, config keys, and design decisions are in `ARCHITECTURE.md`. Refer to that for current state; git history is the record of what changed and when.
 
 ## Rule: branch and merge strategy
 
@@ -33,9 +33,11 @@ feature branches → dev → beta → main
 1. `git checkout dev && git pull origin dev`
 2. `git checkout -b claude/<description>-<id>`
 3. Make changes, commit
-4. `git push -u origin claude/<description>-<id>`
-5. Open a PR targeting `dev` using `gh pr create --base dev`
-6. Stop — do not merge the PR. Wait for CI to pass and the human to approve.
+4. **Check version parity**: compare `package.json` on this branch vs `origin/beta`. If they match, bump the version on this branch (same logic as the version bump rule below) and include it as a final commit before pushing.
+5. **Run local checks** (see Rule below) — type-check and unit tests must pass before opening a PR.
+6. `git push -u origin claude/<description>-<id>`
+7. Open a PR targeting `dev` using `gh pr create --base dev`
+8. Stop — do not merge the PR. Wait for CI to pass and the human to approve.
 
 ### Never do these
 - `git push origin dev`, `git push origin beta`, or `git push origin main`
@@ -70,7 +72,7 @@ Only the human manages the release flow. All version bumps go through PRs — ne
 ### Workflow
 
 1. Compare `package.json` on `dev` vs `beta` (or `beta` vs `main` for a full release).
-2. If the versions match, raise a `claude/bump-version-*` PR to `dev` first and wait for it to be merged before opening the release PR.
+2. If the versions match, the feature branch that last landed on `dev` should have included the bump (see workflow step 4 above). If it didn't, raise a `claude/bump-version-*` PR to `dev` and wait for it to be merged before opening the release PR.
 3. When raising the `dev → beta` PR, use `?template=dev-to-beta.md` so the checklist pre-fills.
 
 ### Rules
@@ -117,16 +119,16 @@ docker run --rm \
 
 Only open the `dev → beta` PR once all three pass locally.
 
-## Rule: keep PLAN.md up to date
+## Rule: keep ARCHITECTURE.md up to date
 
-For every PR, update `PLAN.md` to reflect what was built or changed:
+For every PR, update `ARCHITECTURE.md` to reflect the current state of the codebase:
 
-- Add a new phase section (or append to the current one) documenting features and bug fixes
-- Update the **file structure** if new files were added
-- Update the **config keys table** if new `app_config` keys were introduced
-- Update the **API routes table** if new routes were added or existing ones changed
+- Update the **file structure** if new files were added or removed
+- Update the **app_config keys table** if new keys were introduced
+- Update the **API routes table** if routes were added or changed
+- Update the **design decisions** section if a meaningful architectural choice was made
 
-Do this as a separate commit on the same branch before pushing, so the PR includes the documentation alongside the code.
+Do not add history, changelogs, or phase entries — git history is the record of what changed and when. Do this as a separate commit on the same branch before pushing.
 
 ## Rule: CodeQL is a required gate on dev, beta, and main
 
@@ -173,6 +175,25 @@ For every feature or bug fix, check whether a unit or E2E test already covers th
 - E2E tests live in `tests/e2e/` and use Playwright.
 - Prefer unit tests for logic/API behaviour; prefer E2E tests only for UI interactions that can't be covered at the unit level.
 - If an existing test already covers the behaviour, no new test is needed — but do not remove or weaken existing tests.
+
+## Rule: run type-check and unit tests before every PR
+
+Before pushing and opening any PR (not just `dev → beta`), run both checks locally:
+
+### 1. Type-check
+```bash
+npx tsc --noEmit
+# Ignore pre-existing errors caused by missing node_modules (Cannot find module 'zod', etc.)
+# Fix any NEW errors introduced by your changes
+```
+
+### 2. Unit tests
+```bash
+npx vitest run
+# All tests must pass — fix failures before opening the PR
+```
+
+If `node_modules` is not installed in the current environment, the type-check will report module-not-found errors for every package. These are pre-existing environment noise — ignore them. Only fix errors that point to files you changed. Unit tests require `node_modules` to run; if they cannot run, note this explicitly in the PR description so the human knows to rely on CI.
 
 ## Rule: two E2E tiers — full suite vs. Docker smoke
 

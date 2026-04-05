@@ -22,3 +22,10 @@ CVE-2026-24842
 CVE-2026-26960
 CVE-2026-29786
 CVE-2026-31802
+
+# picomatch: ReDoS (CVE-2026-33671) — Trivy false positive in dev-only deps
+# Trivy reads node_modules/tinyglobby/package.json and extracts "4.0.3" from the
+# "^4.0.3" dep spec as the installed version. npm ci actually resolves and installs
+# 4.0.4 (fixed). tinyglobby, vite, and vitest are devDependencies and do not reach
+# the .next/standalone runner image.
+CVE-2026-33671

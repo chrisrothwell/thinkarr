@@ -42,6 +42,7 @@ interface LlmEndpoint {
   supportsVoice: boolean;
   supportsTts: boolean;
   ttsVoice: string;
+  transcriptionLanguage: string;
   supportsRealtime: boolean;
   realtimeModel: string;
   realtimeSystemPrompt: string;
@@ -141,6 +142,9 @@ export default function SettingsPage() {
   // GitHub config (admin only)
   const [githubConfig, setGithubConfig] = useState({ token: "", owner: "", repo: "" });
 
+  // Langfuse config (admin only)
+  const [langfuseConfig, setLangfuseConfig] = useState({ secretKey: "", publicKey: "", baseUrl: "" });
+
   // Log state (admin only)
   const [logFiles, setLogFiles] = useState<{ name: string; size: number; modified: string }[]>([]);
   const [logFilesLoading, setLogFilesLoading] = useState(false);
@@ -182,6 +186,7 @@ export default function SettingsPage() {
                 supportsVoice: ep.supportsVoice ?? false,
                 supportsTts: ep.supportsTts ?? false,
                 ttsVoice: ep.ttsVoice ?? "alloy",
+                transcriptionLanguage: ep.transcriptionLanguage ?? "auto",
                 supportsRealtime: ep.supportsRealtime ?? false,
                 realtimeModel: ep.realtimeModel ?? "",
                 realtimeSystemPrompt: ep.realtimeSystemPrompt ?? "",
@@ -203,6 +208,11 @@ export default function SettingsPage() {
               token: d.github?.token || "",
               owner: d.github?.owner || "",
               repo: d.github?.repo || "",
+            });
+            setLangfuseConfig({
+              secretKey: d.langfuse?.secretKey || "",
+              publicKey: d.langfuse?.publicKey || "",
+              baseUrl: d.langfuse?.baseUrl || "",
             });
             // Snapshot the freshly loaded config so we can detect unsaved changes later
             savedConfigRef.current = JSON.stringify({
@@ -279,6 +289,7 @@ export default function SettingsPage() {
       })),
       plex: { url: plexConfig.url, token: plexConfig.token },
       github: githubConfig,
+      langfuse: langfuseConfig,
     };
     for (const svc of ARR_SERVICES) {
       body[svc.key] = arrConfigs[svc.key];
@@ -320,7 +331,7 @@ export default function SettingsPage() {
     } finally {
       setSaving(false);
     }
-  }, [endpoints, plexConfig, arrConfigs, githubConfig, isInitialSetup, redirectCountdown]);
+  }, [endpoints, plexConfig, arrConfigs, githubConfig, langfuseConfig, isInitialSetup, redirectCountdown]);
 
   // --- Plex server discovery ---
   async function discoverPlexServers() {
@@ -431,6 +442,7 @@ export default function SettingsPage() {
         supportsVoice: false,
         supportsTts: false,
         ttsVoice: "alloy",
+        transcriptionLanguage: "auto",
         supportsRealtime: false,
         realtimeModel: "",
         realtimeSystemPrompt: "",
@@ -778,23 +790,28 @@ export default function SettingsPage() {
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div className="flex flex-wrap items-center gap-2">
                       <Input
+                        id={`ep-${ep.id}-name`}
+                        name={`ep-${ep.id}-name`}
                         value={ep.name}
                         onChange={(e) => updateEndpoint(ep.id, "name", e.target.value)}
                         className="h-8 w-full text-sm font-semibold sm:w-48"
                       />
                       <div className="flex items-center gap-3">
-                        <label className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                        <label className="flex items-center gap-1.5 text-sm text-muted-foreground" htmlFor={`ep-${ep.id}-enabled`}>
                           <input
                             type="checkbox"
+                            id={`ep-${ep.id}-enabled`}
+                            name={`ep-${ep.id}-enabled`}
                             checked={ep.enabled}
                             onChange={(e) => updateEndpoint(ep.id, "enabled", e.target.checked)}
                             className="rounded"
                           />
                           Enabled
                         </label>
-                        <label className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                        <label className="flex items-center gap-1.5 text-sm text-muted-foreground" htmlFor={`ep-${ep.id}-default`}>
                           <input
                             type="radio"
+                            id={`ep-${ep.id}-default`}
                             name="defaultEndpoint"
                             checked={ep.isDefault}
                             onChange={() => setDefaultEndpoint(ep.id)}
@@ -816,24 +833,30 @@ export default function SettingsPage() {
                 </CardHeader>
                 <CardContent className="space-y-3">
                   <div className="space-y-1.5">
-                    <Label>Base URL</Label>
+                    <Label htmlFor={`ep-${ep.id}-baseUrl`}>Base URL</Label>
                     <Input
+                      id={`ep-${ep.id}-baseUrl`}
+                      name={`ep-${ep.id}-baseUrl`}
                       value={ep.baseUrl}
                       onChange={(e) => updateEndpoint(ep.id, "baseUrl", e.target.value)}
                       placeholder="https://api.openai.com/v1"
                     />
                   </div>
                   <div className="space-y-1.5">
-                    <Label>API Key</Label>
+                    <Label htmlFor={`ep-${ep.id}-apiKey`}>API Key</Label>
                     <Input
+                      id={`ep-${ep.id}-apiKey`}
+                      name={`ep-${ep.id}-apiKey`}
                       type="password"
                       value={ep.apiKey}
                       onChange={(e) => updateEndpoint(ep.id, "apiKey", e.target.value)}
                     />
                   </div>
                   <div className="space-y-1.5">
-                    <Label>Model</Label>
+                    <Label htmlFor={`ep-${ep.id}-model`}>Model</Label>
                     <Input
+                      id={`ep-${ep.id}-model`}
+                      name={`ep-${ep.id}-model`}
                       value={ep.model}
                       onChange={(e) => updateEndpoint(ep.id, "model", e.target.value)}
                       placeholder="gpt-4.1"
@@ -843,18 +866,20 @@ export default function SettingsPage() {
                     <Label>System Prompt</Label>
                     {/* Radio: Use Default / Use Custom */}
                     <div className="flex gap-4 text-sm">
-                      <label className="flex items-center gap-1.5 cursor-pointer">
+                      <label className="flex items-center gap-1.5 cursor-pointer" htmlFor={`ep-${ep.id}-promptMode-default`}>
                         <input
                           type="radio"
+                          id={`ep-${ep.id}-promptMode-default`}
                           name={`promptMode-${ep.id}`}
                           checked={(ep.promptMode ?? "default") === "default"}
                           onChange={() => updateEndpoint(ep.id, "promptMode", "default")}
                         />
                         Use Default Prompt
                       </label>
-                      <label className="flex items-center gap-1.5 cursor-pointer">
+                      <label className="flex items-center gap-1.5 cursor-pointer" htmlFor={`ep-${ep.id}-promptMode-custom`}>
                         <input
                           type="radio"
+                          id={`ep-${ep.id}-promptMode-custom`}
                           name={`promptMode-${ep.id}`}
                           checked={ep.promptMode === "custom"}
                           onChange={() => updateEndpoint(ep.id, "promptMode", "custom")}
@@ -863,6 +888,8 @@ export default function SettingsPage() {
                       </label>
                     </div>
                     <Textarea
+                      id={`ep-${ep.id}-systemPrompt`}
+                      name={`ep-${ep.id}-systemPrompt`}
                       value={(ep.promptMode ?? "default") === "default" ? DEFAULT_SYSTEM_PROMPT : ep.systemPrompt}
                       onChange={(e) => {
                         // Auto-switch to custom when the user edits the text
@@ -895,12 +922,50 @@ export default function SettingsPage() {
                     <p className="text-xs text-muted-foreground">Click Test to auto-detect capabilities.</p>
                   </div>
 
+                  {/* Transcription language — shown when voice input or realtime is supported */}
+                  {(ep.supportsVoice || ep.supportsRealtime) && (
+                    <div className="space-y-1.5">
+                      <Label htmlFor={`ep-${ep.id}-transcriptionLanguage`}>Transcription Language</Label>
+                      <select
+                        id={`ep-${ep.id}-transcriptionLanguage`}
+                        name={`ep-${ep.id}-transcriptionLanguage`}
+                        value={ep.transcriptionLanguage ?? "auto"}
+                        onChange={(e) => updateEndpoint(ep.id, "transcriptionLanguage", e.target.value)}
+                        className="w-full rounded border bg-background px-2 py-1.5 text-sm"
+                      >
+                        {[
+                          { code: "auto", label: "Auto-detect" },
+                          { code: "en", label: "English" },
+                          { code: "es", label: "Spanish" },
+                          { code: "fr", label: "French" },
+                          { code: "de", label: "German" },
+                          { code: "it", label: "Italian" },
+                          { code: "pt", label: "Portuguese" },
+                          { code: "nl", label: "Dutch" },
+                          { code: "ja", label: "Japanese" },
+                          { code: "ko", label: "Korean" },
+                          { code: "zh", label: "Chinese" },
+                          { code: "ru", label: "Russian" },
+                          { code: "ar", label: "Arabic" },
+                          { code: "hi", label: "Hindi" },
+                          { code: "pl", label: "Polish" },
+                          { code: "cy", label: "Welsh" },
+                        ].map(({ code, label }) => (
+                          <option key={code} value={code}>{label}</option>
+                        ))}
+                      </select>
+                      <p className="text-xs text-muted-foreground">Language hint passed to Whisper for voice and realtime transcription. Auto-detect works well for most users but may misidentify short utterances.</p>
+                    </div>
+                  )}
+
                   {/* TTS voice selector — only shown when TTS is supported */}
                   {ep.supportsTts && (
                     <div className="space-y-1.5">
                       <Label>TTS Voice</Label>
                       <div className="flex gap-2">
                         <select
+                          id={`ep-${ep.id}-ttsVoice`}
+                          name={`ep-${ep.id}-ttsVoice`}
                           value={ep.ttsVoice || "alloy"}
                           onChange={(e) => updateEndpoint(ep.id, "ttsVoice", e.target.value)}
                           className="rounded border bg-background px-2 py-1.5 text-sm flex-1"
@@ -926,8 +991,10 @@ export default function SettingsPage() {
 
                   {/* Realtime model override */}
                   <div className="space-y-1.5">
-                    <Label>Realtime Model <span className="text-muted-foreground font-normal">(optional — leave blank to disable)</span></Label>
+                    <Label htmlFor={`ep-${ep.id}-realtimeModel`}>Realtime Model <span className="text-muted-foreground font-normal">(optional — leave blank to disable)</span></Label>
                     <Input
+                      id={`ep-${ep.id}-realtimeModel`}
+                      name={`ep-${ep.id}-realtimeModel`}
                       value={ep.realtimeModel}
                       onChange={(e) => {
                         const val = e.target.value;
@@ -943,18 +1010,20 @@ export default function SettingsPage() {
                     <div className="space-y-1.5">
                       <Label>Realtime System Prompt</Label>
                       <div className="flex gap-4 text-sm">
-                        <label className="flex items-center gap-1.5 cursor-pointer">
+                        <label className="flex items-center gap-1.5 cursor-pointer" htmlFor={`ep-${ep.id}-realtimePromptMode-default`}>
                           <input
                             type="radio"
+                            id={`ep-${ep.id}-realtimePromptMode-default`}
                             name={`realtimePromptMode-${ep.id}`}
                             checked={(ep.realtimePromptMode ?? "default") === "default"}
                             onChange={() => updateEndpoint(ep.id, "realtimePromptMode", "default")}
                           />
                           Use Default Realtime Prompt
                         </label>
-                        <label className="flex items-center gap-1.5 cursor-pointer">
+                        <label className="flex items-center gap-1.5 cursor-pointer" htmlFor={`ep-${ep.id}-realtimePromptMode-custom`}>
                           <input
                             type="radio"
+                            id={`ep-${ep.id}-realtimePromptMode-custom`}
                             name={`realtimePromptMode-${ep.id}`}
                             checked={ep.realtimePromptMode === "custom"}
                             onChange={() => updateEndpoint(ep.id, "realtimePromptMode", "custom")}
@@ -963,6 +1032,8 @@ export default function SettingsPage() {
                         </label>
                       </div>
                       <Textarea
+                        id={`ep-${ep.id}-realtimeSystemPrompt`}
+                        name={`ep-${ep.id}-realtimeSystemPrompt`}
                         value={(ep.realtimePromptMode ?? "default") === "default" ? DEFAULT_REALTIME_SYSTEM_PROMPT : ep.realtimeSystemPrompt}
                         onChange={(e) => {
                           if ((ep.realtimePromptMode ?? "default") === "default") {
@@ -1051,8 +1122,10 @@ export default function SettingsPage() {
                 )}
 
                 <div className="space-y-1.5">
-                  <Label>URL</Label>
+                  <Label htmlFor="plex-url">URL</Label>
                   <Input
+                    id="plex-url"
+                    name="plex-url"
                     value={plexConfig.url}
                     onChange={(e) => {
                       setPlexConfig((prev) => ({ ...prev, url: e.target.value }));
@@ -1063,8 +1136,10 @@ export default function SettingsPage() {
                   <p className="text-xs text-muted-foreground">e.g. http://localhost:32400</p>
                 </div>
                 <div className="space-y-1.5">
-                  <Label>Plex Token</Label>
+                  <Label htmlFor="plex-token">Plex Token</Label>
                   <Input
+                    id="plex-token"
+                    name="plex-token"
                     type="password"
                     value={plexConfig.token}
                     onChange={(e) => {
@@ -1101,8 +1176,10 @@ export default function SettingsPage() {
                   </CardHeader>
                   <CardContent className="space-y-3">
                     <div className="space-y-1.5">
-                      <Label>URL</Label>
+                      <Label htmlFor={`arr-${svc.key}-url`}>URL</Label>
                       <Input
+                        id={`arr-${svc.key}-url`}
+                        name={`arr-${svc.key}-url`}
                         value={config.url}
                         onChange={(e) => {
                           setArrConfigs((prev) => ({
@@ -1116,8 +1193,10 @@ export default function SettingsPage() {
                       <p className="text-xs text-muted-foreground">e.g. {svc.hint}</p>
                     </div>
                     <div className="space-y-1.5">
-                      <Label>API Key</Label>
+                      <Label htmlFor={`arr-${svc.key}-apiKey`}>API Key</Label>
                       <Input
+                        id={`arr-${svc.key}-apiKey`}
+                        name={`arr-${svc.key}-apiKey`}
                         type="password"
                         value={config.apiKey}
                         onChange={(e) => {
@@ -1159,9 +1238,10 @@ export default function SettingsPage() {
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-1.5">
-                  <Label>MCP Endpoint</Label>
+                  <Label htmlFor="mcp-endpoint">MCP Endpoint</Label>
                   <div className="flex items-center gap-2">
                     <Input
+                      id="mcp-endpoint"
                       value={typeof window !== "undefined" ? `${window.location.origin}/api/mcp` : "/api/mcp"}
                       readOnly
                       className="font-mono text-sm"
@@ -1177,9 +1257,10 @@ export default function SettingsPage() {
                 </div>
 
                 <div className="space-y-1.5">
-                  <Label>{currentUser?.isAdmin ? "Admin Bearer Token" : "Your Bearer Token"}</Label>
+                  <Label htmlFor="mcp-bearer-token">{currentUser?.isAdmin ? "Admin Bearer Token" : "Your Bearer Token"}</Label>
                   <div className="flex items-center gap-2">
                     <Input
+                      id="mcp-bearer-token"
                       value={mcpToken}
                       readOnly
                       className="font-mono text-sm"
@@ -1297,7 +1378,7 @@ export default function SettingsPage() {
 
                           <div className="mt-2 flex flex-wrap gap-3">
                             {/* Role selector */}
-                            <label className="flex items-center gap-1.5 text-sm">
+                            <label className="flex items-center gap-1.5 text-sm" htmlFor={`user-${user.id}-role`}>
                               <span className="text-muted-foreground">Role:</span>
                               {user.id === masterAdminId ? (
                                 <span className="rounded border bg-background px-2 py-0.5 text-sm text-muted-foreground">
@@ -1305,6 +1386,8 @@ export default function SettingsPage() {
                                 </span>
                               ) : (
                                 <select
+                                  id={`user-${user.id}-role`}
+                                  name={`user-${user.id}-role`}
                                   value={user.isAdmin ? "admin" : "user"}
                                   onChange={(e) =>
                                     updateUser(user.id, {
@@ -1320,9 +1403,11 @@ export default function SettingsPage() {
                             </label>
 
                             {/* Default model */}
-                            <label className="flex items-center gap-1.5 text-sm">
+                            <label className="flex items-center gap-1.5 text-sm" htmlFor={`user-${user.id}-model`}>
                               <span className="text-muted-foreground">Model:</span>
                               <select
+                                id={`user-${user.id}-model`}
+                                name={`user-${user.id}-model`}
                                 value={user.defaultModel || ""}
                                 onChange={(e) =>
                                   updateUser(user.id, {
@@ -1341,9 +1426,11 @@ export default function SettingsPage() {
                             </label>
 
                             {/* Can change model */}
-                            <label className="flex items-center gap-1.5 text-sm">
+                            <label className="flex items-center gap-1.5 text-sm" htmlFor={`user-${user.id}-canChangeModel`}>
                               <input
                                 type="checkbox"
+                                id={`user-${user.id}-canChangeModel`}
+                                name={`user-${user.id}-canChangeModel`}
                                 checked={user.canChangeModel}
                                 onChange={(e) =>
                                   updateUser(user.id, {
@@ -1358,10 +1445,12 @@ export default function SettingsPage() {
                             </label>
 
                             {/* Rate limit */}
-                            <label className="flex items-center gap-1.5 text-sm">
+                            <label className="flex items-center gap-1.5 text-sm" htmlFor={`user-${user.id}-rateLimitMessages`}>
                               <span className="text-muted-foreground">Limit:</span>
                               <input
                                 type="number"
+                                id={`user-${user.id}-rateLimitMessages`}
+                                name={`user-${user.id}-rateLimitMessages`}
                                 min={1}
                                 value={user.rateLimitMessages}
                                 onChange={(e) =>
@@ -1373,6 +1462,8 @@ export default function SettingsPage() {
                               />
                               <span className="text-muted-foreground">messages per</span>
                               <select
+                                id={`user-${user.id}-rateLimitPeriod`}
+                                name={`user-${user.id}-rateLimitPeriod`}
                                 value={user.rateLimitPeriod}
                                 onChange={(e) =>
                                   updateUser(user.id, {
@@ -1458,6 +1549,7 @@ export default function SettingsPage() {
               <CardContent>
                 <div className="flex items-center gap-2">
                   <Input
+                    id="internal-api-key"
                     value={internalApiKey}
                     readOnly
                     className="font-mono text-sm"
@@ -1501,6 +1593,7 @@ export default function SettingsPage() {
                   <Label htmlFor="github-token">Personal Access Token</Label>
                   <Input
                     id="github-token"
+                    name="github-token"
                     type="password"
                     placeholder="ghp_••••••••"
                     value={githubConfig.token}
@@ -1516,6 +1609,7 @@ export default function SettingsPage() {
                     <Label htmlFor="github-owner">Repository Owner</Label>
                     <Input
                       id="github-owner"
+                      name="github-owner"
                       placeholder="chrisrothwell"
                       value={githubConfig.owner}
                       onChange={(e) => setGithubConfig((prev) => ({ ...prev, owner: e.target.value }))}
@@ -1525,6 +1619,7 @@ export default function SettingsPage() {
                     <Label htmlFor="github-repo">Repository Name</Label>
                     <Input
                       id="github-repo"
+                      name="github-repo"
                       placeholder="thinkarr"
                       value={githubConfig.repo}
                       onChange={(e) => setGithubConfig((prev) => ({ ...prev, repo: e.target.value }))}
@@ -1538,6 +1633,68 @@ export default function SettingsPage() {
                   <code className="font-mono text-xs">GITHUB_OWNER</code>, and{" "}
                   <code className="font-mono text-xs">GITHUB_REPO</code> environment variables
                   take precedence over these settings.
+                </p>
+              </CardContent>
+            </Card>
+
+            {/* Langfuse observability */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">Langfuse Observability</CardTitle>
+                <CardDescription>
+                  Connect to{" "}
+                  <a
+                    href="https://langfuse.com"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline"
+                  >
+                    Langfuse
+                  </a>{" "}
+                  to trace LLM requests, tool calls, and token usage. Supports both
+                  Langfuse Cloud and self-hosted instances. Leave blank to disable.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="langfuse-secret-key">Secret Key</Label>
+                    <Input
+                      id="langfuse-secret-key"
+                      type="password"
+                      placeholder="sk-lf-••••••••"
+                      value={langfuseConfig.secretKey}
+                      onChange={(e) => { setLangfuseConfig((prev) => ({ ...prev, secretKey: e.target.value })); setSaved(false); }}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="langfuse-public-key">Public Key</Label>
+                    <Input
+                      id="langfuse-public-key"
+                      type="password"
+                      placeholder="pk-lf-••••••••"
+                      value={langfuseConfig.publicKey}
+                      onChange={(e) => { setLangfuseConfig((prev) => ({ ...prev, publicKey: e.target.value })); setSaved(false); }}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="langfuse-base-url">Host URL</Label>
+                  <Input
+                    id="langfuse-base-url"
+                    placeholder="https://cloud.langfuse.com"
+                    value={langfuseConfig.baseUrl}
+                    onChange={(e) => { setLangfuseConfig((prev) => ({ ...prev, baseUrl: e.target.value })); setSaved(false); }}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Leave blank for Langfuse Cloud. Set to your self-hosted instance URL (e.g.{" "}
+                    <code className="font-mono">http://langfuse-web:3000</code>).
+                  </p>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Environment variables <code className="font-mono">LANGFUSE_SECRET_KEY</code>,{" "}
+                  <code className="font-mono">LANGFUSE_PUBLIC_KEY</code>, and{" "}
+                  <code className="font-mono">LANGFUSE_HOST</code> take precedence over these settings.
                 </p>
               </CardContent>
             </Card>

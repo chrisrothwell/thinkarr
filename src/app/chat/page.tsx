@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Sidebar, SidebarToggle } from "@/components/chat/sidebar";
 import { MessageList } from "@/components/chat/message-list";
 import { ChatInput } from "@/components/chat/chat-input";
@@ -14,18 +15,26 @@ import { Flag } from "lucide-react";
 
 export type ChatMode = "text" | "voice" | "realtime";
 
+const SELECTED_MODEL_KEY = "thinkarr:selectedModel";
+
 interface ModelOption {
   id: string;
   label: string;
   supportsVoice?: boolean;
   supportsRealtime?: boolean;
   ttsVoice?: string;
+  transcriptionLanguage?: string;
 }
 
-export default function ChatPage() {
+function ChatPageContent() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
   const [user, setUser] = useState<User | null>(null);
   const [userLoading, setUserLoading] = useState(true);
-  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(
+    () => searchParams.get("c"),
+  );
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     if (typeof window !== "undefined") return window.innerWidth < 768;
     return false;
@@ -42,6 +51,7 @@ export default function ChatPage() {
     supportsVoice: false,
     supportsRealtime: false,
     ttsVoice: "alloy",
+    transcriptionLanguage: "auto",
   });
   const [reportIssueOpen, setReportIssueOpen] = useState(false);
 
@@ -76,7 +86,7 @@ export default function ChatPage() {
       .finally(() => setUserLoading(false));
   }, []);
 
-  // Load available models
+  // Load available models, restoring the last-used model from localStorage
   useEffect(() => {
     fetch("/api/models")
       .then((r) => r.json())
@@ -85,15 +95,22 @@ export default function ChatPage() {
           const loadedModels: ModelOption[] = data.data.models || [];
           setModels(loadedModels);
           setCanChangeModel(data.data.canChangeModel);
-          const defaultModel = data.data.defaultModel || "";
-          setSelectedModel(defaultModel);
-          // Set initial capabilities from the default model
-          const defaultOpt = loadedModels.find((m) => m.id === defaultModel);
-          if (defaultOpt) {
+          const serverDefault = data.data.defaultModel || "";
+          // Prefer the last model the user picked (stored in localStorage),
+          // but only if it is still a valid option on this endpoint.
+          const saved = typeof window !== "undefined"
+            ? window.localStorage.getItem(SELECTED_MODEL_KEY)
+            : null;
+          const initial =
+            saved && loadedModels.some((m) => m.id === saved) ? saved : serverDefault;
+          setSelectedModel(initial);
+          const opt = loadedModels.find((m) => m.id === initial);
+          if (opt) {
             setEndpointCaps({
-              supportsVoice: defaultOpt.supportsVoice ?? false,
-              supportsRealtime: defaultOpt.supportsRealtime ?? false,
-              ttsVoice: defaultOpt.ttsVoice ?? "alloy",
+              supportsVoice: opt.supportsVoice ?? false,
+              supportsRealtime: opt.supportsRealtime ?? false,
+              ttsVoice: opt.ttsVoice ?? "alloy",
+              transcriptionLanguage: opt.transcriptionLanguage ?? "auto",
             });
           }
         }
@@ -119,44 +136,57 @@ export default function ChatPage() {
     }
   }, [activeConversationId, loadMessages, clearMessages]);
 
+  /** Update both React state and the URL together. */
+  const navigateTo = useCallback(
+    (id: string | null) => {
+      setActiveConversationId(id);
+      const url = id ? `/chat?c=${id}` : "/chat";
+      router.replace(url, { scroll: false });
+    },
+    [router],
+  );
+
   const handleNewChat = useCallback(() => {
-    setActiveConversationId(null);
+    navigateTo(null);
     clearMessages();
     setChatMode("text");
-  }, [clearMessages]);
+  }, [navigateTo, clearMessages]);
 
-  const handleSelectConversation = useCallback((id: string) => {
-    setActiveConversationId(id);
-    setChatMode("text");
-    if (window.innerWidth < 768) setSidebarCollapsed(true);
-  }, []);
+  const handleSelectConversation = useCallback(
+    (id: string) => {
+      navigateTo(id);
+      setChatMode("text");
+      if (window.innerWidth < 768) setSidebarCollapsed(true);
+    },
+    [navigateTo],
+  );
 
   const handleDeleteConversation = useCallback(
     async (id: string) => {
       await deleteConversation(id);
       if (activeConversationId === id) {
-        setActiveConversationId(null);
+        navigateTo(null);
         clearMessages();
       }
     },
-    [deleteConversation, activeConversationId, clearMessages],
+    [deleteConversation, activeConversationId, navigateTo, clearMessages],
   );
 
   const handleSend = useCallback(
     async (content: string) => {
       let convId = activeConversationId;
 
-      // If no active conversation, create one
+      // If no active conversation, create one and navigate to it
       if (!convId) {
         const conv = await createConversation();
         if (!conv) return;
         convId = conv.id;
-        setActiveConversationId(convId);
+        navigateTo(convId);
       }
 
       sendMessage(content, convId, selectedModel || undefined);
     },
-    [activeConversationId, createConversation, sendMessage, selectedModel],
+    [activeConversationId, createConversation, navigateTo, sendMessage, selectedModel],
   );
 
   const handleRealtimeTurn = useCallback(
@@ -167,18 +197,25 @@ export default function ChatPage() {
         const conv = await createConversation();
         if (!conv) return;
         convId = conv.id;
-        setActiveConversationId(convId);
+        navigateTo(convId);
       }
 
-      await fetch(`/api/conversations/${convId}/messages`, {
+      const res = await fetch(`/api/conversations/${convId}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ role, content: text }),
       });
 
+      if (res.ok) {
+        const json = await res.json();
+        if (json.data?.newTitle) {
+          updateConversationTitle(convId, json.data.newTitle);
+        }
+      }
+
       loadMessages(convId);
     },
-    [activeConversationId, createConversation, loadMessages],
+    [activeConversationId, createConversation, navigateTo, loadMessages, updateConversationTitle],
   );
 
   // Called by the realtime hook after each tool result is persisted to the DB.
@@ -229,11 +266,14 @@ export default function ChatPage() {
                   onChange={(e) => {
                     const newModel = e.target.value;
                     setSelectedModel(newModel);
+                    // Persist across page refreshes
+                    window.localStorage.setItem(SELECTED_MODEL_KEY, newModel);
                     const opt = models.find((m) => m.id === newModel);
                     const caps = {
                       supportsVoice: opt?.supportsVoice ?? false,
                       supportsRealtime: opt?.supportsRealtime ?? false,
                       ttsVoice: opt?.ttsVoice ?? "alloy",
+                      transcriptionLanguage: opt?.transcriptionLanguage ?? "auto",
                     };
                     setEndpointCaps(caps);
                     setChatMode((prev) => {
@@ -314,6 +354,7 @@ export default function ChatPage() {
           supportsRealtime={endpointCaps.supportsRealtime}
           selectedModel={selectedModel}
           ttsVoice={endpointCaps.ttsVoice}
+          transcriptionLanguage={endpointCaps.transcriptionLanguage}
           lastResponse={messages.findLast((m) => m.role === "assistant")?.content ?? ""}
           conversationId={activeConversationId}
           onRealtimeTurn={handleRealtimeTurn}
@@ -328,5 +369,21 @@ export default function ChatPage() {
         />
       )}
     </div>
+  );
+}
+
+// useSearchParams() requires a Suspense boundary in Next.js App Router.
+// The spinner fallback matches the existing userLoading state.
+export default function ChatPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex h-screen items-center justify-center">
+          <Spinner size={24} />
+        </div>
+      }
+    >
+      <ChatPageContent />
+    </Suspense>
   );
 }

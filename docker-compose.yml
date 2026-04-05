@@ -10,6 +10,14 @@ services:
       - PGID=1000 #CHANGE_TO_YOUR_GID
       - TZ=UTC #CHANGE_TO_YOUR_TZ
       #- SECURE_COOKIES=true # Uncomment if running behind a reverse proxy (HTTPS)
+      # ---------------------------------------------------------------------------
+      # Langfuse observability (optional — remove these if not using Langfuse)
+      # To use Langfuse Cloud, set LANGFUSE_SECRET_KEY and LANGFUSE_PUBLIC_KEY.
+      # To use a self-hosted Langfuse instance, also set LANGFUSE_HOST.
+      # ---------------------------------------------------------------------------
+      #- LANGFUSE_SECRET_KEY=sk-lf-...
+      #- LANGFUSE_PUBLIC_KEY=pk-lf-...
+      #- LANGFUSE_HOST=https://langfuse.your-domain.com  # omit for Langfuse Cloud
     volumes:
       - ./config:/config
     ports:
@@ -18,3 +26,43 @@ services:
     security_opt:
       - no-new-privileges:true
     restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Self-hosted Langfuse (optional — only needed if not using Langfuse Cloud)
+  # Uncomment the block below and set LANGFUSE_HOST=http://langfuse-web:3000
+  # in the thinkarr service above.
+  # ---------------------------------------------------------------------------
+  # langfuse-web:
+  #   image: langfuse/langfuse:latest
+  #   container_name: langfuse-web
+  #   depends_on:
+  #     langfuse-db:
+  #       condition: service_healthy
+  #   environment:
+  #     - DATABASE_URL=postgresql://langfuse:langfuse@langfuse-db:5432/langfuse
+  #     - NEXTAUTH_SECRET=change-me-random-secret
+  #     - SALT=change-me-random-salt
+  #     - NEXTAUTH_URL=http://localhost:3001
+  #     - TELEMETRY_ENABLED=false
+  #   ports:
+  #     - 3001:3000/tcp
+  #   restart: unless-stopped
+  #
+  # langfuse-db:
+  #   image: postgres:16
+  #   container_name: langfuse-db
+  #   environment:
+  #     - POSTGRES_USER=langfuse
+  #     - POSTGRES_PASSWORD=langfuse
+  #     - POSTGRES_DB=langfuse
+  #   volumes:
+  #     - langfuse-db-data:/var/lib/postgresql/data
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U langfuse"]
+  #     interval: 5s
+  #     timeout: 5s
+  #     retries: 5
+  #   restart: unless-stopped
+  #
+# volumes:
+#   langfuse-db-data:

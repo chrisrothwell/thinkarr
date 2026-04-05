@@ -174,6 +174,20 @@ describe("POST /api/realtime/session", () => {
     expect(sentBody.voice).toBe("alloy");
   });
 
+  it("sends turn_detection with raised threshold and silence_duration_ms to reduce VAD sensitivity (#242)", async () => {
+    const req = new Request("http://localhost/api/realtime/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ modelId: "ep1:gpt-4.1" }),
+    });
+    await POST(req);
+    const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    const sentBody = JSON.parse(init.body as string);
+    expect(sentBody.turn_detection.type).toBe("server_vad");
+    expect(sentBody.turn_detection.threshold).toBeGreaterThan(0.5);
+    expect(sentBody.turn_detection.silence_duration_ms).toBeGreaterThanOrEqual(800);
+  });
+
   it("returns 400 when endpoint is ChatGPT-compatible but not OpenAI (e.g. Gemini)", async () => {
     mockGetEndpointConfig.mockReturnValue({
       id: "ep-gemini",

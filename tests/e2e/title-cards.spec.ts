@@ -21,6 +21,9 @@ import {
   TRIGGER_AVAILABLE,
   TRIGGER_UNAVAILABLE,
   TRIGGER_MULTIPLE,
+  TRIGGER_PENDING,
+  TRIGGER_NO_EXTERNAL_IDS,
+  TRIGGER_MISSING_MEDIA_TYPE,
 } from "./helpers/mock-servers";
 
 // ---------------------------------------------------------------------------
@@ -166,6 +169,37 @@ test.describe("Title card — multiple titles (carousel)", () => {
   });
 });
 
+test.describe("Title card — pending TV show", () => {
+  test("renders 'More Info' button but no Request button for pending items", async ({ page }) => {
+    await page.goto("/chat");
+
+    await sendMessage(page, TRIGGER_PENDING);
+
+    await expect(page.getByTestId("message-assistant")).toBeVisible({ timeout: 20_000 });
+
+    const card = page.getByTestId("title-card").first();
+    await expect(card).toBeVisible({ timeout: 10_000 });
+
+    await expect(card).toContainText("Star City");
+
+    // Status badge shows "Pending"
+    await expect(card.getByTestId("title-status")).toHaveText("Pending");
+
+    // More Info button is visible (imdbId is set)
+    await expect(card.getByTestId("more-info-button")).toBeVisible();
+
+    // More Info links to IMDb when imdbId is present
+    const moreInfoHref = await card.getByTestId("more-info-button").getAttribute("href");
+    expect(moreInfoHref).toContain("imdb.com/title/tt32140872");
+
+    // Request button must NOT appear — item is already requested
+    await expect(card.getByTestId("request-button")).not.toBeVisible();
+
+    // Watch Now button absent — not in Plex yet
+    await expect(card.getByTestId("watch-now-button")).not.toBeVisible();
+  });
+});
+
 test.describe("Title card — summary and rating", () => {
   test("displays summary and star rating when provided", async ({ page }) => {
     await page.goto("/chat");
@@ -181,5 +215,77 @@ test.describe("Title card — summary and rating", () => {
 
     // Rating visible (8.5 → "8.5")
     await expect(card).toContainText("8.5");
+  });
+});
+
+test.describe("Title card — More Info always visible", () => {
+  test("shows More Info even when no imdbId or overseerrId (falls back to TMDB search)", async ({ page }) => {
+    await page.goto("/chat");
+
+    await sendMessage(page, TRIGGER_NO_EXTERNAL_IDS);
+    await expect(page.getByTestId("message-assistant")).toBeVisible({ timeout: 20_000 });
+
+    const card = page.getByTestId("title-card").first();
+    await expect(card).toBeVisible({ timeout: 10_000 });
+    await expect(card).toContainText("Local Favorite");
+
+    // More Info button is always visible regardless of external IDs
+    const moreInfo = card.getByTestId("more-info-button");
+    await expect(moreInfo).toBeVisible();
+
+    // Falls back to TMDB search URL
+    const href = await moreInfo.getAttribute("href");
+    expect(href).toContain("themoviedb.org/search");
+    expect(href).toContain("Local%20Favorite");
+  });
+
+  test("shows More Info with IMDB link when imdbId is present", async ({ page }) => {
+    await page.goto("/chat");
+
+    await sendMessage(page, TRIGGER_PENDING);
+    await expect(page.getByTestId("message-assistant")).toBeVisible({ timeout: 20_000 });
+
+    const card = page.getByTestId("title-card").first();
+    const moreInfo = card.getByTestId("more-info-button");
+    await expect(moreInfo).toBeVisible({ timeout: 10_000 });
+
+    const href = await moreInfo.getAttribute("href");
+    expect(href).toContain("imdb.com/title/tt32140872");
+  });
+
+  test("shows More Info with TMDB direct page when overseerrId is present (no imdbId)", async ({ page }) => {
+    await page.goto("/chat");
+
+    await sendMessage(page, TRIGGER_UNAVAILABLE);
+    await expect(page.getByTestId("message-assistant")).toBeVisible({ timeout: 20_000 });
+
+    const card = page.getByTestId("title-card").first();
+    const moreInfo = card.getByTestId("more-info-button");
+    await expect(moreInfo).toBeVisible({ timeout: 10_000 });
+
+    const href = await moreInfo.getAttribute("href");
+    expect(href).toContain("themoviedb.org/movie/27205");
+  });
+});
+
+test.describe("Title card — overseerrMediaType inference", () => {
+  test("shows Request button when overseerrId present but overseerrMediaType omitted", async ({ page }) => {
+    await page.goto("/chat");
+
+    await sendMessage(page, TRIGGER_MISSING_MEDIA_TYPE);
+    await expect(page.getByTestId("message-assistant")).toBeVisible({ timeout: 20_000 });
+
+    const card = page.getByTestId("title-card").first();
+    await expect(card).toBeVisible({ timeout: 10_000 });
+    await expect(card).toContainText("Unknown Type Show");
+
+    // Request button must appear even though overseerrMediaType was not in the tool call
+    await expect(card.getByTestId("request-button")).toBeVisible();
+
+    // More Info should also be visible (TMDB link built from inferred overseerrMediaType)
+    const moreInfo = card.getByTestId("more-info-button");
+    await expect(moreInfo).toBeVisible();
+    const href = await moreInfo.getAttribute("href");
+    expect(href).toContain("themoviedb.org/tv/55555");
   });
 });
