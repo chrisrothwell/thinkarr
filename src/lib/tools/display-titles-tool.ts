@@ -194,7 +194,13 @@ For overseerr_list_requests results: one card per request is correct (no season 
         cast: t.cast ?? undefined,
         airDate: t.airDate ?? undefined,
         showTitle: t.showTitle ?? undefined,
-        seasonNumber: t.seasonNumber ?? undefined,
+        // If the LLM drops seasonNumber, recover it from the title string.
+        // The system prompt requires season cards to be titled "Show Name — Season N",
+        // so we can parse it back deterministically.
+        seasonNumber: t.seasonNumber ??
+          (/[—–-]\s*Season\s+(\d+)/i.exec(t.title)?.[1]
+            ? parseInt(/[—–-]\s*Season\s+(\d+)/i.exec(t.title)![1], 10)
+            : undefined),
         episodeNumber: t.episodeNumber ?? undefined,
         };
       });

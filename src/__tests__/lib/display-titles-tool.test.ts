@@ -399,3 +399,62 @@ describe("display_titles — issue #294: Overseerr thumbPath recovery when LLM o
     expect(displayTitles[0].thumbUrl).toBeUndefined();
   });
 });
+
+describe("display_titles — seasonNumber recovery from title", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  const noOpFetch = vi.fn().mockResolvedValue({
+    ok: true, json: async () => ({ MediaContainer: { machineIdentifier: "server1" } }),
+  });
+
+  it("recovers seasonNumber from 'Show — Season N' title when LLM omits it", async () => {
+    vi.doMock("@/lib/services/overseerr", () => ({ getDetails: vi.fn().mockResolvedValue({ thumbPath: undefined }) }));
+    vi.stubGlobal("fetch", noOpFetch);
+    const { registerDisplayTitlesTool } = await import("@/lib/tools/display-titles-tool");
+    const { executeTool } = await import("@/lib/tools/registry");
+    registerDisplayTitlesTool();
+
+    const raw = await executeTool("display_titles", JSON.stringify({
+      titles: [{ mediaType: "tv", title: "Breaking Bad — Season 3", mediaStatus: "not_requested", overseerrId: 1396 }],
+    }));
+    const { displayTitles } = JSON.parse(raw) as { displayTitles: Array<{ seasonNumber?: number }> };
+    expect(displayTitles[0].seasonNumber).toBe(3);
+  });
+
+  it("handles em-dash, en-dash, and hyphen variants in title", async () => {
+    vi.doMock("@/lib/services/overseerr", () => ({ getDetails: vi.fn().mockResolvedValue({ thumbPath: undefined }) }));
+    vi.stubGlobal("fetch", noOpFetch);
+    const { registerDisplayTitlesTool } = await import("@/lib/tools/display-titles-tool");
+    const { executeTool } = await import("@/lib/tools/registry");
+    registerDisplayTitlesTool();
+
+    for (const sep of ["—", "–", "-"]) {
+      vi.resetModules();
+      vi.doMock("@/lib/services/overseerr", () => ({ getDetails: vi.fn().mockResolvedValue({ thumbPath: undefined }) }));
+      const { registerDisplayTitlesTool: reg } = await import("@/lib/tools/display-titles-tool");
+      const { executeTool: exec } = await import("@/lib/tools/registry");
+      reg();
+      const raw = await exec("display_titles", JSON.stringify({
+        titles: [{ mediaType: "tv", title: `The Office ${sep} Season 2`, mediaStatus: "not_requested" }],
+      }));
+      const { displayTitles } = JSON.parse(raw) as { displayTitles: Array<{ seasonNumber?: number }> };
+      expect(displayTitles[0].seasonNumber).toBe(2);
+    }
+  });
+
+  it("does not override an explicitly provided seasonNumber", async () => {
+    vi.doMock("@/lib/services/overseerr", () => ({ getDetails: vi.fn().mockResolvedValue({ thumbPath: undefined }) }));
+    vi.stubGlobal("fetch", noOpFetch);
+    const { registerDisplayTitlesTool } = await import("@/lib/tools/display-titles-tool");
+    const { executeTool } = await import("@/lib/tools/registry");
+    registerDisplayTitlesTool();
+
+    const raw = await executeTool("display_titles", JSON.stringify({
+      titles: [{ mediaType: "tv", title: "Severance — Season 1", mediaStatus: "not_requested", seasonNumber: 1 }],
+    }));
+    const { displayTitles } = JSON.parse(raw) as { displayTitles: Array<{ seasonNumber?: number }> };
+    expect(displayTitles[0].seasonNumber).toBe(1);
+  });
+});
