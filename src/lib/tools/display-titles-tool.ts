@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { defineTool } from "./registry";
 import { buildThumbUrl, getPlexMachineId, searchLibrary, findShowPlexKey } from "@/lib/services/plex";
+import * as overseerr from "@/lib/services/overseerr";
 import { getConfig } from "@/lib/config";
 import type { DisplayTitle } from "@/types/titles";
 
@@ -128,18 +129,57 @@ For overseerr_list_requests results: one card per request is correct (no season 
         }
       }
 
-      const displayTitles: DisplayTitle[] = args.titles.map((t, i) => ({
+      // Issue #294: Gemini Flash Lite reliably drops thumbPath when calling display_titles
+      // even though it was present in the search results. Recover it from Overseerr
+      // using the same side-query pattern as the plexKey lookup above.
+      // Deduplicate by overseerrId so season cards for the same show fire one request.
+      const thumbPathOverrides = new Map<number, string>(); // index → thumbPath
+      {
+        const needsThumb = args.titles
+          .map((t, i) => ({ t, i }))
+          .filter(({ t }) => !t.thumbPath && t.overseerrId != null);
+
+        if (needsThumb.length > 0) {
+          // Group by overseerrId — multiple season cards share the same poster.
+          const byId = new Map<number, { indices: number[]; mediaType: "movie" | "tv" }>();
+          for (const { t, i } of needsThumb) {
+            const id = t.overseerrId!;
+            const mt = (t.overseerrMediaType ?? (t.mediaType === "movie" ? "movie" : "tv")) as "movie" | "tv";
+            const existing = byId.get(id);
+            if (existing) {
+              existing.indices.push(i);
+            } else {
+              byId.set(id, { indices: [i], mediaType: mt });
+            }
+          }
+
+          await Promise.all(
+            Array.from(byId.entries()).map(async ([id, { indices, mediaType }]) => {
+              try {
+                const detail = await overseerr.getDetails(id, mediaType);
+                if (detail.thumbPath) {
+                  for (const i of indices) thumbPathOverrides.set(i, detail.thumbPath);
+                }
+              } catch { /* non-fatal */ }
+            }),
+          );
+        }
+      }
+
+      const displayTitles: DisplayTitle[] = args.titles.map((t, i) => {
+        const effectiveThumbPath = t.thumbPath ?? thumbPathOverrides.get(i);
+        return {
         mediaType: t.mediaType,
         title: t.title,
         year: t.year ?? undefined,
         summary: t.summary ?? undefined,
         rating: t.rating ?? undefined,
-        thumbUrl: t.thumbPath
-          ? (t.thumbPath.startsWith("http")
+        thumbUrl: effectiveThumbPath
+          ? (effectiveThumbPath.startsWith("http")
               // Proxy external TMDB/HTTP thumbnails through our server so they load
               // as same-origin resources (prevents ad-blocker / cross-origin blocking).
-              ? `/api/tmdb/thumb?url=${encodeURIComponent(t.thumbPath)}`
-              : buildThumbUrl(t.thumbPath))
+              ? `/api/tmdb/thumb?url=${encodeURIComponent(effectiveThumbPath)}`
+              : buildThumbUrl(effectiveThumbPath))
           : undefined,
         plexKey: t.plexKey ?? plexKeyOverrides.get(i) ?? undefined,
         plexUrl: baseUrl,
@@ -156,7 +196,8 @@ For overseerr_list_requests results: one card per request is correct (no season 
         showTitle: t.showTitle ?? undefined,
         seasonNumber: t.seasonNumber ?? undefined,
         episodeNumber: t.episodeNumber ?? undefined,
-      }));
+        };
+      });
 
       return { displayTitles };
     },
