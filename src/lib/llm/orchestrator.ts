@@ -34,6 +34,7 @@ interface OrchestratorParams {
 type ChatMessage = OpenAI.ChatCompletionMessageParam;
 
 const MAX_TOOL_ROUNDS = 8;
+const MAX_EMPTY_RESPONSE_RETRIES = 2;
 
 /**
  * Retry an LLM API call on 429 rate-limit responses with exponential backoff.
@@ -478,130 +479,177 @@ export async function* orchestrate(
     let completionTokens: number | undefined;
     let totalTokens: number | undefined;
 
-    try {
-      const llmStart = Date.now();
-      const generation = trace?.generation({
-        name: `llm-round-${round}`,
-        model,
-        input: apiMessages,
-        startTime: new Date(llmStart),
-      }) ?? null;
-      const stream = await callWithRateLimitRetry(
-        () =>
-          client.chat.completions.create({
-            model,
-            messages: apiMessages,
-            stream: true,
-            stream_options: { include_usage: true },
-            ...(tools && tools.length > 0 ? { tools } : {}),
-          }),
-        conversationId,
-        round,
-      );
+    // Inner retry loop: some models (e.g. Gemini Flash) occasionally return
+    // 0 output tokens with no tool calls — an empty response that leaves the
+    // user staring at a spinner forever. Retry up to MAX_EMPTY_RESPONSE_RETRIES
+    // times before giving up and yielding an error.
+    for (let emptyRetry = 0; emptyRetry <= MAX_EMPTY_RESPONSE_RETRIES; emptyRetry++) {
+      if (emptyRetry > 0) {
+        // Reset accumulators for the retry attempt
+        fullContent = "";
+        toolCalls.length = 0;
+        llmDurationMs = undefined;
+        promptTokens = undefined;
+        completionTokens = undefined;
+        totalTokens = undefined;
+      }
 
-      // Accumulate streaming chunks
-      // Key by tool-call id rather than stream index. OpenAI uses distinct
-      // indices for parallel tool calls; Gemini sends all at index 0 with
-      // distinct ids. Keying by id handles both — indexToCurrentId maps an
-      // index to whichever id arrived most recently at that index, so
-      // continuation chunks (empty id) are associated correctly.
-      const toolCallDeltas: Map<string, { id: string; name: string; args: string }> = new Map();
-      const indexToCurrentId: Map<number, string> = new Map();
+      const roundLabel = emptyRetry === 0 ? `llm-round-${round}` : `llm-round-${round}-retry-${emptyRetry}`;
 
-      for await (const chunk of stream) {
-        // Token usage is sent in the final chunk
-        if (chunk.usage) {
-          promptTokens = chunk.usage.prompt_tokens;
-          completionTokens = chunk.usage.completion_tokens;
-          totalTokens = chunk.usage.total_tokens;
-        }
+      try {
+        const llmStart = Date.now();
+        const generation = trace?.generation({
+          name: roundLabel,
+          model,
+          input: apiMessages,
+          startTime: new Date(llmStart),
+        }) ?? null;
+        const stream = await callWithRateLimitRetry(
+          () =>
+            client.chat.completions.create({
+              model,
+              messages: apiMessages,
+              stream: true,
+              stream_options: { include_usage: true },
+              ...(tools && tools.length > 0 ? { tools } : {}),
+            }),
+          conversationId,
+          round,
+        );
 
-        const choice = chunk.choices[0];
-        if (!choice) continue;
+        // Accumulate streaming chunks
+        // Key by tool-call id rather than stream index. OpenAI uses distinct
+        // indices for parallel tool calls; Gemini sends all at index 0 with
+        // distinct ids. Keying by id handles both — indexToCurrentId maps an
+        // index to whichever id arrived most recently at that index, so
+        // continuation chunks (empty id) are associated correctly.
+        const toolCallDeltas: Map<string, { id: string; name: string; args: string }> = new Map();
+        const indexToCurrentId: Map<number, string> = new Map();
 
-        const delta = choice.delta;
+        for await (const chunk of stream) {
+          // Token usage is sent in the final chunk
+          if (chunk.usage) {
+            promptTokens = chunk.usage.prompt_tokens;
+            completionTokens = chunk.usage.completion_tokens;
+            totalTokens = chunk.usage.total_tokens;
+          }
 
-        // Text content — accumulate but do NOT yield yet.
-        // We defer yielding until after the full stream is consumed so we can
-        // tell whether the LLM also emitted tool calls in this same response.
-        // If it did, the text is a premature / speculative answer produced
-        // before the tools ran and should be suppressed entirely (the next LLM
-        // turn after seeing the tool results will produce the real answer).
-        if (delta?.content) {
-          fullContent += delta.content;
-        }
+          const choice = chunk.choices[0];
+          if (!choice) continue;
 
-        // Tool call deltas
-        if (delta?.tool_calls) {
-          for (const tc of delta.tool_calls) {
-            const idx = tc.index;
-            // A non-empty id signals the start of a new tool call at this index.
-            // Update the index→id mapping so subsequent continuation chunks
-            // (which arrive with an empty id) attach to the right entry.
-            if (tc.id) {
-              indexToCurrentId.set(idx, tc.id);
-              if (!toolCallDeltas.has(tc.id)) {
-                toolCallDeltas.set(tc.id, { id: tc.id, name: "", args: "" });
+          const delta = choice.delta;
+
+          // Text content — accumulate but do NOT yield yet.
+          // We defer yielding until after the full stream is consumed so we can
+          // tell whether the LLM also emitted tool calls in this same response.
+          // If it did, the text is a premature / speculative answer produced
+          // before the tools ran and should be suppressed entirely (the next LLM
+          // turn after seeing the tool results will produce the real answer).
+          if (delta?.content) {
+            fullContent += delta.content;
+          }
+
+          // Tool call deltas
+          if (delta?.tool_calls) {
+            for (const tc of delta.tool_calls) {
+              const idx = tc.index;
+              // A non-empty id signals the start of a new tool call at this index.
+              // Update the index→id mapping so subsequent continuation chunks
+              // (which arrive with an empty id) attach to the right entry.
+              if (tc.id) {
+                indexToCurrentId.set(idx, tc.id);
+                if (!toolCallDeltas.has(tc.id)) {
+                  toolCallDeltas.set(tc.id, { id: tc.id, name: "", args: "" });
+                }
               }
+              const currentId = indexToCurrentId.get(idx);
+              if (!currentId) continue;
+              const entry = toolCallDeltas.get(currentId)!;
+              if (tc.function?.name) entry.name += tc.function.name;
+              if (tc.function?.arguments) entry.args += tc.function.arguments;
             }
-            const currentId = indexToCurrentId.get(idx);
-            if (!currentId) continue;
-            const entry = toolCallDeltas.get(currentId)!;
-            if (tc.function?.name) entry.name += tc.function.name;
-            if (tc.function?.arguments) entry.args += tc.function.arguments;
           }
         }
-      }
 
-      llmDurationMs = Date.now() - llmStart;
+        llmDurationMs = Date.now() - llmStart;
 
-      // Close the Langfuse generation span with output and token usage
-      generation?.end({
-        output: fullContent || null,
-        usage: {
-          input: promptTokens,
-          output: completionTokens,
-          total: totalTokens,
-          unit: "TOKENS",
-        },
-      });
+        // Close the Langfuse generation span with output and token usage
+        generation?.end({
+          output: fullContent || null,
+          usage: {
+            input: promptTokens,
+            output: completionTokens,
+            total: totalTokens,
+            unit: "TOKENS",
+          },
+        });
 
-      // Collect completed tool calls, repairing Gemini's concatenation bug
-      // where two parallel calls are emitted as one (e.g. name =
-      // "sonarr_search_seriesplex_search_library"). trySplitConcatenatedCall
-      // detects this pattern and returns the two correct calls instead.
-      const registeredNames = getRegisteredToolNames();
-      for (const [, tc] of toolCallDeltas) {
-        if (tc.id && tc.name) {
-          const raw: RawToolCall = { id: tc.id, function: { name: tc.name, arguments: tc.args } };
-          const split = trySplitConcatenatedCall(raw, registeredNames);
-          if (split) {
-            logger.warn("Gemini concatenated tool calls detected, splitting", {
-              conversationId,
-              concatenated: tc.name,
-              into: split.map((s) => s.function.name),
-            });
-            toolCalls.push(...split);
-          } else {
-            toolCalls.push(raw);
+        // Collect completed tool calls, repairing Gemini's concatenation bug
+        // where two parallel calls are emitted as one (e.g. name =
+        // "sonarr_search_seriesplex_search_library"). trySplitConcatenatedCall
+        // detects this pattern and returns the two correct calls instead.
+        const registeredNames = getRegisteredToolNames();
+        for (const [, tc] of toolCallDeltas) {
+          if (tc.id && tc.name) {
+            const raw: RawToolCall = { id: tc.id, function: { name: tc.name, arguments: tc.args } };
+            const split = trySplitConcatenatedCall(raw, registeredNames);
+            if (split) {
+              logger.warn("Gemini concatenated tool calls detected, splitting", {
+                conversationId,
+                concatenated: tc.name,
+                into: split.map((s) => s.function.name),
+              });
+              toolCalls.push(...split);
+            } else {
+              toolCalls.push(raw);
+            }
           }
         }
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : "LLM request failed";
+        const errorCategory = /429|quota|rate.?limit/i.test(msg) ? "rate_limit"
+          : /401|403|unauthorized|forbidden/i.test(msg) ? "auth_error"
+          : "llm_error";
+        logger.error("LLM request failed", { conversationId, round, error: msg, errorCategory });
+        trace?.update({ output: `error: ${errorCategory}` });
+        flushLangfuse();
+        yield { type: "error", message: sanitizeLlmError(msg) };
+        return;
       }
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "LLM request failed";
-      const errorCategory = /429|quota|rate.?limit/i.test(msg) ? "rate_limit"
-        : /401|403|unauthorized|forbidden/i.test(msg) ? "auth_error"
-        : "llm_error";
-      logger.error("LLM request failed", { conversationId, round, error: msg, errorCategory });
-      trace?.update({ output: `error: ${errorCategory}` });
-      flushLangfuse();
-      yield { type: "error", message: sanitizeLlmError(msg) };
-      return;
+
+      // Detect empty response: 0 output tokens, no text, no tool calls.
+      // Some models (notably Gemini Flash variants) silently return nothing
+      // after tool calls. Retry before treating it as a final empty response.
+      const isEmpty = fullContent === "" && toolCalls.length === 0 && (completionTokens ?? 0) === 0;
+      if (isEmpty && emptyRetry < MAX_EMPTY_RESPONSE_RETRIES) {
+        logger.warn("LLM returned empty response, retrying", {
+          conversationId,
+          round,
+          emptyRetry: emptyRetry + 1,
+          model,
+        });
+        continue;
+      }
+      break; // got a real response (or exhausted retries)
     }
 
     // If no tool calls, this is the final assistant response — yield the
     // accumulated text now that we know no tool calls came in this round.
     if (toolCalls.length === 0) {
+      // If retries were exhausted and the response is still empty, surface an
+      // error rather than silently yielding nothing (which leaves the user
+      // staring at a blank message).
+      if (fullContent === "" && (completionTokens ?? 0) === 0) {
+        logger.error("LLM returned empty response after all retries", {
+          conversationId,
+          round,
+          model,
+        });
+        trace?.update({ output: "error: empty_response" });
+        flushLangfuse();
+        yield { type: "error", message: "The AI service encountered an error. Please try again." };
+        return;
+      }
       if (fullContent) {
         yield { type: "text_delta", content: fullContent };
       }
