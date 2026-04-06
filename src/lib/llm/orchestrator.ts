@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from "uuid";
 import { getLlmClient, getLlmModel, getLlmClientForEndpoint } from "./client";
 import { buildSystemPrompt } from "./system-prompt";
 import { getDb, schema } from "@/lib/db";
-import { eq, asc } from "drizzle-orm";
+import { eq, asc, inArray } from "drizzle-orm";
 import { initializeTools } from "@/lib/tools/init";
 import { getOpenAITools, executeTool, hasTools, getToolLlmContent, getRegisteredToolNames } from "@/lib/tools/registry";
 import { logger } from "@/lib/logger";
@@ -361,6 +361,15 @@ function saveMessage(
   return id;
 }
 
+/** Delete a set of messages by ID (used to clean up dangling tool-round messages on error). */
+function deleteMessages(messageIds: string[]): void {
+  if (messageIds.length === 0) return;
+  const db = getDb();
+  db.delete(schema.messages)
+    .where(inArray(schema.messages.id, messageIds))
+    .run();
+}
+
 type RawToolCall = { id: string; function: { name: string; arguments: string } };
 
 /**
@@ -471,6 +480,12 @@ export async function* orchestrate(
   });
 
   // 3. Tool call loop
+  // Tracks assistant + tool result message IDs saved in the previous round.
+  // If the next round exhausts all empty-response retries, these are deleted from
+  // the DB so the conversation history does not accumulate dangling
+  // assistant(tool_calls)+tool(result) sequences that confuse strict models (Gemini).
+  let lastRoundCleanupIds: string[] = [];
+
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     let fullContent = "";
     const toolCalls: { id: string; function: { name: string; arguments: string } }[] = [];
@@ -645,6 +660,20 @@ export async function* orchestrate(
           round,
           model,
         });
+        // Remove the assistant(tool_calls)+tool(result) messages saved in the
+        // previous round from the DB. Without this, each failed attempt leaves
+        // a dangling unclosed tool sequence in history. On subsequent requests
+        // those sequences accumulate and Gemini (which is stricter about
+        // conversation format than OpenAI) refuses to generate any output at all,
+        // breaking every follow-up request in the same conversation.
+        if (lastRoundCleanupIds.length > 0) {
+          deleteMessages(lastRoundCleanupIds);
+          logger.info("Cleaned up dangling tool-round messages after empty response", {
+            conversationId,
+            round,
+            deletedCount: lastRoundCleanupIds.length,
+          });
+        }
         trace?.update({ output: "error: empty_response" });
         flushLangfuse();
         yield { type: "error", message: "The AI service encountered an error. Please try again." };
@@ -685,9 +714,11 @@ export async function* orchestrate(
         function: tc.function,
       })),
     );
-    saveMessage(conversationId, "assistant", fullContent || null, {
+    const assistantMsgId = saveMessage(conversationId, "assistant", fullContent || null, {
       toolCalls: serializedToolCalls,
     });
+    // Begin tracking IDs for this round in case the next round exhausts retries
+    lastRoundCleanupIds = [assistantMsgId];
 
     // Add assistant message to conversation for next round
     apiMessages.push({
@@ -755,11 +786,12 @@ export async function* orchestrate(
     for (const { tc, result, isError, durationMs } of toolResults) {
       // Save tool result to DB (even on error — ensures the API message sequence stays valid)
       try {
-        saveMessage(conversationId, "tool", result, {
+        const toolMsgId = saveMessage(conversationId, "tool", result, {
           toolCallId: tc.id,
           toolName: tc.function.name,
           durationMs,
         });
+        lastRoundCleanupIds.push(toolMsgId);
         logger.info("Tool result saved", { conversationId, toolCallId: tc.id, toolName: tc.function.name, durationMs, isError });
       } catch (e: unknown) {
         logger.error("Failed to save tool result — conversation will be broken", {

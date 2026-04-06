@@ -502,6 +502,85 @@ describe("orchestrator — empty response retry", () => {
     const doneEvent = events.find((e) => e.type === "done");
     expect(doneEvent).toBeUndefined();
   });
+
+  it("deletes dangling assistant+tool messages when round-1 exhausts retries (issue #305)", async () => {
+    // Round 0 returns a tool call; round 1 always returns empty.
+    // The assistant(tool_calls) + tool(result) messages saved in round 0 must be
+    // deleted from the DB so they don't accumulate and corrupt subsequent requests.
+    let callCount = 0;
+    vi.doMock("@/lib/llm/client", () => ({
+      getLlmClient: () => ({
+        chat: {
+          completions: {
+            create: vi.fn(async () => {
+              callCount++;
+              if (callCount === 1) {
+                // Round 0: return a tool call
+                return (async function* () {
+                  yield {
+                    choices: [{
+                      delta: {
+                        tool_calls: [{ index: 0, id: "call_test_123", function: { name: "overseerr_search", arguments: '{"term":"The Testaments"}' } }],
+                      },
+                    }],
+                    usage: null,
+                  };
+                  yield {
+                    choices: [],
+                    usage: { prompt_tokens: 100, completion_tokens: 19, total_tokens: 119 },
+                  };
+                })();
+              }
+              // Round 1 (and all retries): always empty
+              return (async function* () {
+                yield { choices: [{ delta: {} }], usage: null };
+                yield {
+                  choices: [],
+                  usage: { prompt_tokens: 200, completion_tokens: 0, total_tokens: 200 },
+                };
+              })();
+            }),
+          },
+        },
+      }),
+      getLlmModel: () => "gemini-2.5-flash-lite",
+      getLlmClientForEndpoint: vi.fn(),
+    }));
+    vi.doMock("@/lib/tools/registry", () => ({
+      hasTools: () => true,
+      getOpenAITools: () => [{ type: "function", function: { name: "overseerr_search", description: "Search", parameters: {} } }],
+      executeTool: vi.fn(async () => JSON.stringify({ results: [{ title: "The Testaments", mediaStatus: "not_requested" }] })),
+      getToolLlmContent: (_name: string, result: string) => result,
+      getRegisteredToolNames: () => ["overseerr_search"],
+    }));
+
+    const userId = seedUser(testDb);
+    const conversationId = seedConversation(testDb, userId);
+
+    const { orchestrate } = await import("@/lib/llm/orchestrator");
+    const { eq: drizzleEq } = await import("drizzle-orm");
+    const events: { type: string; message?: string }[] = [];
+    for await (const event of orchestrate({ conversationId, userMessage: "Is the testaments requested?" })) {
+      events.push(event as { type: string; message?: string });
+    }
+
+    // Should yield an error
+    const errorEvent = events.find((e) => e.type === "error");
+    expect(errorEvent).toBeDefined();
+
+    // Only the user message should remain in DB — the dangling assistant+tool messages
+    // from round 0 must have been deleted so they don't corrupt subsequent requests.
+    const remaining = testDb
+      .select()
+      .from(schema.messages)
+      .where(drizzleEq(schema.messages.conversationId, conversationId))
+      .all();
+
+    const roles = remaining.map((m) => m.role);
+    expect(roles).toEqual(["user"]);
+    expect(remaining.filter((m) => m.role === "assistant" && m.toolCalls)).toHaveLength(0);
+    expect(remaining.filter((m) => m.role === "tool")).toHaveLength(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
