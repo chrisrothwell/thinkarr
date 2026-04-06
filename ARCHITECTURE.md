@@ -286,6 +286,12 @@ Manifest + service worker (network-first). Platform-aware install UI: Android na
 ### Conversation History Cap
 Last 20 messages sent to LLM. Prevents unbounded token growth on long conversations.
 
+### Gemini Empty Response Retry
+When `gemini-2.5-flash-lite` (and similar) returns 0 output tokens with no text and no tool calls after a tool result, the orchestrator retries the LLM call up to `MAX_EMPTY_RESPONSE_RETRIES` (2) times. If all retries are exhausted, the orchestrator yields `{ type: "error" }` rather than a silent empty done event (which left the user staring at a blank response). Each retry uses a distinct Langfuse generation span name (`llm-round-N-retry-M`) to preserve observability.
+
+### SSE Heartbeat Interval and Network Error Recovery
+The chat SSE heartbeat is sent every 5 seconds (down from 15 s) to reset reverse-proxy idle timeouts on long LLM responses. When the streaming connection drops mid-response (e.g. a 30+ second GPT-4.1 reply hitting a 30 s proxy timeout), the client `use-chat.ts` now suppresses the "Network error" toast and lets the post-stream reload recover the completed response silently. The error is only surfaced if the server-side reload also fails or returns no assistant content.
+
 ### Gemini Parallel Tool-Call Concatenation Repair
 Some Gemini variants (e.g. `gemini-2.5-flash-lite`) emit parallel tool calls as a single concatenated call: the tool name becomes two registered names joined (e.g. `sonarr_search_seriesplex_search_library`) and the arguments become two JSON objects concatenated (`{"term":"X"}{"query":"X"}`). `trySplitConcatenatedCall()` and `trySplitJsonArgs()` in `orchestrator.ts` detect this pattern and split it back into two valid calls before execution. The system prompt also includes an explicit instruction not to concatenate tool calls.
 
