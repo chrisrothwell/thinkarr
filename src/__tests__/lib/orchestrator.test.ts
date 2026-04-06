@@ -406,6 +406,105 @@ describe("orchestrator — LLM error sanitization", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Empty response retry tests (issues #301/#302 — Gemini Flash hang)
+// ---------------------------------------------------------------------------
+
+describe("orchestrator — empty response retry", () => {
+  it("retries and recovers when the LLM returns 0 tokens on the first attempt", async () => {
+    let callCount = 0;
+    vi.doMock("@/lib/llm/client", () => ({
+      getLlmClient: () => ({
+        chat: {
+          completions: {
+            create: vi.fn(async () => {
+              callCount++;
+              if (callCount === 1) {
+                // First call: simulate Gemini empty response (0 output tokens, no content)
+                return (async function* () {
+                  yield { choices: [{ delta: {} }], usage: null };
+                  yield {
+                    choices: [],
+                    usage: { prompt_tokens: 100, completion_tokens: 0, total_tokens: 100 },
+                  };
+                })();
+              }
+              // Second call: real response
+              return (async function* () {
+                yield { choices: [{ delta: { content: "The Testaments has not been requested yet." } }], usage: null };
+                yield {
+                  choices: [],
+                  usage: { prompt_tokens: 100, completion_tokens: 12, total_tokens: 112 },
+                };
+              })();
+            }),
+          },
+        },
+      }),
+      getLlmModel: () => "gemini-2.5-flash-lite",
+      getLlmClientForEndpoint: vi.fn(),
+    }));
+
+    const userId = seedUser(testDb);
+    const conversationId = seedConversation(testDb, userId);
+
+    const { orchestrate } = await import("@/lib/llm/orchestrator");
+    const events: { type: string; content?: string; message?: string }[] = [];
+    for await (const event of orchestrate({ conversationId, userMessage: "Is the testaments requested?" })) {
+      events.push(event as { type: string; content?: string; message?: string });
+    }
+
+    // Should have retried and yielded the real text response
+    expect(callCount).toBe(2);
+    const textEvent = events.find((e) => e.type === "text_delta");
+    expect(textEvent).toBeDefined();
+    expect(textEvent!.content).toMatch(/Testaments/);
+    const doneEvent = events.find((e) => e.type === "done");
+    expect(doneEvent).toBeDefined();
+    const errorEvents = events.filter((e) => e.type === "error");
+    expect(errorEvents).toHaveLength(0);
+  });
+
+  it("yields an error after all retries are exhausted with empty responses", async () => {
+    vi.doMock("@/lib/llm/client", () => ({
+      getLlmClient: () => ({
+        chat: {
+          completions: {
+            create: vi.fn(async () => {
+              // Always return empty
+              return (async function* () {
+                yield { choices: [{ delta: {} }], usage: null };
+                yield {
+                  choices: [],
+                  usage: { prompt_tokens: 100, completion_tokens: 0, total_tokens: 100 },
+                };
+              })();
+            }),
+          },
+        },
+      }),
+      getLlmModel: () => "gemini-2.5-flash-lite",
+      getLlmClientForEndpoint: vi.fn(),
+    }));
+
+    const userId = seedUser(testDb);
+    const conversationId = seedConversation(testDb, userId);
+
+    const { orchestrate } = await import("@/lib/llm/orchestrator");
+    const events: { type: string; message?: string }[] = [];
+    for await (const event of orchestrate({ conversationId, userMessage: "Hello" })) {
+      events.push(event as { type: string; message?: string });
+    }
+
+    // Should yield an error, not a silent empty done
+    const errorEvent = events.find((e) => e.type === "error");
+    expect(errorEvent).toBeDefined();
+    expect(errorEvent!.message).toBe("The AI service encountered an error. Please try again.");
+    const doneEvent = events.find((e) => e.type === "done");
+    expect(doneEvent).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // trimToolHistory — pure unit tests (no DB or LLM mock needed)
 // ---------------------------------------------------------------------------
 

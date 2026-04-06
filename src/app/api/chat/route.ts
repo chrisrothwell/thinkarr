@@ -113,11 +113,13 @@ export async function POST(request: Request) {
         }
       };
 
-      // Send an SSE comment every 15 seconds so the client stays connected
+      // Send an SSE comment every 5 seconds so the client stays connected
       // while the backend is waiting for the LLM or tool execution to finish.
+      // 5s is short enough to keep alive most reverse-proxy idle timeouts
+      // (e.g. Synology DSM default is 30 s) even on slow 30+ second responses.
       const heartbeat = setInterval(() => {
         enqueue(encoder.encode(": heartbeat\n\n"));
-      }, 15000);
+      }, 5000);
 
       try {
         for await (const event of orchestrate({
