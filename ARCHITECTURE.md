@@ -287,11 +287,15 @@ Manifest + service worker (network-first). Platform-aware install UI: Android na
 Last 20 messages sent to LLM. Prevents unbounded token growth on long conversations.
 
 ### Gemini Empty Response Retry + Dangling Message Cleanup
-When `gemini-2.5-flash-lite` (and similar) returns 0 output tokens with no text and no tool calls after a tool result, the orchestrator retries the LLM call up to `MAX_EMPTY_RESPONSE_RETRIES` (2) times. If all retries are exhausted, the orchestrator:
-1. Deletes the `assistant(tool_calls)` and `tool(result)` messages saved in the current round from the DB — without this, each failure leaves a dangling unclosed tool sequence in history; on subsequent requests these accumulate and Gemini (stricter about conversation format than OpenAI) refuses to generate output entirely, breaking every follow-up request in the same conversation.
-2. Yields `{ type: "error" }` rather than a silent empty done event.
+When `gemini-2.5-flash-lite` (and similar) returns 0 output tokens with no text and no tool calls after a tool result, the orchestrator retries the LLM call up to `MAX_EMPTY_RESPONSE_RETRIES` (2) times. If all retries are exhausted (or any other error fires), the orchestrator:
+1. Deletes **all tool-round messages** (`assistant(tool_calls)` + `tool(result)` from every round) from the DB — tracked in `toolRoundMessageIds`. Without this, each failure leaves dangling unclosed tool sequences in history; Gemini (stricter about conversation format than OpenAI) refuses to generate output on every subsequent request.
+2. **Keeps the user message** in the DB intentionally — the user genuinely typed and sent it; the UI shows it as "message sent, no reply came back", which is consistent with Langfuse traces.
+3. Yields `{ type: "error" }` rather than a silent empty done event.
 
-Each retry uses a distinct Langfuse generation span name (`llm-round-N-retry-M`) to preserve observability.
+### Ghost User Turn Collapse
+When a request fails after saving its user message but before saving any assistant response, the user message remains in the DB. If the user retries, `saveMessage()` saves another user message, producing consecutive user turns in history (`[user#1, user#2]`). Gemini's strict alternating-turn format then returns 0 output tokens on every retry, permanently breaking the conversation.
+
+`loadHistory()` detects consecutive user messages and skips the earlier "ghost" messages from the LLM context. Ghost messages remain in the DB for UI display but are never resent to the LLM — only the most recent user message in any consecutive run is included in the API call.
 
 ### SSE Heartbeat Interval and Network Error Recovery
 The chat SSE heartbeat is sent every 5 seconds (down from 15 s) to reset reverse-proxy idle timeouts on long LLM responses. When the streaming connection drops mid-response (e.g. a 30+ second GPT-4.1 reply hitting a 30 s proxy timeout), the client `use-chat.ts` now suppresses the "Network error" toast and lets the post-stream reload recover the completed response silently. The error is only surfaced if the server-side reload also fails or returns no assistant content.

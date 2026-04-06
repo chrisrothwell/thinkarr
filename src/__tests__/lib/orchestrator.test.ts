@@ -503,10 +503,12 @@ describe("orchestrator — empty response retry", () => {
     expect(doneEvent).toBeUndefined();
   });
 
-  it("deletes dangling assistant+tool messages when round-1 exhausts retries (issue #305)", async () => {
+  it("keeps user message but deletes tool-round messages when round-1 exhausts retries (issues #305, #308)", async () => {
     // Round 0 returns a tool call; round 1 always returns empty.
-    // The assistant(tool_calls) + tool(result) messages saved in round 0 must be
-    // deleted from the DB so they don't accumulate and corrupt subsequent requests.
+    // The tool-round messages (assistant(tool_calls) + tool results) must be deleted
+    // on error so they don't accumulate as dangling sequences. The user message is
+    // intentionally kept — it was a real request and the UI shows it as "sent, no reply".
+    // loadHistory collapses consecutive user messages so the ghost is never resent to LLM.
     let callCount = 0;
     vi.doMock("@/lib/llm/client", () => ({
       getLlmClient: () => ({
@@ -568,8 +570,8 @@ describe("orchestrator — empty response retry", () => {
     const errorEvent = events.find((e) => e.type === "error");
     expect(errorEvent).toBeDefined();
 
-    // Only the user message should remain in DB — the dangling assistant+tool messages
-    // from round 0 must have been deleted so they don't corrupt subsequent requests.
+    // User message must remain in DB (shown in UI as "sent, no reply").
+    // Tool-round messages (assistant + tool results) must be deleted.
     const remaining = testDb
       .select()
       .from(schema.messages)
@@ -578,8 +580,104 @@ describe("orchestrator — empty response retry", () => {
 
     const roles = remaining.map((m) => m.role);
     expect(roles).toEqual(["user"]);
-    expect(remaining.filter((m) => m.role === "assistant" && m.toolCalls)).toHaveLength(0);
+    expect(remaining.filter((m) => m.role === "assistant")).toHaveLength(0);
     expect(remaining.filter((m) => m.role === "tool")).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Ghost-user collapse — loadHistory skips consecutive user messages from prior
+// failed requests so the LLM never sees invalid consecutive user turns (#308)
+// ---------------------------------------------------------------------------
+
+describe("ghost user message collapse in loadHistory", () => {
+  let sqlite: import("better-sqlite3").Database;
+  let testDb: ReturnType<typeof drizzle>;
+
+  beforeEach(async () => {
+    const Database = (await import("better-sqlite3")).default;
+    sqlite = new Database(":memory:");
+    testDb = drizzle(sqlite);
+    migrate(testDb, { migrationsFolder: path.join(process.cwd(), "drizzle") });
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    sqlite.close();
+  });
+
+  it("skips ghost user message from failed prior request when next request is made", async () => {
+    // Simulate: first request failed (kept user#1 in DB, no assistant saved).
+    // Second request sends user#2. loadHistory must skip user#1 so LLM sees only [user#2].
+    vi.doMock("@/lib/db", () => ({ getDb: () => testDb, schema }));
+    vi.doMock("@/lib/config", () => ({
+      getConfig: vi.fn(() => null),
+      getRateLimit: vi.fn(() => ({ messages: 100, period: "day" })),
+    }));
+    vi.doMock("@/lib/llm/langfuse", () => ({
+      startTrace: () => null,
+      flushLangfuse: () => {},
+      isLangfuseEnabled: () => false,
+    }));
+    vi.doMock("@/lib/llm/client", () => ({
+      getLlmClient: () => ({
+        chat: {
+          completions: {
+            create: vi.fn(async (params: { messages: { role: string }[] }) => {
+              // Capture messages so test can assert on them
+              capturedMessages = params.messages;
+              return (async function* () {
+                yield { choices: [{ delta: { content: "The Testaments is pending." } }], usage: null };
+                yield { choices: [], usage: { prompt_tokens: 50, completion_tokens: 10, total_tokens: 60 } };
+              })();
+            }),
+          },
+        },
+      }),
+      getLlmModel: () => "gemini-2.5-flash-lite",
+      getLlmClientForEndpoint: vi.fn(),
+    }));
+    vi.doMock("@/lib/tools/registry", () => ({
+      hasTools: () => false,
+      getOpenAITools: () => [],
+      executeTool: vi.fn(),
+      getToolLlmContent: (_name: string, result: string) => result,
+      getRegisteredToolNames: () => [],
+    }));
+    vi.doMock("@/lib/tools/init", () => ({ initializeTools: vi.fn() }));
+    vi.doMock("@/lib/llm/system-prompt", () => ({ buildSystemPrompt: () => "You are helpful." }));
+
+    const userId = seedUser(testDb);
+    const conversationId = seedConversation(testDb, userId);
+
+    // Plant user#1 (ghost from a failed prior request) directly in DB
+    const { getDb } = await import("@/lib/db");
+    const db = getDb();
+    db.insert(schema.messages).values({
+      id: "ghost-user-msg-1",
+      conversationId,
+      role: "user",
+      content: "Is the testaments requested?",
+      toolCalls: null,
+      toolCallId: null,
+      toolName: null,
+      durationMs: null,
+    }).run();
+
+    // Second request (retry)
+    const { orchestrate } = await import("@/lib/llm/orchestrator");
+    const events: { type: string }[] = [];
+    for await (const event of orchestrate({ conversationId, userMessage: "Is the testaments requested?" })) {
+      events.push(event as { type: string });
+    }
+
+    // Must succeed (not error)
+    expect(events.find((e) => e.type === "done")).toBeDefined();
+    expect(events.find((e) => e.type === "error")).toBeUndefined();
+
+    // LLM must not have received consecutive user messages — only system + user#2
+    const userMsgs = capturedMessages.filter((m) => m.role === "user");
+    expect(userMsgs).toHaveLength(1);
   });
 });
 
