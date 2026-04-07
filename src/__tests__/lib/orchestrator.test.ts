@@ -591,21 +591,6 @@ describe("orchestrator — empty response retry", () => {
 // ---------------------------------------------------------------------------
 
 describe("ghost user message collapse in loadHistory", () => {
-  let sqlite: import("better-sqlite3").Database;
-  let testDb: ReturnType<typeof drizzle<typeof schema>>;
-
-  beforeEach(async () => {
-    const Database = (await import("better-sqlite3")).default;
-    sqlite = new Database(":memory:");
-    testDb = drizzle(sqlite, { schema });
-    migrate(testDb, { migrationsFolder: path.join(process.cwd(), "drizzle") });
-    vi.resetModules();
-  });
-
-  afterEach(() => {
-    sqlite.close();
-  });
-
   it("skips ghost user message from failed prior request when next request is made", async () => {
     // Simulate: first request failed (kept user#1 in DB, no assistant saved).
     // Second request sends user#2. loadHistory must skip user#1 so LLM sees only [user#2].
