@@ -592,12 +592,12 @@ describe("orchestrator — empty response retry", () => {
 
 describe("ghost user message collapse in loadHistory", () => {
   let sqlite: import("better-sqlite3").Database;
-  let testDb: ReturnType<typeof drizzle>;
+  let testDb: ReturnType<typeof drizzle<typeof schema>>;
 
   beforeEach(async () => {
     const Database = (await import("better-sqlite3")).default;
     sqlite = new Database(":memory:");
-    testDb = drizzle(sqlite);
+    testDb = drizzle(sqlite, { schema });
     migrate(testDb, { migrationsFolder: path.join(process.cwd(), "drizzle") });
     vi.resetModules();
   });
