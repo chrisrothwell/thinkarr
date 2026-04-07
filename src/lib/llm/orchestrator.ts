@@ -202,7 +202,29 @@ function loadHistory(conversationId: string): ChatMessage[] {
     }
   }
 
-  return capConversationHistory(trimToolHistory(repaired, conversationId), conversationId);
+  // Collapse consecutive user messages: if a user message is immediately followed
+  // by another user message with no assistant response in between, the earlier one
+  // is a "ghost" from a prior failed request (the request failed after saving its
+  // user message but before saving any assistant response). Skip it from the LLM
+  // context so the model never sees invalid consecutive user turns.
+  //
+  // The ghost message is intentionally kept in the DB — it represents a real
+  // request the user made and is shown in the UI as "sent, no reply received".
+  // Only the most recent user message in any consecutive run is sent to the LLM.
+  const withoutGhosts: ChatMessage[] = [];
+  for (let i = 0; i < repaired.length; i++) {
+    const msg = repaired[i];
+    const next = repaired[i + 1];
+    if (msg.role === "user" && next?.role === "user") {
+      logger.warn("Skipping ghost user message from prior failed request", {
+        conversationId,
+      });
+      continue;
+    }
+    withoutGhosts.push(msg);
+  }
+
+  return capConversationHistory(trimToolHistory(withoutGhosts, conversationId), conversationId);
 }
 
 export const MAX_TOOL_ROUNDS_IN_HISTORY = 5;
@@ -480,11 +502,17 @@ export async function* orchestrate(
   });
 
   // 3. Tool call loop
-  // Tracks assistant + tool result message IDs saved in the previous round.
-  // If the next round exhausts all empty-response retries, these are deleted from
-  // the DB so the conversation history does not accumulate dangling
-  // assistant(tool_calls)+tool(result) sequences that confuse strict models (Gemini).
-  let lastRoundCleanupIds: string[] = [];
+  // Tracks tool-round message IDs saved during this request (every assistant +
+  // tool result message). On any error return path these are deleted from the DB
+  // so the conversation history does not accumulate dangling assistant(tool_calls)
+  // + tool(result) sequences that break strict models like Gemini.
+  //
+  // The user message (userMessageId) is intentionally NOT deleted on error: the
+  // user genuinely typed and sent it, and keeping it in the DB lets the UI show
+  // "message sent, no reply" honestly. loadHistory collapses consecutive user
+  // messages (which arise when a prior request fails before saving any assistant
+  // response) so they are never resent to the LLM.
+  const toolRoundMessageIds: string[] = [];
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     let fullContent = "";
@@ -626,6 +654,7 @@ export async function* orchestrate(
           : /401|403|unauthorized|forbidden/i.test(msg) ? "auth_error"
           : "llm_error";
         logger.error("LLM request failed", { conversationId, round, error: msg, errorCategory });
+        deleteMessages(toolRoundMessageIds);
         trace?.update({ output: `error: ${errorCategory}` });
         flushLangfuse();
         yield { type: "error", message: sanitizeLlmError(msg) };
@@ -660,20 +689,19 @@ export async function* orchestrate(
           round,
           model,
         });
-        // Remove the assistant(tool_calls)+tool(result) messages saved in the
-        // previous round from the DB. Without this, each failed attempt leaves
-        // a dangling unclosed tool sequence in history. On subsequent requests
-        // those sequences accumulate and Gemini (which is stricter about
-        // conversation format than OpenAI) refuses to generate any output at all,
-        // breaking every follow-up request in the same conversation.
-        if (lastRoundCleanupIds.length > 0) {
-          deleteMessages(lastRoundCleanupIds);
-          logger.info("Cleaned up dangling tool-round messages after empty response", {
-            conversationId,
-            round,
-            deletedCount: lastRoundCleanupIds.length,
-          });
-        }
+        // Roll back all messages saved during this request (user message + every
+        // tool round's assistant and tool result messages). Without this, each
+        // failed attempt leaves a dangling user message and unclosed tool sequences
+        // in history. On the next retry saveMessage saves another user message,
+        // producing consecutive user turns ([user1, user2]) that confuse strict
+        // models like Gemini (which requires strictly alternating user/assistant
+        // turns) causing every subsequent request in the conversation to fail.
+        deleteMessages(toolRoundMessageIds);
+        logger.info("Deleted dangling tool-round messages after empty response", {
+          conversationId,
+          round,
+          deletedCount: toolRoundMessageIds.length,
+        });
         trace?.update({ output: "error: empty_response" });
         flushLangfuse();
         yield { type: "error", message: "The AI service encountered an error. Please try again." };
@@ -717,8 +745,7 @@ export async function* orchestrate(
     const assistantMsgId = saveMessage(conversationId, "assistant", fullContent || null, {
       toolCalls: serializedToolCalls,
     });
-    // Begin tracking IDs for this round in case the next round exhausts retries
-    lastRoundCleanupIds = [assistantMsgId];
+    toolRoundMessageIds.push(assistantMsgId);
 
     // Add assistant message to conversation for next round
     apiMessages.push({
@@ -791,7 +818,7 @@ export async function* orchestrate(
           toolName: tc.function.name,
           durationMs,
         });
-        lastRoundCleanupIds.push(toolMsgId);
+        toolRoundMessageIds.push(toolMsgId);
         logger.info("Tool result saved", { conversationId, toolCallId: tc.id, toolName: tc.function.name, durationMs, isError });
       } catch (e: unknown) {
         logger.error("Failed to save tool result — conversation will be broken", {
@@ -826,6 +853,7 @@ export async function* orchestrate(
   }
 
   // Safety: if we exhausted max rounds, yield what we have
+  deleteMessages(toolRoundMessageIds);
   trace?.update({ output: "error: tool call limit reached" });
   flushLangfuse();
   yield { type: "error", message: "Tool call limit reached" };
