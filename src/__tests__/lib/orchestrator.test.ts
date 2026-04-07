@@ -676,7 +676,7 @@ describe("ghost user message collapse in loadHistory", () => {
     expect(events.find((e) => e.type === "error")).toBeUndefined();
 
     // LLM must not have received consecutive user messages — only system + user#2
-    const userMsgs = capturedMessages.filter((m) => m.role === "user");
+    const userMsgs = (capturedMessages as { role: string }[]).filter((m) => m.role === "user");
     expect(userMsgs).toHaveLength(1);
   });
 });
