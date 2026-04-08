@@ -144,6 +144,12 @@ function loadHistory(conversationId: string): ChatMessage[] {
           // Skip malformed tool calls
         }
       }
+      // Skip assistant messages with neither content nor tool_calls — they are
+      // phantom records (e.g. the empty message saved after the display_titles
+      // empty-response special case). Sending { role: "assistant" } with no
+      // content and no tool_calls causes Gemini to return
+      // "400 Invalid value for 'content': expected a string, got null."
+      if (!msg.content && !msg.tool_calls?.length) continue;
       messages.push(msg);
     } else if (row.role === "tool") {
       if (row.toolCallId && row.content) {
@@ -769,16 +775,21 @@ export async function* orchestrate(
     });
     toolRoundMessageIds.push(assistantMsgId);
 
-    // Add assistant message to conversation for next round
-    apiMessages.push({
+    // Add assistant message to conversation for next round.
+    // Omit content when empty — some providers (e.g. Gemini) reject content:null
+    // in assistant messages that contain tool_calls, even though the OpenAI spec
+    // allows it. This matches the behaviour of loadHistory which only sets content
+    // when the value is truthy.
+    const assistantApiMsg: OpenAI.ChatCompletionAssistantMessageParam = {
       role: "assistant",
-      content: fullContent || null,
       tool_calls: toolCalls.map((tc) => ({
         id: tc.id,
         type: "function" as const,
         function: tc.function,
       })),
-    });
+    };
+    if (fullContent) assistantApiMsg.content = fullContent;
+    apiMessages.push(assistantApiMsg);
 
     // 4. Execute tool calls in parallel — multiple tool calls in a single round
     //    (e.g. 10 overseerr_get_details calls) run concurrently rather than

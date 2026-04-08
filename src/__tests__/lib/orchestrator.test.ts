@@ -674,6 +674,181 @@ describe("orchestrator — empty response retry", () => {
 }); // end "orchestrator — empty response retry"
 
 // ---------------------------------------------------------------------------
+// Tool-round message building — assistant messages sent to LLM after tool calls
+// ---------------------------------------------------------------------------
+
+describe("orchestrator — tool-round assistant message format (issue #328)", () => {
+  it("omits content from the assistant message when the tool call had no text (Gemini null-content fix)", async () => {
+    // Round 0: LLM emits a tool call with NO text content (fullContent === "").
+    // Round 1: LLM returns a plain text response after seeing the tool result.
+    // We capture the messages sent in round 1 and assert the assistant message
+    // from round 0 does NOT have content:null — Gemini rejects null content in
+    // assistant messages that contain tool_calls, causing an llm_error.
+    let capturedRound1Messages: unknown[] = [];
+    let callCount = 0;
+
+    vi.doMock("@/lib/db", () => ({ getDb: () => testDb, schema }));
+    vi.doMock("@/lib/config", () => ({
+      getConfig: vi.fn(() => null),
+      getRateLimit: vi.fn(() => ({ messages: 100, period: "day" })),
+    }));
+    vi.doMock("@/lib/llm/langfuse", () => ({
+      startTrace: () => null,
+      flushLangfuse: () => {},
+      isLangfuseEnabled: () => false,
+    }));
+    vi.doMock("@/lib/llm/client", () => ({
+      getLlmClient: () => ({
+        chat: {
+          completions: {
+            create: vi.fn(async (params: { messages: unknown[] }) => {
+              callCount++;
+              if (callCount === 2) {
+                capturedRound1Messages = params.messages;
+              }
+              if (callCount === 1) {
+                // Round 0: tool call only, no text
+                return (async function* () {
+                  yield {
+                    choices: [{
+                      delta: {
+                        tool_calls: [{ index: 0, id: "call_plex_123", function: { name: "plex_search_library", arguments: '{"query":"Malcolm in the Middle"}' } }],
+                      },
+                    }],
+                    usage: null,
+                  };
+                  yield { choices: [], usage: { prompt_tokens: 100, completion_tokens: 21, total_tokens: 121 } };
+                })();
+              }
+              // Round 1: plain text response
+              return (async function* () {
+                yield { choices: [{ delta: { content: "Malcolm in the Middle is not available." } }], usage: null };
+                yield { choices: [], usage: { prompt_tokens: 200, completion_tokens: 10, total_tokens: 210 } };
+              })();
+            }),
+          },
+        },
+      }),
+      getLlmModel: () => "gemini-3.1-flash-lite-preview",
+      getLlmClientForEndpoint: vi.fn(),
+    }));
+    vi.doMock("@/lib/tools/registry", () => ({
+      hasTools: () => true,
+      getOpenAITools: () => [{ type: "function", function: { name: "plex_search_library", description: "Search Plex", parameters: {} } }],
+      executeTool: vi.fn(async () => JSON.stringify({ results: [], hasMore: false })),
+      getToolLlmContent: (_name: string, result: string) => result,
+      getRegisteredToolNames: () => ["plex_search_library"],
+    }));
+    vi.doMock("@/lib/tools/init", () => ({ initializeTools: vi.fn() }));
+    vi.doMock("@/lib/llm/system-prompt", () => ({ buildSystemPrompt: () => "You are helpful." }));
+
+    const userId = seedUser(testDb);
+    const conversationId = seedConversation(testDb, userId);
+
+    const { orchestrate } = await import("@/lib/llm/orchestrator");
+    const events: { type: string; message?: string }[] = [];
+    for await (const event of orchestrate({ conversationId, userMessage: "Is Malcolm in the middle available?" })) {
+      events.push(event as { type: string; message?: string });
+    }
+
+    // Must complete without error
+    expect(events.find((e) => e.type === "error")).toBeUndefined();
+    expect(events.find((e) => e.type === "done")).toBeDefined();
+
+    // The assistant message from round 0 sent to round 1 must NOT have content:null.
+    // It should either be absent or be an empty string — never null.
+    const assistantMsg = (capturedRound1Messages as { role: string; content?: unknown; tool_calls?: unknown[] }[])
+      .find((m) => m.role === "assistant" && m.tool_calls != null);
+    expect(assistantMsg).toBeDefined();
+    expect(assistantMsg!.content).not.toBe(null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// loadHistory — skips phantom empty assistant messages (issue #328 follow-on)
+// ---------------------------------------------------------------------------
+
+describe("loadHistory — phantom empty assistant message suppression", () => {
+  it("skips an assistant message with no content and no tool_calls so Gemini does not get { role:'assistant' } with null content", async () => {
+    // Reproduces the round-0 failure pattern: a prior request ended with
+    // saveMessage(conversationId, "assistant", "") (display_titles empty-response
+    // special case). loadHistory must not send that phantom message to the LLM.
+    vi.doMock("@/lib/db", () => ({ getDb: () => testDb, schema }));
+    vi.doMock("@/lib/config", () => ({
+      getConfig: vi.fn(() => null),
+      getRateLimit: vi.fn(() => ({ messages: 100, period: "day" })),
+    }));
+    vi.doMock("@/lib/llm/langfuse", () => ({
+      startTrace: () => null,
+      flushLangfuse: () => {},
+      isLangfuseEnabled: () => false,
+    }));
+
+    let capturedMsgs: unknown[] = [];
+    vi.doMock("@/lib/llm/client", () => ({
+      getLlmClient: () => ({
+        chat: {
+          completions: {
+            create: vi.fn(async (params: { messages: unknown[] }) => {
+              capturedMsgs = params.messages;
+              return (async function* () {
+                yield { choices: [{ delta: { content: "Here are your results." } }], usage: null };
+                yield { choices: [], usage: { prompt_tokens: 50, completion_tokens: 8, total_tokens: 58 } };
+              })();
+            }),
+          },
+        },
+      }),
+      getLlmModel: () => "gemini-3.1-flash-lite-preview",
+      getLlmClientForEndpoint: vi.fn(),
+    }));
+    vi.doMock("@/lib/tools/registry", () => ({
+      hasTools: () => false,
+      getOpenAITools: () => [],
+      executeTool: vi.fn(),
+      getToolLlmContent: (_name: string, result: string) => result,
+      getRegisteredToolNames: () => [],
+    }));
+    vi.doMock("@/lib/tools/init", () => ({ initializeTools: vi.fn() }));
+    vi.doMock("@/lib/llm/system-prompt", () => ({ buildSystemPrompt: () => "You are helpful." }));
+
+    const userId = seedUser(testDb);
+    const conversationId = seedConversation(testDb, userId);
+
+    // Plant the prior exchange: user → assistant(tool_calls) → tool(result) → assistant("") phantom
+    const toolCallId = "call_display_phantom_1";
+    insertMessage(testDb, conversationId, "user", "What movies do you have?", { createdAtOffset: 0 });
+    insertMessage(testDb, conversationId, "assistant", null, {
+      toolCalls: JSON.stringify([{ id: toolCallId, type: "function", function: { name: "display_titles", arguments: "{}" } }]),
+      createdAtOffset: 100,
+    });
+    insertMessage(testDb, conversationId, "tool", JSON.stringify({ displayTitles: [] }), {
+      toolCallId,
+      toolName: "display_titles",
+      createdAtOffset: 200,
+    });
+    // Phantom empty assistant message saved by the display_titles empty-response special case
+    insertMessage(testDb, conversationId, "assistant", "", { createdAtOffset: 300 });
+
+    const { orchestrate } = await import("@/lib/llm/orchestrator");
+    const events: { type: string; message?: string }[] = [];
+    for await (const event of orchestrate({ conversationId, userMessage: "Which ones are new?" })) {
+      events.push(event as { type: string; message?: string });
+    }
+
+    // Must complete without error
+    expect(events.find((e) => e.type === "error")).toBeUndefined();
+    expect(events.find((e) => e.type === "done")).toBeDefined();
+
+    // The phantom { role:"assistant" } (no content, no tool_calls) must not appear
+    // in what was sent to the LLM — Gemini rejects it as content:null.
+    const phantomMsg = (capturedMsgs as { role: string; content?: unknown; tool_calls?: unknown[] }[])
+      .find((m) => m.role === "assistant" && !m.content && !m.tool_calls?.length);
+    expect(phantomMsg).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Ghost-user collapse — loadHistory skips consecutive user messages from prior
 // failed requests so the LLM never sees invalid consecutive user turns (#308)
 // ---------------------------------------------------------------------------
