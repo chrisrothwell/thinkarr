@@ -769,16 +769,21 @@ export async function* orchestrate(
     });
     toolRoundMessageIds.push(assistantMsgId);
 
-    // Add assistant message to conversation for next round
-    apiMessages.push({
+    // Add assistant message to conversation for next round.
+    // Omit content when empty — some providers (e.g. Gemini) reject content:null
+    // in assistant messages that contain tool_calls, even though the OpenAI spec
+    // allows it. This matches the behaviour of loadHistory which only sets content
+    // when the value is truthy.
+    const assistantApiMsg: OpenAI.ChatCompletionAssistantMessageParam = {
       role: "assistant",
-      content: fullContent || null,
       tool_calls: toolCalls.map((tc) => ({
         id: tc.id,
         type: "function" as const,
         function: tc.function,
       })),
-    });
+    };
+    if (fullContent) assistantApiMsg.content = fullContent;
+    apiMessages.push(assistantApiMsg);
 
     // 4. Execute tool calls in parallel — multiple tool calls in a single round
     //    (e.g. 10 overseerr_get_details calls) run concurrently rather than

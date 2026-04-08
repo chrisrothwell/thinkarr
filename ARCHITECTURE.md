@@ -294,6 +294,9 @@ When `gemini-2.5-flash-lite` (and similar) returns 0 output tokens with no text 
 
 **Exception — empty after `display_titles`:** If the previous round's tool calls were exclusively `display_titles`, a zero-token follow-up response is correct and expected (the card is the answer). In this case the orchestrator skips the error path and yields `{ type: "done" }` instead, keeping all tool-round messages in the DB. Tracked via `previousRoundToolNames` in the outer loop.
 
+### Gemini Null Content in Assistant Tool-Call Messages (issue #328)
+When the LLM emits a tool call with no accompanying text, `fullContent` is `""`. The orchestrator previously pushed `{ role: "assistant", content: null, tool_calls: [...] }` into `apiMessages` for the next round. Gemini's OpenAI-compatible API rejects `content: null` in assistant messages that contain `tool_calls`, returning an `llm_error` on round 1. The fix omits the `content` field entirely when `fullContent` is falsy, matching the behaviour of `loadHistory()` which only sets `content` when the stored value is truthy.
+
 ### Ghost User Turn Collapse
 When a request fails after saving its user message but before saving any assistant response, the user message remains in the DB. If the user retries, `saveMessage()` saves another user message, producing consecutive user turns in history (`[user#1, user#2]`). Gemini's strict alternating-turn format then returns 0 output tokens on every retry, permanently breaking the conversation.
 
