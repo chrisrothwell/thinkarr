@@ -35,9 +35,9 @@ vi.mock("@/lib/tools/init", () => ({ initializeTools: vi.fn() }));
 vi.mock("@/lib/tools/registry", () => ({
   hasTools: () => false,
   getOpenAITools: () => [],
-  executeTool: vi.fn(),
+  executeTool: vi.fn().mockResolvedValue(JSON.stringify({ displayTitles: [] })),
   getToolLlmContent: (_name: string, result: string) => result,
-  getRegisteredToolNames: () => [],
+  getRegisteredToolNames: () => ["display_titles"],
 }));
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -45,8 +45,13 @@ vi.mock("@/lib/logger", () => ({
 
 // ---------------------------------------------------------------------------
 // LLM client mock — captures messages sent to it
+// Supports a per-test response queue: push factory functions before calling
+// orchestrate() and the mock will consume them in order. Falls back to a
+// default text response when the queue is empty.
 // ---------------------------------------------------------------------------
 let capturedMessages: unknown[] = [];
+type AsyncGenFactory = () => AsyncGenerator<unknown, void, unknown>;
+let llmResponseQueue: AsyncGenFactory[] = [];
 
 vi.mock("@/lib/llm/client", () => ({
   getLlmClient: () => ({
@@ -54,7 +59,9 @@ vi.mock("@/lib/llm/client", () => ({
       completions: {
         create: vi.fn(async ({ messages }: { messages: unknown[] }) => {
           capturedMessages = messages;
-          // Return an async iterable that yields a single text chunk then usage
+          const factory = llmResponseQueue.shift();
+          if (factory) return factory();
+          // Default: return a plain text response
           return (async function* () {
             yield {
               choices: [{ delta: { content: "Here are the results." } }],
@@ -138,6 +145,7 @@ beforeEach(() => {
   testDb = drizzle(sqlite, { schema });
   migrate(testDb, { migrationsFolder: path.join(process.cwd(), "drizzle") });
   capturedMessages = [];
+  llmResponseQueue = [];
   vi.resetModules();
 });
 
@@ -583,7 +591,87 @@ describe("orchestrator — empty response retry", () => {
     expect(remaining.filter((m) => m.role === "assistant")).toHaveLength(0);
     expect(remaining.filter((m) => m.role === "tool")).toHaveLength(0);
   });
-});
+
+  it("yields done (not error) when LLM returns empty after an exclusive display_titles round (issue #324)", async () => {
+    // Round 0: LLM calls display_titles — the card is the response.
+    // Round 1 (and retries): LLM returns empty — this is correct; no text needed after a card.
+    // The orchestrator must treat this as a clean completion, not an error.
+    vi.doMock("@/lib/llm/client", () => ({
+      getLlmClient: () => ({
+        chat: {
+          completions: {
+            create: vi.fn(async () => {
+              // Consume from the outer llmResponseQueue (set by the test below)
+              const factory = llmResponseQueue.shift();
+              if (factory) return factory();
+              // Fallback empty response for unexpected extra calls
+              return (async function* () {
+                yield { choices: [{ delta: {} }], usage: { prompt_tokens: 50, completion_tokens: 0, total_tokens: 50 } };
+              })();
+            }),
+          },
+        },
+      }),
+      getLlmModel: () => "gemini-2.5-flash-lite",
+      getLlmClientForEndpoint: vi.fn(),
+    }));
+    vi.doMock("@/lib/tools/registry", () => ({
+      hasTools: () => true,
+      getOpenAITools: () => [{ type: "function", function: { name: "display_titles", description: "Show cards", parameters: {} } }],
+      executeTool: vi.fn(async () => JSON.stringify({ displayTitles: [{ title: "Song to Song", mediaStatus: "available" }] })),
+      getToolLlmContent: (_name: string, result: string) => result,
+      getRegisteredToolNames: () => ["display_titles"],
+    }));
+
+    // Round 0: display_titles tool call
+    llmResponseQueue.push(async function* () {
+      yield {
+        choices: [{
+          delta: {
+            tool_calls: [{ index: 0, id: "call_display_123", function: { name: "display_titles", arguments: '{"titles":[{"title":"Song to Song","mediaType":"movie","mediaStatus":"available"}]}' } }],
+          },
+        }],
+        usage: null,
+      };
+      yield { choices: [], usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 } };
+    });
+    // Round 1 (and retries): always empty — model has nothing to add after showing the card
+    const emptyResponse: AsyncGenFactory = async function* () {
+      yield { choices: [{ delta: {} }], usage: { prompt_tokens: 200, completion_tokens: 0, total_tokens: 200 } };
+    };
+    llmResponseQueue.push(emptyResponse, emptyResponse, emptyResponse); // cover all retries
+
+    const userId = seedUser(testDb);
+    const conversationId = seedConversation(testDb, userId);
+
+    const { orchestrate } = await import("@/lib/llm/orchestrator");
+    const { eq: drizzleEq } = await import("drizzle-orm");
+    const events: { type: string; message?: string }[] = [];
+    for await (const event of orchestrate({ conversationId, userMessage: "Render a title card?" })) {
+      events.push(event as { type: string; message?: string });
+    }
+
+    // Must complete without error
+    const errorEvents = events.filter((e) => e.type === "error");
+    expect(errorEvents).toHaveLength(0);
+
+    const doneEvent = events.find((e) => e.type === "done");
+    expect(doneEvent).toBeDefined();
+
+    // Tool-round messages (the display_titles call + result) must be kept in DB
+    const remaining = testDb
+      .select()
+      .from(schema.messages)
+      .where(drizzleEq(schema.messages.conversationId, conversationId))
+      .all();
+
+    const roles = remaining.map((m) => m.role);
+    // user + assistant(tool_calls) + tool(display_titles result) + assistant(empty follow-up)
+    expect(roles).toContain("user");
+    expect(remaining.filter((m) => m.role === "assistant")).toHaveLength(2);
+    expect(remaining.filter((m) => m.role === "tool")).toHaveLength(1);
+  });
+}); // end "orchestrator — empty response retry"
 
 // ---------------------------------------------------------------------------
 // Ghost-user collapse — loadHistory skips consecutive user messages from prior

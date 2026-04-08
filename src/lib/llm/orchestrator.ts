@@ -514,6 +514,11 @@ export async function* orchestrate(
   // response) so they are never resent to the LLM.
   const toolRoundMessageIds: string[] = [];
 
+  // Track the tool names executed in the previous round. When the model calls
+  // display_titles and then returns an empty response in the next round, that is
+  // correct behaviour (the card is the answer) — not an error to surface.
+  let previousRoundToolNames: string[] = [];
+
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     let fullContent = "";
     const toolCalls: { id: string; function: { name: string; arguments: string } }[] = [];
@@ -684,6 +689,23 @@ export async function* orchestrate(
       // error rather than silently yielding nothing (which leaves the user
       // staring at a blank message).
       if (fullContent === "" && (completionTokens ?? 0) === 0) {
+        // Special case: if the previous round exclusively called display_titles,
+        // an empty follow-up is correct — the card is the answer and the model
+        // has nothing more to say. Treat this as a clean completion.
+        if (
+          previousRoundToolNames.length > 0 &&
+          previousRoundToolNames.every((n) => n === "display_titles")
+        ) {
+          const messageId = saveMessage(conversationId, "assistant", "");
+          logger.info("Empty response after display_titles — treating as done", {
+            conversationId,
+            round,
+          });
+          trace?.update({ output: "" });
+          flushLangfuse();
+          yield { type: "done", messageId, llmDurationMs, promptTokens, completionTokens, totalTokens };
+          return;
+        }
         logger.error("LLM returned empty response after all retries", {
           conversationId,
           round,
@@ -848,6 +870,10 @@ export async function* orchestrate(
         error: isError,
       };
     }
+
+    // Record this round's tool names so the next round can detect the
+    // "empty after display_titles" case (see empty response handler above).
+    previousRoundToolNames = toolCalls.map((tc) => tc.function.name);
 
     // Loop continues — LLM will see tool results and either respond or call more tools
   }
