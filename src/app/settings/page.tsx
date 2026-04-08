@@ -1640,7 +1640,18 @@ export default function SettingsPage() {
             {/* Langfuse observability */}
             <Card>
               <CardHeader>
-                <CardTitle className="text-lg">Langfuse Observability</CardTitle>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-lg">Langfuse Observability</CardTitle>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    title="Copy as environment variables"
+                    disabled={!langfuseConfig.publicKey && !langfuseConfig.secretKey}
+                    onClick={() => copyToClipboard(`LANGFUSE_PUBLIC_KEY=${langfuseConfig.publicKey}\nLANGFUSE_SECRET_KEY=${langfuseConfig.secretKey}`)}
+                  >
+                    <Copy size={14} />
+                  </Button>
+                </div>
                 <CardDescription>
                   Connect to{" "}
                   <a
