@@ -292,6 +292,15 @@ When `gemini-2.5-flash-lite` (and similar) returns 0 output tokens with no text 
 2. **Keeps the user message** in the DB intentionally — the user genuinely typed and sent it; the UI shows it as "message sent, no reply came back", which is consistent with Langfuse traces.
 3. Yields `{ type: "error" }` rather than a silent empty done event.
 
+**Exception — empty after `display_titles`:** If the previous round's tool calls were exclusively `display_titles`, a zero-token follow-up response is correct and expected (the card is the answer). In this case the orchestrator skips the error path and yields `{ type: "done" }` instead, keeping all tool-round messages in the DB. Tracked via `previousRoundToolNames` in the outer loop.
+
+### Gemini Null Content in Assistant Tool-Call Messages (issue #328)
+Two related Gemini null-content bugs were fixed together:
+
+**Round 1 (live path):** When the LLM emits a tool call with no accompanying text, `fullContent` is `""`. The orchestrator previously pushed `{ role: "assistant", content: null, tool_calls: [...] }` into `apiMessages` for the next round. Gemini's OpenAI-compatible API rejects `content: null` in assistant messages that contain `tool_calls`, returning an `llm_error` on round 1. The fix omits the `content` field entirely when `fullContent` is falsy, matching the behaviour of `loadHistory()`.
+
+**Round 0 (history path):** The display_titles empty-response special case saves `saveMessage(conversationId, "assistant", "")` — an assistant record with empty string content and no tool_calls. When `loadHistory()` loads it, `if (row.content)` is false for `""` so neither `content` nor `tool_calls` is set, producing `{ role: "assistant" }`. Gemini rejects this phantom message as `"400 Invalid value for 'content': expected a string, got null."` on the *next* conversation request (round 0). The fix skips assistant messages with neither content nor tool_calls in `loadHistory()`.
+
 ### Ghost User Turn Collapse
 When a request fails after saving its user message but before saving any assistant response, the user message remains in the DB. If the user retries, `saveMessage()` saves another user message, producing consecutive user turns in history (`[user#1, user#2]`). Gemini's strict alternating-turn format then returns 0 output tokens on every retry, permanently breaking the conversation.
 

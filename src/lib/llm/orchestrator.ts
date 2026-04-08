@@ -144,6 +144,12 @@ function loadHistory(conversationId: string): ChatMessage[] {
           // Skip malformed tool calls
         }
       }
+      // Skip assistant messages with neither content nor tool_calls — they are
+      // phantom records (e.g. the empty message saved after the display_titles
+      // empty-response special case). Sending { role: "assistant" } with no
+      // content and no tool_calls causes Gemini to return
+      // "400 Invalid value for 'content': expected a string, got null."
+      if (!msg.content && !msg.tool_calls?.length) continue;
       messages.push(msg);
     } else if (row.role === "tool") {
       if (row.toolCallId && row.content) {
@@ -514,6 +520,11 @@ export async function* orchestrate(
   // response) so they are never resent to the LLM.
   const toolRoundMessageIds: string[] = [];
 
+  // Track the tool names executed in the previous round. When the model calls
+  // display_titles and then returns an empty response in the next round, that is
+  // correct behaviour (the card is the answer) — not an error to surface.
+  let previousRoundToolNames: string[] = [];
+
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     let fullContent = "";
     const toolCalls: { id: string; function: { name: string; arguments: string } }[] = [];
@@ -684,6 +695,23 @@ export async function* orchestrate(
       // error rather than silently yielding nothing (which leaves the user
       // staring at a blank message).
       if (fullContent === "" && (completionTokens ?? 0) === 0) {
+        // Special case: if the previous round exclusively called display_titles,
+        // an empty follow-up is correct — the card is the answer and the model
+        // has nothing more to say. Treat this as a clean completion.
+        if (
+          previousRoundToolNames.length > 0 &&
+          previousRoundToolNames.every((n) => n === "display_titles")
+        ) {
+          const messageId = saveMessage(conversationId, "assistant", "");
+          logger.info("Empty response after display_titles — treating as done", {
+            conversationId,
+            round,
+          });
+          trace?.update({ output: "" });
+          flushLangfuse();
+          yield { type: "done", messageId, llmDurationMs, promptTokens, completionTokens, totalTokens };
+          return;
+        }
         logger.error("LLM returned empty response after all retries", {
           conversationId,
           round,
@@ -747,16 +775,21 @@ export async function* orchestrate(
     });
     toolRoundMessageIds.push(assistantMsgId);
 
-    // Add assistant message to conversation for next round
-    apiMessages.push({
+    // Add assistant message to conversation for next round.
+    // Omit content when empty — some providers (e.g. Gemini) reject content:null
+    // in assistant messages that contain tool_calls, even though the OpenAI spec
+    // allows it. This matches the behaviour of loadHistory which only sets content
+    // when the value is truthy.
+    const assistantApiMsg: OpenAI.ChatCompletionAssistantMessageParam = {
       role: "assistant",
-      content: fullContent || null,
       tool_calls: toolCalls.map((tc) => ({
         id: tc.id,
         type: "function" as const,
         function: tc.function,
       })),
-    });
+    };
+    if (fullContent) assistantApiMsg.content = fullContent;
+    apiMessages.push(assistantApiMsg);
 
     // 4. Execute tool calls in parallel — multiple tool calls in a single round
     //    (e.g. 10 overseerr_get_details calls) run concurrently rather than
@@ -848,6 +881,10 @@ export async function* orchestrate(
         error: isError,
       };
     }
+
+    // Record this round's tool names so the next round can detect the
+    // "empty after display_titles" case (see empty response handler above).
+    previousRoundToolNames = toolCalls.map((tc) => tc.function.name);
 
     // Loop continues — LLM will see tool results and either respond or call more tools
   }
