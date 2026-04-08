@@ -144,6 +144,12 @@ function loadHistory(conversationId: string): ChatMessage[] {
           // Skip malformed tool calls
         }
       }
+      // Skip assistant messages with neither content nor tool_calls — they are
+      // phantom records (e.g. the empty message saved after the display_titles
+      // empty-response special case). Sending { role: "assistant" } with no
+      // content and no tool_calls causes Gemini to return
+      // "400 Invalid value for 'content': expected a string, got null."
+      if (!msg.content && !msg.tool_calls?.length) continue;
       messages.push(msg);
     } else if (row.role === "tool") {
       if (row.toolCallId && row.content) {
