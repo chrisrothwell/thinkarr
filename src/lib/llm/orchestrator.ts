@@ -15,7 +15,7 @@ import type {
   ErrorEvent,
   DoneEvent,
 } from "@/types/chat";
-import type OpenAI from "openai";
+import OpenAI from "openai";
 
 export type OrchestratorEvent =
   | TextDeltaEvent
@@ -664,7 +664,22 @@ export async function* orchestrate(
         const errorCategory = /429|quota|rate.?limit/i.test(msg) ? "rate_limit"
           : /401|403|unauthorized|forbidden/i.test(msg) ? "auth_error"
           : "llm_error";
-        logger.error("LLM request failed", { conversationId, round, error: msg, errorCategory });
+        // Log richer details when the SDK gives us an APIError (status, code, body).
+        // "400 status code (no body)" errors from preview/experimental models often
+        // carry no body, so status+code alone help narrow down the failure.
+        const apiErr = e instanceof OpenAI.APIError ? e : null;
+        logger.error("LLM request failed", {
+          conversationId,
+          round,
+          error: msg,
+          errorCategory,
+          ...(apiErr && {
+            status: apiErr.status,
+            errorCode: apiErr.code,
+            errorType: apiErr.type,
+            errorBody: apiErr.error,
+          }),
+        });
         deleteMessages(toolRoundMessageIds);
         trace?.update({ output: `error: ${errorCategory}` });
         flushLangfuse();
