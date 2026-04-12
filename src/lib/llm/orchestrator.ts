@@ -146,10 +146,12 @@ function loadHistory(conversationId: string): ChatMessage[] {
       }
       // Skip assistant messages with neither content nor tool_calls — they are
       // phantom records (e.g. the empty message saved after the display_titles
-      // empty-response special case). Sending { role: "assistant" } with no
-      // content and no tool_calls causes Gemini to return
-      // "400 Invalid value for 'content': expected a string, got null."
+      // empty-response special case).
       if (!msg.content && !msg.tool_calls?.length) continue;
+      // Ensure assistant messages with tool_calls always carry an explicit content
+      // field (empty string when no text). gemini-3.1-flash-lite-preview returns
+      // HTTP 400 at round 1 when the field is absent entirely.
+      if (!msg.content && msg.tool_calls?.length) msg.content = "";
       messages.push(msg);
     } else if (row.role === "tool") {
       if (row.toolCallId && row.content) {
@@ -791,19 +793,19 @@ export async function* orchestrate(
     toolRoundMessageIds.push(assistantMsgId);
 
     // Add assistant message to conversation for next round.
-    // Omit content when empty — some providers (e.g. Gemini) reject content:null
-    // in assistant messages that contain tool_calls, even though the OpenAI spec
-    // allows it. This matches the behaviour of loadHistory which only sets content
-    // when the value is truthy.
+    // Always include content (empty string when no text) — some providers
+    // (e.g. gemini-3.1-flash-lite-preview) return HTTP 400 at round 1 when the
+    // assistant message that introduced the tool call omits the content field
+    // entirely. An explicit empty string is accepted by all known providers.
     const assistantApiMsg: OpenAI.ChatCompletionAssistantMessageParam = {
       role: "assistant",
+      content: fullContent || "",
       tool_calls: toolCalls.map((tc) => ({
         id: tc.id,
         type: "function" as const,
         function: tc.function,
       })),
     };
-    if (fullContent) assistantApiMsg.content = fullContent;
     apiMessages.push(assistantApiMsg);
 
     // 4. Execute tool calls in parallel — multiple tool calls in a single round

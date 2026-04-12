@@ -755,12 +755,13 @@ describe("orchestrator — tool-round assistant message format (issue #328)", ()
     expect(events.find((e) => e.type === "error")).toBeUndefined();
     expect(events.find((e) => e.type === "done")).toBeDefined();
 
-    // The assistant message from round 0 sent to round 1 must NOT have content:null.
-    // It should either be absent or be an empty string — never null.
+    // The assistant message from round 0 sent to round 1 must carry content: ""
+    // (explicit empty string). gemini-3.1-flash-lite-preview returns HTTP 400 at
+    // round 1 when the content field is absent entirely (issue #337).
     const assistantMsg = (capturedRound1Messages as { role: string; content?: unknown; tool_calls?: unknown[] }[])
       .find((m) => m.role === "assistant" && m.tool_calls != null);
     expect(assistantMsg).toBeDefined();
-    expect(assistantMsg!.content).not.toBe(null);
+    expect(assistantMsg!.content).toBe("");
   });
 });
 
@@ -845,6 +846,13 @@ describe("loadHistory — phantom empty assistant message suppression", () => {
     const phantomMsg = (capturedMsgs as { role: string; content?: unknown; tool_calls?: unknown[] }[])
       .find((m) => m.role === "assistant" && !m.content && !m.tool_calls?.length);
     expect(phantomMsg).toBeUndefined();
+
+    // The display_titles assistant message (with tool_calls) must carry content: ""
+    // — gemini-3.1-flash-lite-preview returns HTTP 400 when the field is absent (issue #337).
+    const toolCallMsg = (capturedMsgs as { role: string; content?: unknown; tool_calls?: unknown[] }[])
+      .find((m) => m.role === "assistant" && m.tool_calls?.length);
+    expect(toolCallMsg).toBeDefined();
+    expect(toolCallMsg!.content).toBe("");
   });
 });
 
