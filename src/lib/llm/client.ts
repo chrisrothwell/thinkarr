@@ -3,17 +3,26 @@ import { getConfig } from "@/lib/config";
 import { logger } from "@/lib/logger";
 
 /**
- * Wraps globalThis.fetch to capture and log the raw response body on any
- * non-2xx response before the OpenAI SDK reads it. The SDK surfaces structured
- * APIErrors but discards the raw body when it cannot be parsed — producing
- * messages like "400 status code (no body)" with no further detail. This
- * wrapper preserves the body so failures are diagnosable regardless of model.
+ * Wraps globalThis.fetch to log full details of any LLM API failure before
+ * the OpenAI SDK processes the response. Covers two failure modes:
  *
- * Logging is fire-and-forget (no await) so it never delays the response or
- * interferes with the SDK's own body read.
+ * 1. Non-2xx HTTP responses — clones the response and logs the raw body
+ *    fire-and-forget. The SDK often discards the body on parse failure
+ *    (e.g. "400 status code (no body)"), so the clone captures it first.
+ *
+ * 2. Network-level errors (fetch throws) — DNS failures, connection refused,
+ *    timeouts, etc. Logged then re-thrown so the SDK error path is unchanged.
  */
 async function loggingFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  const response = await globalThis.fetch(input, init);
+  let response: Response;
+  try {
+    response = await globalThis.fetch(input, init);
+  } catch (err) {
+    logger.error("LLM API network error", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
   if (!response.ok) {
     response
       .clone()
