@@ -277,6 +277,8 @@ Opt-in tracing via `LANGFUSE_SECRET_KEY` + `LANGFUSE_PUBLIC_KEY` env vars, or vi
 ### Logging
 Winston singleton: Console (stdout, JSON) + DailyRotateFile (`/config/logs/`, 14-day retention, 20 MB max). Tool calls and API responses logged with truncation. Settings Logs tab provides file browser, 500-line viewer, and download.
 
+All `OpenAI` client instances (default and per-endpoint) use a `loggingFetch` wrapper (`src/lib/llm/client.ts`) that clones and logs the raw response body of any non-2xx HTTP response before the SDK reads it. The SDK often discards the body on parse failure (e.g. "400 status code (no body)"), so the wrapper ensures the raw body is always captured in logs regardless of model or provider.
+
 ### Chat Mode Toggle
 Three modes: text (default), voice (Whisper STT + TTS read-back), realtime (WebRTC full-duplex). Availability tied to endpoint capabilities. Mode resets to text on model switch if capability unavailable.
 
