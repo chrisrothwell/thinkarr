@@ -16,9 +16,22 @@ const STATUS_STYLES: Record<string, { label: string; className: string }> = {
   not_requested: { label: "Not Requested", className: "bg-muted text-muted-foreground border border-border" },
 };
 
+function requestedStorageKey(overseerrId: number, mediaType: string, seasonNumber?: number | null): string {
+  const base = `thinkarr:requested:${mediaType}:${overseerrId}`;
+  return seasonNumber != null ? `${base}:s${seasonNumber}` : base;
+}
+
 export function TitleCard({ title }: TitleCardProps) {
   const [requesting, setRequesting] = useState(false);
-  const [requestStatus, setRequestStatus] = useState<"idle" | "success" | "error">("idle");
+  const storageKey = title.overseerrId != null && title.overseerrMediaType
+    ? requestedStorageKey(title.overseerrId, title.overseerrMediaType, title.seasonNumber)
+    : null;
+  const [requestStatus, setRequestStatus] = useState<"idle" | "success" | "error">(() => {
+    if (storageKey && typeof localStorage !== "undefined") {
+      try { return localStorage.getItem(storageKey) === "1" ? "success" : "idle"; } catch { /* ignore */ }
+    }
+    return "idle";
+  });
   const [errorMsg, setErrorMsg] = useState("");
 
   const status = STATUS_STYLES[title.mediaStatus] ?? STATUS_STYLES.not_requested;
@@ -61,6 +74,9 @@ export function TitleCard({ title }: TitleCardProps) {
       });
       const data = await res.json();
       if (data.success) {
+        if (storageKey) {
+          try { localStorage.setItem(storageKey, "1"); } catch { /* ignore */ }
+        }
         setRequestStatus("success");
       } else {
         setErrorMsg(data.error ?? "Request failed");
