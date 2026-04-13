@@ -269,7 +269,9 @@ Realtime (WebRTC) is restricted to `api.openai.com` only. `probeRealtimeSupport(
 ### Title Card Display System
 `display_titles` tool accepts 1–10 titles with rich metadata. Server resolves `thumbUrl` (Plex proxy + token) and `plexMachineId` (Watch Now universal link). Renders as both a collapsible tool call panel and a full-width TitleCarousel below the message. LLM always calls `display_titles` after searches.
 
-**More Info button fallback:** `TitleCard` builds the More Info href in priority order: IMDb (if `imdbId` is set) → TMDB direct page (if `overseerrId` is set) → Google search (final fallback for Plex-only titles with no external IDs). For TV shows/episodes in the Google fallback, the query uses `showTitle` instead of the full `"Show — Season N"` title string to keep the search clean.
+**More Info button:** `TitleCard` builds the More Info href in priority order: IMDb (if `imdbId` is set) → TMDB direct page (if `overseerrId` is set) → Google search (final fallback for Plex-only titles with no external IDs). For TV shows/episodes in the Google fallback, the query uses `showTitle` instead of the full `"Show — Season N"` title string.
+
+**imdbId resolution:** `mapMetadata()` in `plex.ts` extracts `imdbId` from the Plex `Guid` array (`"imdb://tt..."` entries) so it flows through tool results. `display-titles-tool.ts` adds an `imdbId` side-query (same non-fatal pattern as `thumbPathOverrides`): for available/partial titles with a `plexKey` but no `imdbId`, it calls `getImdbIdFromPlexKey()` which fetches the Plex metadata and follows `parentKey` to the show for season cards (Guid lives on the show, not the season). Deduplicated by normalized `plexKey` so season cards for the same show fire one set of fetches.
 
 The `year` field is typed as `number` throughout (`OverseerrSearchResult`, `OverseerrDetails`, `OverseerrRequest`, `OverseerrDiscoverResult`). The `yearFromDate()` helper in `overseerr.ts` parses the ISO date string from TMDB at source. The `display_titles` schema uses `z.coerce.number()` as a defensive measure so string years from any future path are coerced rather than rejected.
 
