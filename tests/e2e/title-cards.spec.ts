@@ -130,6 +130,26 @@ test.describe("Title card — not_requested movie", () => {
     await expect(card.getByTestId("request-success")).toBeVisible({ timeout: 10_000 });
     await expect(card.getByTestId("request-button")).not.toBeVisible();
   });
+
+  test("Requested badge survives conversation reload (issue #338)", async ({ page }) => {
+    await page.goto("/chat");
+
+    await sendMessage(page, TRIGGER_UNAVAILABLE);
+    await expect(page.getByTestId("message-assistant")).toBeVisible({ timeout: 20_000 });
+    await page.waitForLoadState("networkidle");
+
+    const card = page.getByTestId("title-card").first();
+    await card.getByTestId("request-button").click();
+    await expect(card.getByTestId("request-success")).toBeVisible({ timeout: 10_000 });
+
+    // Reload the page — the Requested badge must still be shown
+    await page.reload();
+    await page.waitForLoadState("networkidle");
+
+    const reloadedCard = page.getByTestId("title-card").first();
+    await expect(reloadedCard.getByTestId("request-success")).toBeVisible({ timeout: 10_000 });
+    await expect(reloadedCard.getByTestId("request-button")).not.toBeVisible();
+  });
 });
 
 test.describe("Title card — multiple titles (carousel)", () => {
