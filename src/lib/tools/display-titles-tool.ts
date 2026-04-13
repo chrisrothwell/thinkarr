@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { defineTool } from "./registry";
-import { buildThumbUrl, getPlexMachineId, searchLibrary, findShowPlexKey } from "@/lib/services/plex";
+import { buildThumbUrl, getPlexMachineId, searchLibrary, findShowPlexKey, getImdbIdFromPlexKey } from "@/lib/services/plex";
 import * as overseerr from "@/lib/services/overseerr";
 import { getConfig } from "@/lib/config";
 import type { DisplayTitle } from "@/types/titles";
@@ -166,6 +166,47 @@ For overseerr_list_requests results: one card per request is correct (no season 
         }
       }
 
+      // Issue #351: LLMs often drop imdbId even when present in Plex search results.
+      // For available/partial Plex titles with a plexKey but no imdbId, fetch the Plex
+      // metadata and extract the IMDb ID from the Guid array so the More Info button
+      // links to IMDb rather than falling back to a Google search.
+      // Deduplicated by normalized plexKey (strip /children) — seasons that share the
+      // same show key fire one set of fetches, not one per season card.
+      const imdbIdOverrides = new Map<number, string>(); // index → imdbId
+      if (baseUrl) {
+        const needsImdbId = args.titles
+          .map((t, i) => ({ t, i }))
+          .filter(({ t }) =>
+            (t.mediaStatus === "available" || t.mediaStatus === "partial") &&
+            !t.imdbId &&
+            t.plexKey,
+          );
+
+        if (needsImdbId.length > 0) {
+          const byKey = new Map<string, { indices: number[] }>();
+          for (const { t, i } of needsImdbId) {
+            const normalized = t.plexKey!.replace(/\/children\/?$/, "");
+            const existing = byKey.get(normalized);
+            if (existing) {
+              existing.indices.push(i);
+            } else {
+              byKey.set(normalized, { indices: [i] });
+            }
+          }
+
+          await Promise.all(
+            Array.from(byKey.entries()).map(async ([plexKey, { indices }]) => {
+              try {
+                const imdbId = await getImdbIdFromPlexKey(plexKey);
+                if (imdbId) {
+                  for (const i of indices) imdbIdOverrides.set(i, imdbId);
+                }
+              } catch { /* non-fatal */ }
+            }),
+          );
+        }
+      }
+
       const displayTitles: DisplayTitle[] = args.titles.map((t, i) => {
         const effectiveThumbPath = t.thumbPath ?? thumbPathOverrides.get(i);
         return {
@@ -189,7 +230,7 @@ For overseerr_list_requests results: one card per request is correct (no season 
         // overseerrId — ensures Request button and More Info link always render.
         overseerrMediaType: t.overseerrMediaType ??
           (t.overseerrId != null ? (t.mediaType === "movie" ? "movie" : "tv") : undefined),
-        imdbId: t.imdbId ?? undefined,
+        imdbId: t.imdbId ?? imdbIdOverrides.get(i) ?? undefined,
         mediaStatus: t.mediaStatus,
         cast: t.cast ?? undefined,
         airDate: t.airDate ?? undefined,
