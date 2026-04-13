@@ -104,12 +104,18 @@ function loadHistory(conversationId: string): ChatMessage[] {
       if (row.content) msg.content = row.content;
       if (row.toolCalls) {
         try {
-          const toolCalls = JSON.parse(row.toolCalls) as OpenAI.ChatCompletionMessageToolCall[];
+          // Cast as extended type: thought_signature is a Gemini extension field
+          // stored flat alongside standard tool call fields in the DB JSON.
+          // On the wire it lives under extra_content.google.thought_signature —
+          // the SDK wraps vendor-specific fields there — so we reconstruct that
+          // nested shape when building the messages array for the next request.
+          const toolCalls = JSON.parse(row.toolCalls) as (OpenAI.ChatCompletionMessageToolCall & { thought_signature?: string })[];
           // Compact display_titles call arguments: strip summary, thumbPath, and cast
           // from each title entry. These are the bulky repeated fields (a 20-season show
           // repeats a 300-char summary 20 times). The tool result (via llmSummary) already
           // confirms which cards were shown, so the full args are not needed in history.
           msg.tool_calls = toolCalls.map((tc) => {
+            let result: typeof tc = tc;
             if (
               tc.type === "function" &&
               tc.function.name === "display_titles" &&
@@ -130,15 +136,24 @@ function loadHistory(conversationId: string): ChatMessage[] {
                     ({ summary: _s, cast: _c, ...rest }) => rest,
                   ),
                 };
-                return {
+                result = {
                   ...tc,
                   function: { ...tc.function, arguments: JSON.stringify(compacted) },
                 };
               } catch {
-                return tc;
+                // fall through with original tc
               }
             }
-            return tc;
+            // Restore thought_signature to the nested extra_content.google path
+            // that Gemini's OpenAI-compatible endpoint expects on replay.
+            if (tc.thought_signature) {
+              const { thought_signature, ...rest } = result;
+              return {
+                ...rest,
+                extra_content: { google: { thought_signature } },
+              };
+            }
+            return result;
           });
         } catch {
           // Skip malformed tool calls
@@ -400,7 +415,7 @@ function deleteMessages(messageIds: string[]): void {
     .run();
 }
 
-type RawToolCall = { id: string; function: { name: string; arguments: string } };
+type RawToolCall = { id: string; function: { name: string; arguments: string }; thought_signature?: string; };
 
 /**
  * Find the boundary between two back-to-back JSON objects in a string.
@@ -529,7 +544,7 @@ export async function* orchestrate(
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     let fullContent = "";
-    const toolCalls: { id: string; function: { name: string; arguments: string } }[] = [];
+    const toolCalls: RawToolCall[] = [];
     let llmDurationMs: number | undefined;
     let promptTokens: number | undefined;
     let completionTokens: number | undefined;
@@ -579,7 +594,7 @@ export async function* orchestrate(
         // distinct ids. Keying by id handles both — indexToCurrentId maps an
         // index to whichever id arrived most recently at that index, so
         // continuation chunks (empty id) are associated correctly.
-        const toolCallDeltas: Map<string, { id: string; name: string; args: string }> = new Map();
+        const toolCallDeltas: Map<string, { id: string; name: string; args: string; thought_signature?: string }> = new Map();
         const indexToCurrentId: Map<number, string> = new Map();
 
         for await (const chunk of stream) {
@@ -623,6 +638,14 @@ export async function* orchestrate(
               const entry = toolCallDeltas.get(currentId)!;
               if (tc.function?.name) entry.name += tc.function.name;
               if (tc.function?.arguments) entry.args += tc.function.arguments;
+              // Gemini thinking models include a thought_signature on the function
+              // call delta, nested under extra_content.google.thought_signature
+              // (the OpenAI SDK wraps unknown vendor fields in extra_content).
+              // It must be replayed verbatim in the next round's assistant message
+              // or Gemini returns HTTP 400 INVALID_ARGUMENT.
+              const sig = (tc as unknown as { extra_content?: { google?: { thought_signature?: string } } })
+                .extra_content?.google?.thought_signature;
+              if (typeof sig === "string" && sig) entry.thought_signature = sig;
             }
           }
         }
@@ -647,7 +670,7 @@ export async function* orchestrate(
         const registeredNames = getRegisteredToolNames();
         for (const [, tc] of toolCallDeltas) {
           if (tc.id && tc.name) {
-            const raw: RawToolCall = { id: tc.id, function: { name: tc.name, arguments: tc.args } };
+            const raw: RawToolCall = { id: tc.id, function: { name: tc.name, arguments: tc.args }, ...(tc.thought_signature && { thought_signature: tc.thought_signature }) };
             const split = trySplitConcatenatedCall(raw, registeredNames);
             if (split) {
               logger.warn("Gemini concatenated tool calls detected, splitting", {
@@ -785,6 +808,7 @@ export async function* orchestrate(
         id: tc.id,
         type: "function",
         function: tc.function,
+        ...(tc.thought_signature && { thought_signature: tc.thought_signature }),
       })),
     );
     const assistantMsgId = saveMessage(conversationId, "assistant", fullContent || null, {
@@ -800,11 +824,17 @@ export async function* orchestrate(
     const assistantApiMsg: OpenAI.ChatCompletionAssistantMessageParam = {
       role: "assistant",
       content: fullContent || "",
+      // Cast required: extra_content is a Gemini/OpenAI-SDK extension field not
+      // in the OpenAI type, but JSON.stringify includes it and Gemini requires
+      // thought_signature to be replayed here in round N+1 (thinking models).
       tool_calls: toolCalls.map((tc) => ({
         id: tc.id,
         type: "function" as const,
         function: tc.function,
-      })),
+        ...(tc.thought_signature && {
+          extra_content: { google: { thought_signature: tc.thought_signature } },
+        }),
+      })) as OpenAI.ChatCompletionMessageToolCall[],
     };
     apiMessages.push(assistantApiMsg);
 

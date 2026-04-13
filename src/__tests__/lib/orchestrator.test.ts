@@ -766,6 +766,105 @@ describe("orchestrator — tool-round assistant message format (issue #328)", ()
 });
 
 // ---------------------------------------------------------------------------
+// thought_signature propagation (Gemini thinking models — issue #346)
+// ---------------------------------------------------------------------------
+
+describe("orchestrator — thought_signature propagation (issue #346)", () => {
+  it("extracts thought_signature from extra_content.google and replays it in round-1 assistant message", async () => {
+    // gemini-3.1-flash-lite-preview and other Gemini thinking models include a
+    // thought_signature nested under extra_content.google.thought_signature on each
+    // function-call delta (the OpenAI SDK wraps vendor-specific fields in extra_content).
+    // Gemini returns HTTP 400 INVALID_ARGUMENT in round 1 if that signature is not
+    // replayed verbatim under the same nested path in the assistant message's tool_calls.
+    const FAKE_SIG = "CqkBCqYBGiQxMjM=";
+    let capturedRound1Messages: unknown[] = [];
+    let callCount = 0;
+
+    vi.doMock("@/lib/db", () => ({ getDb: () => testDb, schema }));
+    vi.doMock("@/lib/config", () => ({
+      getConfig: vi.fn(() => null),
+      getRateLimit: vi.fn(() => ({ messages: 100, period: "day" })),
+    }));
+    vi.doMock("@/lib/llm/langfuse", () => ({
+      startTrace: () => null,
+      flushLangfuse: () => {},
+      isLangfuseEnabled: () => false,
+    }));
+    vi.doMock("@/lib/llm/client", () => ({
+      getLlmClient: () => ({
+        chat: {
+          completions: {
+            create: vi.fn(async (params: { messages: unknown[] }) => {
+              callCount++;
+              if (callCount === 2) capturedRound1Messages = params.messages;
+              if (callCount === 1) {
+                // Round 0: tool call delta with thought_signature under extra_content.google
+                // (mirrors exact shape the OpenAI SDK produces for Gemini responses)
+                return (async function* () {
+                  yield {
+                    choices: [{
+                      delta: {
+                        tool_calls: [{
+                          index: 0,
+                          id: "call_sig_test",
+                          type: "function",
+                          function: { name: "plex_search_library", arguments: '{"query":"Malcolm"}' },
+                          extra_content: { google: { thought_signature: FAKE_SIG } },
+                        }],
+                      },
+                    }],
+                    usage: null,
+                  };
+                  yield { choices: [], usage: { prompt_tokens: 100, completion_tokens: 21, total_tokens: 121 } };
+                })();
+              }
+              // Round 1: plain text
+              return (async function* () {
+                yield { choices: [{ delta: { content: "It is available." } }], usage: null };
+                yield { choices: [], usage: { prompt_tokens: 200, completion_tokens: 5, total_tokens: 205 } };
+              })();
+            }),
+          },
+        },
+      }),
+      getLlmModel: () => "gemini-3.1-flash-lite-preview",
+      getLlmClientForEndpoint: vi.fn(),
+    }));
+    vi.doMock("@/lib/tools/registry", () => ({
+      hasTools: () => true,
+      getOpenAITools: () => [{ type: "function", function: { name: "plex_search_library", description: "Search Plex", parameters: {} } }],
+      executeTool: vi.fn(async () => JSON.stringify({ results: [], hasMore: false })),
+      getToolLlmContent: (_name: string, result: string) => result,
+      getRegisteredToolNames: () => ["plex_search_library"],
+    }));
+    vi.doMock("@/lib/tools/init", () => ({ initializeTools: vi.fn() }));
+    vi.doMock("@/lib/llm/system-prompt", () => ({ buildSystemPrompt: () => "You are helpful." }));
+
+    const userId = seedUser(testDb);
+    const conversationId = seedConversation(testDb, userId);
+
+    const { orchestrate } = await import("@/lib/llm/orchestrator");
+    const events: { type: string }[] = [];
+    for await (const event of orchestrate({ conversationId, userMessage: "Is Malcolm available?" })) {
+      events.push(event as { type: string });
+    }
+
+    expect(events.find((e) => e.type === "error")).toBeUndefined();
+    expect(events.find((e) => e.type === "done")).toBeDefined();
+
+    // The assistant message sent to round 1 must carry thought_signature nested
+    // under extra_content.google — the exact path Gemini's API expects on replay.
+    type ToolCall = { id: string; extra_content?: { google?: { thought_signature?: string } } };
+    type AssistantMsg = { role: string; tool_calls?: ToolCall[] };
+    const assistantMsg = (capturedRound1Messages as AssistantMsg[])
+      .find((m) => m.role === "assistant" && m.tool_calls != null);
+    expect(assistantMsg).toBeDefined();
+    const tc = assistantMsg!.tool_calls![0];
+    expect(tc.extra_content?.google?.thought_signature).toBe(FAKE_SIG);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // loadHistory — skips phantom empty assistant messages (issue #328 follow-on)
 // ---------------------------------------------------------------------------
 
