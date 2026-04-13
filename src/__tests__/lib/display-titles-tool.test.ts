@@ -458,3 +458,181 @@ describe("display_titles — seasonNumber recovery from title", () => {
     expect(displayTitles[0].seasonNumber).toBe(1);
   });
 });
+
+describe("display_titles — issue #351: imdbId side-query from Plex Guid", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("injects imdbId for an available Plex title when LLM omits it", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string) => {
+      if ((url as string).includes("/library/metadata/7938")) {
+        // Season metadata — has parentKey
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            MediaContainer: {
+              Metadata: [{
+                type: "season",
+                title: "Season 3",
+                parentKey: "/library/metadata/500",
+              }],
+            },
+          }),
+        });
+      }
+      if ((url as string).includes("/library/metadata/500")) {
+        // Show metadata — has Guid with imdbId
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            MediaContainer: {
+              Metadata: [{
+                type: "show",
+                title: "Euphoria (US)",
+                Guid: [{ id: "imdb://tt8772296" }, { id: "tmdb://85552" }],
+              }],
+            },
+          }),
+        });
+      }
+      // machineId call
+      return Promise.resolve({ ok: true, json: async () => ({ MediaContainer: { machineIdentifier: "abc123" } }) });
+    }));
+
+    const { registerDisplayTitlesTool } = await import("@/lib/tools/display-titles-tool");
+    const { executeTool } = await import("@/lib/tools/registry");
+    registerDisplayTitlesTool();
+
+    const raw = await executeTool("display_titles", JSON.stringify({
+      titles: [{
+        mediaType: "tv",
+        title: "Euphoria (US) — Season 3",
+        showTitle: "Euphoria (US)",
+        seasonNumber: 3,
+        mediaStatus: "available",
+        plexKey: "/library/metadata/7938/children",
+        // no imdbId — LLM dropped it
+      }],
+    }));
+    const { displayTitles } = JSON.parse(raw) as { displayTitles: Array<{ imdbId?: string }> };
+    expect(displayTitles[0].imdbId).toBe("tt8772296");
+  });
+
+  it("does not override an explicitly provided imdbId", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ MediaContainer: { machineIdentifier: "abc123" } }),
+    }));
+
+    const { registerDisplayTitlesTool } = await import("@/lib/tools/display-titles-tool");
+    const { executeTool } = await import("@/lib/tools/registry");
+    registerDisplayTitlesTool();
+
+    const raw = await executeTool("display_titles", JSON.stringify({
+      titles: [{
+        mediaType: "movie",
+        title: "The Matrix",
+        mediaStatus: "available",
+        plexKey: "/library/metadata/1",
+        imdbId: "tt0133093",
+      }],
+    }));
+    const { displayTitles } = JSON.parse(raw) as { displayTitles: Array<{ imdbId?: string }> };
+    expect(displayTitles[0].imdbId).toBe("tt0133093");
+  });
+
+  it("does not run the side-query for not_requested titles", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ MediaContainer: { machineIdentifier: "abc123" } }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { registerDisplayTitlesTool } = await import("@/lib/tools/display-titles-tool");
+    const { executeTool } = await import("@/lib/tools/registry");
+    registerDisplayTitlesTool();
+
+    await executeTool("display_titles", JSON.stringify({
+      titles: [{
+        mediaType: "movie",
+        title: "Inception",
+        mediaStatus: "not_requested",
+        overseerrId: 27205,
+        overseerrMediaType: "movie",
+      }],
+    }));
+
+    const metadataCalls = fetchMock.mock.calls.filter(
+      (c) => (c[0] as string).includes("/library/metadata/"),
+    );
+    expect(metadataCalls).toHaveLength(0);
+  });
+
+  it("deduplicates: two season cards sharing the same normalized plexKey fire one metadata fetch", async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if ((url as string).includes("/library/metadata/100")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            MediaContainer: {
+              Metadata: [{
+                type: "show",
+                title: "Breaking Bad",
+                Guid: [{ id: "imdb://tt0903747" }],
+              }],
+            },
+          }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ MediaContainer: { machineIdentifier: "s1" } }) });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { registerDisplayTitlesTool } = await import("@/lib/tools/display-titles-tool");
+    const { executeTool } = await import("@/lib/tools/registry");
+    registerDisplayTitlesTool();
+
+    const raw = await executeTool("display_titles", JSON.stringify({
+      titles: [
+        { mediaType: "tv", title: "Breaking Bad — Season 1", seasonNumber: 1, mediaStatus: "available", plexKey: "/library/metadata/100" },
+        { mediaType: "tv", title: "Breaking Bad — Season 2", seasonNumber: 2, mediaStatus: "available", plexKey: "/library/metadata/100" },
+      ],
+    }));
+    const { displayTitles } = JSON.parse(raw) as { displayTitles: Array<{ imdbId?: string }> };
+
+    expect(displayTitles[0].imdbId).toBe("tt0903747");
+    expect(displayTitles[1].imdbId).toBe("tt0903747");
+
+    const metadataCalls = fetchMock.mock.calls.filter(
+      (c) => (c[0] as string).includes("/library/metadata/100"),
+    );
+    // Both cards share the same normalized key — only one metadata fetch
+    expect(metadataCalls).toHaveLength(1);
+  });
+
+  it("is non-fatal when Plex metadata fetch fails", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string) => {
+      if ((url as string).includes("/library/metadata/")) {
+        return Promise.reject(new Error("Plex unreachable"));
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ MediaContainer: { machineIdentifier: "abc123" } }) });
+    }));
+
+    const { registerDisplayTitlesTool } = await import("@/lib/tools/display-titles-tool");
+    const { executeTool } = await import("@/lib/tools/registry");
+    registerDisplayTitlesTool();
+
+    const raw = await executeTool("display_titles", JSON.stringify({
+      titles: [{
+        mediaType: "movie",
+        title: "Fight Club",
+        mediaStatus: "available",
+        plexKey: "/library/metadata/1",
+      }],
+    }));
+    const { displayTitles } = JSON.parse(raw) as { displayTitles: Array<{ imdbId?: string }> };
+    // No imdbId but no error thrown
+    expect(displayTitles[0].imdbId).toBeUndefined();
+  });
+});
