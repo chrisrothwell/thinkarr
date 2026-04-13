@@ -201,6 +201,7 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 | PATCH | `/api/settings` | Update config (admin only) |
 | GET | `/api/settings/logs` | List log files (admin) |
 | GET | `/api/settings/logs/[filename]` | Read/download log (`?download=true`) |
+| GET | `/api/settings/langfuse-keys` | Get unmasked Langfuse public + secret keys (admin) |
 | GET | `/api/settings/mcp-token` | Get global admin MCP token |
 | POST | `/api/settings/mcp-token` | Regenerate global admin MCP token |
 | GET | `/api/settings/mcp-token/user/[userId]` | Get per-user MCP token (admin; user can self-access) |
@@ -269,7 +270,13 @@ Realtime (WebRTC) is restricted to `api.openai.com` only. `probeRealtimeSupport(
 ### Title Card Display System
 `display_titles` tool accepts 1–10 titles with rich metadata. Server resolves `thumbUrl` (Plex proxy + token) and `plexMachineId` (Watch Now universal link). Renders as both a collapsible tool call panel and a full-width TitleCarousel below the message. LLM always calls `display_titles` after searches.
 
+**More Info button:** `TitleCard` builds the More Info href in priority order: IMDb (if `imdbId` is set) → TMDB direct page (if `overseerrId` is set) → Google search (final fallback for Plex-only titles with no external IDs). For TV shows/episodes in the Google fallback, the query uses `showTitle` instead of the full `"Show — Season N"` title string.
+
+**imdbId resolution:** `mapMetadata()` in `plex.ts` extracts `imdbId` from the Plex `Guid` array (`"imdb://tt..."` entries) so it flows through tool results. `display-titles-tool.ts` adds an `imdbId` side-query (same non-fatal pattern as `thumbPathOverrides`): for available/partial titles with a `plexKey` but no `imdbId`, it calls `getImdbIdFromPlexKey()` which fetches the Plex metadata and follows `parentKey` to the show for season cards (Guid lives on the show, not the season). Deduplicated by normalized `plexKey` so season cards for the same show fire one set of fetches.
+
 The `year` field is typed as `number` throughout (`OverseerrSearchResult`, `OverseerrDetails`, `OverseerrRequest`, `OverseerrDiscoverResult`). The `yearFromDate()` helper in `overseerr.ts` parses the ISO date string from TMDB at source. The `display_titles` schema uses `z.coerce.number()` as a defensive measure so string years from any future path are coerced rather than rejected.
+
+**Request status persistence:** After a user clicks Request on a title card and the Overseerr submission succeeds, the "Requested" badge state is written to `localStorage` keyed as `thinkarr:requested:{mediaType}:{overseerrId}` (with an optional `:s{seasonNumber}` suffix for season-specific requests). On mount, `TitleCard` reads this key and initialises `requestStatus` to `"success"` if present, so the badge survives conversation reload without any server round-trip.
 
 ### Langfuse Observability
 Opt-in tracing via `LANGFUSE_SECRET_KEY` + `LANGFUSE_PUBLIC_KEY` env vars, or via Settings UI (env vars take precedence). Each chat request creates a root trace keyed by the user message UUID, with per-round LLM generation spans and per-tool spans. When a user reports an issue, a `user-report` score is attached to the trace and the GitHub issue body includes a `curl` retrieval command instead of a verbose transcript.

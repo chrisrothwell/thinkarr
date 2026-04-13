@@ -57,6 +57,179 @@ const EPISODE_ITEM = {
   addedAt: 1700000002,
 };
 
+describe("mapMetadata — imdbId extraction from Guid array", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("extracts imdbId from Guid array when present", async () => {
+    const itemWithGuid = {
+      ...MOVIE_ITEM,
+      Guid: [
+        { id: "imdb://tt0133093" },
+        { id: "tmdb://603" },
+        { id: "tvdb://5678" },
+      ],
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ MediaContainer: { Metadata: [itemWithGuid] } }),
+    }));
+
+    const { getRecentlyAdded } = await import("@/lib/services/plex");
+    const { results } = await getRecentlyAdded();
+    expect(results[0].imdbId).toBe("tt0133093");
+  });
+
+  it("leaves imdbId undefined when Guid array is absent", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ MediaContainer: { Metadata: [MOVIE_ITEM] } }),
+    }));
+
+    const { getRecentlyAdded } = await import("@/lib/services/plex");
+    const { results } = await getRecentlyAdded();
+    expect(results[0].imdbId).toBeUndefined();
+  });
+
+  it("leaves imdbId undefined when Guid array has no imdb:// entry", async () => {
+    const itemWithoutImdb = {
+      ...MOVIE_ITEM,
+      Guid: [{ id: "tmdb://603" }, { id: "tvdb://5678" }],
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ MediaContainer: { Metadata: [itemWithoutImdb] } }),
+    }));
+
+    const { getRecentlyAdded } = await import("@/lib/services/plex");
+    const { results } = await getRecentlyAdded();
+    expect(results[0].imdbId).toBeUndefined();
+  });
+});
+
+describe("getImdbIdFromPlexKey — Guid resolution with parent-following", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("returns imdbId for a movie/show key that has Guid directly", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        MediaContainer: {
+          Metadata: [{
+            type: "movie",
+            title: "The Matrix",
+            Guid: [{ id: "imdb://tt0133093" }, { id: "tmdb://603" }],
+          }],
+        },
+      }),
+    }));
+
+    const { getImdbIdFromPlexKey } = await import("@/lib/services/plex");
+    const imdbId = await getImdbIdFromPlexKey("/library/metadata/1");
+    expect(imdbId).toBe("tt0133093");
+  });
+
+  it("strips /children before fetching and still resolves imdbId", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        MediaContainer: {
+          Metadata: [{
+            type: "show",
+            title: "Breaking Bad",
+            Guid: [{ id: "imdb://tt0903747" }],
+          }],
+        },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { getImdbIdFromPlexKey } = await import("@/lib/services/plex");
+    const imdbId = await getImdbIdFromPlexKey("/library/metadata/100/children");
+    expect(imdbId).toBe("tt0903747");
+    // Fetched the key without /children
+    expect((fetchMock.mock.calls[0][0] as string)).toContain("/library/metadata/100");
+    expect((fetchMock.mock.calls[0][0] as string)).not.toContain("/children");
+  });
+
+  it("follows parentKey to show when item is a season", async () => {
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce({
+        // First fetch: season metadata (no Guid)
+        ok: true,
+        json: async () => ({
+          MediaContainer: {
+            Metadata: [{
+              type: "season",
+              title: "Season 1",
+              parentKey: "/library/metadata/99",
+            }],
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        // Second fetch: parent show metadata (has Guid)
+        ok: true,
+        json: async () => ({
+          MediaContainer: {
+            Metadata: [{
+              type: "show",
+              title: "Breaking Bad",
+              Guid: [{ id: "imdb://tt0903747" }, { id: "tmdb://1396" }],
+            }],
+          },
+        }),
+      }));
+
+    const { getImdbIdFromPlexKey } = await import("@/lib/services/plex");
+    const imdbId = await getImdbIdFromPlexKey("/library/metadata/50");
+    expect(imdbId).toBe("tt0903747");
+  });
+
+  it("returns undefined when no imdb:// Guid is present", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        MediaContainer: {
+          Metadata: [{
+            type: "movie",
+            title: "Home Video",
+            Guid: [{ id: "tmdb://0" }],
+          }],
+        },
+      }),
+    }));
+
+    const { getImdbIdFromPlexKey } = await import("@/lib/services/plex");
+    const imdbId = await getImdbIdFromPlexKey("/library/metadata/999");
+    expect(imdbId).toBeUndefined();
+  });
+
+  it("falls back to item Guid when parent fetch fails", async () => {
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          MediaContainer: {
+            Metadata: [{
+              type: "season",
+              parentKey: "/library/metadata/99",
+              Guid: [{ id: "imdb://tt_season_fallback" }],
+            }],
+          },
+        }),
+      })
+      .mockRejectedValueOnce(new Error("Network error")));
+
+    const { getImdbIdFromPlexKey } = await import("@/lib/services/plex");
+    const imdbId = await getImdbIdFromPlexKey("/library/metadata/50");
+    expect(imdbId).toBe("tt_season_fallback");
+  });
+});
+
 describe("getRecentlyAdded — deduplication and title mapping", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({

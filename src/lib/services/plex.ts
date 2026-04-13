@@ -36,6 +36,7 @@ export interface PlexSearchResult {
   rating?: number;
   plexKey: string;              // Plex metadata key — pass directly as plexKey to display_titles
   thumbPath?: string;           // Plex thumb path — pass directly as thumbPath to display_titles
+  imdbId?: string;              // IMDb ID from Plex Guid (e.g. "tt1234567") — pass to display_titles for More Info link
   cast?: string[];              // First 4 cast member names
   // Show-specific fields
   seasons?: number;             // Number of seasons (childCount)
@@ -46,6 +47,13 @@ export interface PlexSearchResult {
   showTitle?: string;           // Parent show title (grandparentTitle for episode, parentTitle for season)
   seasonNumber?: number;        // Season number (parentIndex for episode, index for season)
   episodeNumber?: number;       // Episode number within season (index, episode only)
+}
+
+/** Extract IMDb ID from a Plex Guid array: [{"id":"imdb://tt1234567"},{"id":"tvdb://12345"}] */
+function extractImdbId(item: Record<string, unknown>): string | undefined {
+  const guids = (item.Guid as Array<{ id: string }> | undefined) ?? [];
+  const imdbGuid = guids.find((g) => typeof g.id === "string" && g.id.startsWith("imdb://"));
+  return imdbGuid ? imdbGuid.id.slice("imdb://".length) : undefined;
 }
 
 function mapMetadata(item: Record<string, unknown>, type?: string): PlexSearchResult {
@@ -83,6 +91,7 @@ function mapMetadata(item: Record<string, unknown>, type?: string): PlexSearchRe
     rating: item.rating as number | undefined,
     plexKey: item.key as string,
     thumbPath: item.thumb as string | undefined,
+    imdbId: extractImdbId(item),
     cast: roles.slice(0, 4).map((r) => r.tag),
     seasons: item.childCount as number | undefined,
     totalEpisodes: item.leafCount as number | undefined,
@@ -107,6 +116,44 @@ export async function getPlexMachineId(): Promise<string | undefined> {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Resolve an IMDb ID for a given Plex metadata key by fetching the item's Guid array.
+ * For season keys, follows parentKey to the show (Guid lives on the show, not the season).
+ * Returns undefined if the item has no IMDb Guid or Plex is unreachable.
+ *
+ * Used by display-titles-tool as a side-query to recover imdbId when the LLM drops it.
+ */
+export async function getImdbIdFromPlexKey(plexKey: string): Promise<string | undefined> {
+  // Strip /children to get the metadata item path (e.g. "/library/metadata/7938/children" → "/library/metadata/7938")
+  const normalizedKey = plexKey.replace(/\/children\/?$/, "");
+  const path = normalizedKey.startsWith("/") ? normalizedKey : `/${normalizedKey}`;
+
+  const data = await plexFetch(path);
+  let item: Record<string, unknown> = data?.MediaContainer?.Metadata?.[0] ?? {};
+
+  // IMDb Guid is on the show — follow parentKey for seasons, grandparentKey for episodes
+  const itemType = item.type as string | undefined;
+  if (itemType === "season" && item.parentKey) {
+    const parentPath = (item.parentKey as string).startsWith("/")
+      ? (item.parentKey as string)
+      : `/${item.parentKey as string}`;
+    try {
+      const parentData = await plexFetch(parentPath);
+      item = parentData?.MediaContainer?.Metadata?.[0] ?? item;
+    } catch { /* fall through to season's own Guid */ }
+  } else if (itemType === "episode" && item.grandparentKey) {
+    const grandparentPath = (item.grandparentKey as string).startsWith("/")
+      ? (item.grandparentKey as string)
+      : `/${item.grandparentKey as string}`;
+    try {
+      const grandparentData = await plexFetch(grandparentPath);
+      item = grandparentData?.MediaContainer?.Metadata?.[0] ?? item;
+    } catch { /* fall through to episode's own Guid */ }
+  }
+
+  return extractImdbId(item);
 }
 
 /**
