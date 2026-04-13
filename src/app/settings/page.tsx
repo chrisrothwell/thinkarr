@@ -1647,7 +1647,13 @@ export default function SettingsPage() {
                     size="icon"
                     title="Copy as environment variables"
                     disabled={!langfuseConfig.publicKey && !langfuseConfig.secretKey}
-                    onClick={() => copyToClipboard(`LANGFUSE_PUBLIC_KEY=${langfuseConfig.publicKey}\nLANGFUSE_SECRET_KEY=${langfuseConfig.secretKey}`)}
+                    onClick={async () => {
+                      const res = await fetch("/api/settings/langfuse-keys");
+                      const data = await res.json();
+                      if (data.success) {
+                        copyToClipboard(`LANGFUSE_PUBLIC_KEY=${data.data.publicKey}\nLANGFUSE_SECRET_KEY=${data.data.secretKey}`);
+                      }
+                    }}
                   >
                     <Copy size={14} />
                   </Button>
