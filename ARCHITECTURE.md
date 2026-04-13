@@ -271,6 +271,8 @@ Realtime (WebRTC) is restricted to `api.openai.com` only. `probeRealtimeSupport(
 
 The `year` field is typed as `number` throughout (`OverseerrSearchResult`, `OverseerrDetails`, `OverseerrRequest`, `OverseerrDiscoverResult`). The `yearFromDate()` helper in `overseerr.ts` parses the ISO date string from TMDB at source. The `display_titles` schema uses `z.coerce.number()` as a defensive measure so string years from any future path are coerced rather than rejected.
 
+**Request status persistence:** After a user clicks Request on a title card and the Overseerr submission succeeds, the "Requested" badge state is written to `localStorage` keyed as `thinkarr:requested:{mediaType}:{overseerrId}` (with an optional `:s{seasonNumber}` suffix for season-specific requests). On mount, `TitleCard` reads this key and initialises `requestStatus` to `"success"` if present, so the badge survives conversation reload without any server round-trip.
+
 ### Langfuse Observability
 Opt-in tracing via `LANGFUSE_SECRET_KEY` + `LANGFUSE_PUBLIC_KEY` env vars, or via Settings UI (env vars take precedence). Each chat request creates a root trace keyed by the user message UUID, with per-round LLM generation spans and per-tool spans. When a user reports an issue, a `user-report` score is attached to the trace and the GitHub issue body includes a `curl` retrieval command instead of a verbose transcript.
 
