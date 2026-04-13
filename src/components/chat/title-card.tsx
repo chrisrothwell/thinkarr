@@ -109,13 +109,19 @@ export function TitleCard({ title }: TitleCardProps) {
     title.overseerrId != null &&
     title.overseerrMediaType != null;
 
-  // More Info: prefer IMDb, fall back to TMDB direct page, then TMDB search.
+  // More Info: prefer IMDb, fall back to TMDB direct page, then Google search.
   // Always produces a non-null href so the button is always visible.
+  // For TV shows/episodes without an external ID, search by showTitle (not the full
+  // "Show — Season N" title) so the Google query is clean and useful.
   const moreInfoHref = title.imdbId
     ? `https://www.imdb.com/title/${title.imdbId}`
     : title.overseerrId && title.overseerrMediaType
       ? `https://www.themoviedb.org/${title.overseerrMediaType === "movie" ? "movie" : "tv"}/${title.overseerrId}`
-      : `https://www.themoviedb.org/search/${title.mediaType === "movie" ? "movie" : "tv"}?query=${encodeURIComponent(title.title)}`;
+      : `https://www.google.com/search?q=${encodeURIComponent(
+          (title.mediaType === "tv" || title.mediaType === "episode") && title.showTitle
+            ? title.showTitle
+            : title.title,
+        )}`;
 
   return (
     <div className="flex gap-3 rounded-xl border border-border bg-card p-3 w-full" data-testid="title-card">
@@ -210,7 +216,7 @@ export function TitleCard({ title }: TitleCardProps) {
             <span className="text-xs text-destructive whitespace-nowrap">{errorMsg}</span>
           )}
 
-          {/* More Info — always shown; prefers IMDb → TMDB direct → TMDB search */}
+          {/* More Info — always shown; prefers IMDb → TMDB direct → Google search */}
           <a
             href={moreInfoHref}
             target="_blank"
