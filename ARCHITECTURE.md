@@ -201,6 +201,7 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 | PATCH | `/api/settings` | Update config (admin only) |
 | GET | `/api/settings/logs` | List log files (admin) |
 | GET | `/api/settings/logs/[filename]` | Read/download log (`?download=true`) |
+| GET | `/api/settings/langfuse-keys` | Get unmasked Langfuse public + secret keys (admin) |
 | GET | `/api/settings/mcp-token` | Get global admin MCP token |
 | POST | `/api/settings/mcp-token` | Regenerate global admin MCP token |
 | GET | `/api/settings/mcp-token/user/[userId]` | Get per-user MCP token (admin; user can self-access) |
