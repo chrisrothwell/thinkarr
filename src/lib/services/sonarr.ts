@@ -44,9 +44,14 @@ export interface SonarrSeries {
 }
 
 export async function searchSeries(term: string): Promise<SonarrSeries[]> {
-  const data = await sonarrFetch(`/series/lookup?term=${encodeURIComponent(term)}`);
+  const data = await sonarrFetch("/series");
+  const needle = term.toLowerCase();
+  const yearMatch = /^\d{4}$/.test(term.trim()) ? parseInt(term.trim(), 10) : null;
   return (data || [])
-    .filter((s: Record<string, unknown>) => s.id !== undefined && s.id !== null)
+    .filter((s: Record<string, unknown>) =>
+      (s.title as string)?.toLowerCase().includes(needle) ||
+      (yearMatch !== null && s.year === yearMatch),
+    )
     .slice(0, 10)
     .map((s: Record<string, unknown>) => ({
       id: s.id as number,
@@ -54,7 +59,7 @@ export async function searchSeries(term: string): Promise<SonarrSeries[]> {
       year: s.year as number,
       overview: (s.overview as string)?.substring(0, 200),
       status: s.status as string,
-      seasonCount: s.seasonCount as number,
+      seasonCount: ((s.seasons as unknown[]) || []).length || undefined,
       monitored: s.monitored as boolean,
       tvdbId: s.tvdbId as number,
     }));
