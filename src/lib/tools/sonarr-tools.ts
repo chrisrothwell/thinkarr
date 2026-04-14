@@ -58,8 +58,9 @@ async function enrichSonarrSeries(s: SonarrSeries): Promise<SonarrSeries> {
     }
   } catch { /* Overseerr not configured or unavailable */ }
 
-  // Not found in Plex or Overseerr — derive from Sonarr's monitored flag
-  return { ...s, mediaStatus: s.monitored ? "pending" : "not_requested" };
+  // In Sonarr library but not yet in Plex — it is being actively managed.
+  // Use "partial" to suppress the request button; "pending" is reserved for Overseerr requests.
+  return { ...s, mediaStatus: s.monitored ? "partial" : "not_requested" };
 }
 
 export function registerSonarrTools() {

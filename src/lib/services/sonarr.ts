@@ -44,17 +44,25 @@ export interface SonarrSeries {
 }
 
 export async function searchSeries(term: string): Promise<SonarrSeries[]> {
-  const data = await sonarrFetch(`/series/lookup?term=${encodeURIComponent(term)}`);
-  return (data || []).slice(0, 10).map((s: Record<string, unknown>) => ({
-    id: s.id as number | undefined,
-    title: s.title as string,
-    year: s.year as number,
-    overview: (s.overview as string)?.substring(0, 200),
-    status: s.status as string,
-    seasonCount: s.seasonCount as number,
-    monitored: s.monitored as boolean,
-    tvdbId: s.tvdbId as number,
-  }));
+  const data = await sonarrFetch("/series");
+  const needle = term.toLowerCase();
+  const yearMatch = /^\d{4}$/.test(term.trim()) ? parseInt(term.trim(), 10) : null;
+  return (data || [])
+    .filter((s: Record<string, unknown>) =>
+      (s.title as string)?.toLowerCase().includes(needle) ||
+      (yearMatch !== null && s.year === yearMatch),
+    )
+    .slice(0, 10)
+    .map((s: Record<string, unknown>) => ({
+      id: s.id as number,
+      title: s.title as string,
+      year: s.year as number,
+      overview: (s.overview as string)?.substring(0, 200),
+      status: s.status as string,
+      seasonCount: ((s.seasons as unknown[]) || []).length || undefined,
+      monitored: s.monitored as boolean,
+      tvdbId: s.tvdbId as number,
+    }));
 }
 
 /** @deprecated Avoid in LLM tools — returns all series as a large payload. Use getSeriesStatus instead. */

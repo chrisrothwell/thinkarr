@@ -77,6 +77,7 @@ export interface OverseerrDetails {
   seasonCount?: number;
   seasons?: OverseerrSeasonStatus[];   // Per-season availability
   requests?: OverseerrRequestSummary[]; // Pending/active requests
+  mediaStatus?: string;         // Normalized display_titles-compatible status string
 }
 
 function yearFromDate(date: string | undefined): number | undefined {
@@ -208,6 +209,7 @@ export async function getDetails(id: number, mediaType: "movie" | "tv"): Promise
     seasonCount: mediaType === "tv" ? (detail?.numberOfSeasons as number | undefined) : undefined,
     seasons: seasons.length > 0 ? seasons : undefined,
     requests: requests.length > 0 ? requests : undefined,
+    mediaStatus: mediaStatusLabel(mediaInfo),
   };
 }
 

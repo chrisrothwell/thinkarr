@@ -491,7 +491,7 @@ describe("sonarr_search_series — pre-computed mediaStatus (#280)", () => {
     expect(results[0].mediaStatus).not.toBe("Processing");
   });
 
-  it("sets mediaStatus 'pending' for monitored show not found in Plex or Overseerr", async () => {
+  it("sets mediaStatus 'partial' for monitored show not found in Plex or Overseerr (being managed by Sonarr, no request button)", async () => {
     mockSonarrSearchSeries.mockResolvedValueOnce([{ ...SONARR_SERIES, monitored: true }]);
     mockPlexSearchLibrary.mockRejectedValueOnce(new Error("Plex unavailable"));
     mockOverseerrSearch.mockRejectedValueOnce(new Error("Overseerr unavailable"));
@@ -503,7 +503,7 @@ describe("sonarr_search_series — pre-computed mediaStatus (#280)", () => {
 
     const raw = await executeTool("sonarr_search_series", JSON.stringify({ term: "Breaking Bad" }));
     const results = JSON.parse(raw) as Record<string, unknown>[];
-    expect(results[0].mediaStatus).toBe("pending");
+    expect(results[0].mediaStatus).toBe("partial");
   });
 
   it("sets mediaStatus 'not_requested' for unmonitored show not found in Plex or Overseerr", async () => {
