@@ -45,7 +45,7 @@ async function enrichRadarrMovie(m: RadarrMovie): Promise<RadarrMovie> {
         overseerrId: m.tmdbId,
         cast: detail.cast,
         imdbId: detail.imdbId,
-        mediaStatus: overseerr.normalizeMediaStatus(detail.mediaStatus),
+        mediaStatus: overseerr.normalizeMediaStatus(detail.mediaStatus ?? "Not Requested"),
       };
     }
 
