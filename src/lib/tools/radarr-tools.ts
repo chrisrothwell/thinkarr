@@ -45,6 +45,7 @@ async function enrichRadarrMovie(m: RadarrMovie): Promise<RadarrMovie> {
         overseerrId: m.tmdbId,
         cast: detail.cast,
         imdbId: detail.imdbId,
+        mediaStatus: overseerr.normalizeMediaStatus(detail.mediaStatus ?? "Not Requested"),
       };
     }
 
@@ -65,17 +66,20 @@ async function enrichRadarrMovie(m: RadarrMovie): Promise<RadarrMovie> {
         overseerrId: match.overseerrId,
         cast: detail.cast,
         imdbId: detail.imdbId,
+        mediaStatus: overseerr.normalizeMediaStatus(match.mediaStatus),
       };
     }
   } catch { /* Overseerr not configured or unavailable */ }
 
-  return m;
+  // In Radarr library but not found in Plex or Overseerr — being actively managed.
+  // Use "partial" to suppress the request button; "pending" is reserved for Overseerr requests.
+  return { ...m, mediaStatus: m.monitored ? "partial" : "not_requested" };
 }
 
 export function registerRadarrTools() {
   defineTool({
     name: "radarr_search_movie",
-    description: "Search for movies by title. Returns results from Radarr's lookup including whether the movie is in the library, downloaded, and monitored. Each result is automatically enriched with thumbPath (poster), plexKey (if available in Plex), overseerrId, cast, and imdbId — pass these directly to display_titles. For mediaStatus: use 'available' if the movie is in Plex (plexKey present) or hasFile is true, 'pending' if monitored in Radarr but not downloaded, otherwise 'not_requested'.",
+    description: "Search for movies by title. Returns results from the Radarr library only (never external lookups). Each result is automatically enriched with thumbPath (poster), plexKey (if available in Plex), overseerrId, cast, imdbId, and a pre-computed mediaStatus — pass these directly to display_titles without manual status inference.",
     schema: z.object({
       term: z.string().describe("Search term (movie title)"),
     }),
