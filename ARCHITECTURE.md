@@ -148,7 +148,7 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 | Table | Key Columns |
 |-------|-------------|
 | `app_config` | `key` (PK), `value`, `encrypted`, `updatedAt` |
-| `users` | `id`, `plexId` (unique), `plexUsername`, `plexEmail`, `plexAvatarUrl`, `plexToken`, `isAdmin` |
+| `users` | `id`, `plexId` (unique), `plexUsername`, `plexEmail`, `plexAvatarUrl`, `plexToken`, `mcpToken` (unique, nullable), `isAdmin` |
 | `sessions` | `id` (UUID PK), `userId` (FK), `expiresAt` |
 | `conversations` | `id` (UUID PK), `userId` (FK), `title`, `createdAt`, `updatedAt` |
 | `messages` | `id` (UUID PK), `conversationId` (FK), `role`, `content`, `toolCalls`, `toolCallId`, `toolName` |
@@ -171,7 +171,7 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 | `user.{id}.defaultModel` | String | Per-user default model |
 | `user.{id}.canChangeModel` | Boolean | Permission to switch models (default `true`) |
 | `user.{id}.rateLimit` | JSON | `{"messages": number, "period": "hour"/"day"/"week"/"month"}` |
-| `user.{id}.mcpToken` | String | Per-user MCP bearer token |
+| `user.{id}.mcpToken` | String | Per-user MCP bearer token (legacy read path; authoritative storage is now `users.mcp_token`) |
 
 ---
 

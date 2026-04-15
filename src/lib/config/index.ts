@@ -108,7 +108,6 @@ export function setUserMcpToken(userId: number, token: string): void {
     .set({ mcpToken: token })
     .where(eq(schema.users.id, userId))
     .run();
-  setConfig(`user.${userId}.mcpToken`, token, true);
 }
 
 /**
