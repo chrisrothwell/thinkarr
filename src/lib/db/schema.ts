@@ -16,6 +16,7 @@ export const users = sqliteTable("users", {
   plexEmail: text("plex_email"),
   plexAvatarUrl: text("plex_avatar_url"),
   plexToken: text("plex_token"),
+  mcpToken: text("mcp_token"),
   isAdmin: integer("is_admin", { mode: "boolean" }).default(false),
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()

@@ -103,21 +103,25 @@ export function getUserMcpToken(userId: number): string | null {
 }
 
 export function setUserMcpToken(userId: number, token: string): void {
+  const db = getDb();
+  db.update(schema.users)
+    .set({ mcpToken: token })
+    .where(eq(schema.users.id, userId))
+    .run();
   setConfig(`user.${userId}.mcpToken`, token, true);
 }
 
 /**
- * Look up which user owns a given MCP token.
- * Iterates all users — fast enough for small deployments (SQLite, single-server).
+ * Look up which user owns a given MCP token using indexed lookup.
  */
 export function getUserIdByMcpToken(token: string): number | null {
   const db = getDb();
-  const users = db.select({ id: schema.users.id }).from(schema.users).all();
-  for (const user of users) {
-    const userToken = getConfig(`user.${user.id}.mcpToken`);
-    if (userToken && userToken === token) return user.id;
-  }
-  return null;
+  const row = db
+    .select({ id: schema.users.id })
+    .from(schema.users)
+    .where(eq(schema.users.mcpToken, token))
+    .get();
+  return row?.id ?? null;
 }
 
 /** Count user-role messages sent by a user since `since`. */
