@@ -34,6 +34,9 @@ export interface SonarrSeries {
   seasonCount?: number;
   monitored?: boolean;
   tvdbId?: number;
+  // Internal: raw per-season data from Sonarr /series — consumed by enrichSonarrSeries,
+  // never exposed to the LLM (stripped by llmSummary).
+  sonarrSeasons?: Array<{ seasonNumber: number; episodeCount: number; monitored: boolean }>;
   // Enrichment fields — populated by the tool handler via Plex / Overseerr lookups
   thumbPath?: string;
   plexKey?: string;
@@ -41,20 +44,44 @@ export interface SonarrSeries {
   cast?: string[];
   imdbId?: string;
   mediaStatus?: string;
+  /** Per-season status derived from Sonarr episode counts. Only set when mediaStatus is
+   *  'partial' (show spans multiple seasons, some downloaded and some not). The LLM uses
+   *  this to assign the correct mediaStatus to each individual season card. */
+  seasons?: Array<{ seasonNumber: number; mediaStatus: string }>;
 }
 
 export async function searchSeries(term: string): Promise<SonarrSeries[]> {
-  const data = await sonarrFetch(`/series/lookup?term=${encodeURIComponent(term)}`);
-  return (data || []).slice(0, 10).map((s: Record<string, unknown>) => ({
-    id: s.id as number | undefined,
-    title: s.title as string,
-    year: s.year as number,
-    overview: (s.overview as string)?.substring(0, 200),
-    status: s.status as string,
-    seasonCount: s.seasonCount as number,
-    monitored: s.monitored as boolean,
-    tvdbId: s.tvdbId as number,
-  }));
+  const data = await sonarrFetch("/series");
+  const needle = term.toLowerCase();
+  const yearMatch = /^\d{4}$/.test(term.trim()) ? parseInt(term.trim(), 10) : null;
+  return (data || [])
+    .filter((s: Record<string, unknown>) =>
+      (s.title as string)?.toLowerCase().includes(needle) ||
+      (yearMatch !== null && s.year === yearMatch),
+    )
+    .slice(0, 10)
+    .map((s: Record<string, unknown>) => {
+      const rawSeasons = ((s.seasons as Array<Record<string, unknown>>) || [])
+        .filter((season) => (season.seasonNumber as number) > 0);
+      return {
+        id: s.id as number,
+        title: s.title as string,
+        year: s.year as number,
+        overview: (s.overview as string)?.substring(0, 200),
+        status: s.status as string,
+        seasonCount: rawSeasons.length || undefined,
+        monitored: s.monitored as boolean,
+        tvdbId: s.tvdbId as number,
+        sonarrSeasons: rawSeasons.map((season) => {
+          const stats = season.statistics as Record<string, unknown> | undefined;
+          return {
+            seasonNumber: season.seasonNumber as number,
+            monitored: season.monitored as boolean,
+            episodeCount: (stats?.episodeCount as number) ?? 0,
+          };
+        }),
+      };
+    });
 }
 
 /** @deprecated Avoid in LLM tools — returns all series as a large payload. Use getSeriesStatus instead. */
@@ -116,7 +143,7 @@ export async function getSeriesStatus(title: string): Promise<SonarrSeriesStatus
     year: detail.year as number | undefined,
     networkStatus: detail.status as string,
     monitored: detail.monitored as boolean,
-    totalSeasons: (detail.seasons as unknown[])?.length ?? 0,
+    totalSeasons: ((detail.seasons as Array<Record<string, unknown>>) || []).filter((s) => (s.seasonNumber as number) > 0).length,
     totalEpisodes: (stats?.totalEpisodeCount as number) ?? 0,
     downloadedEpisodes: (stats?.episodeCount as number) ?? 0,
     missingEpisodes: ((stats?.totalEpisodeCount as number) ?? 0) - ((stats?.episodeCount as number) ?? 0),

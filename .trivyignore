@@ -23,6 +23,12 @@ CVE-2026-26960
 CVE-2026-29786
 CVE-2026-31802
 
+# openssl: NULL pointer DoS in CMS (CVE-2026-28390) — fix is 3.5.6-r0 but that package
+# has not yet landed in Alpine's repos for node:25-alpine. The Dockerfile already runs
+# `apk upgrade --no-cache openssl` which will apply the patch automatically once Alpine
+# ships it. Remove this entry once node:25-alpine includes openssl ≥ 3.5.6-r0.
+CVE-2026-28390
+
 # picomatch: ReDoS (CVE-2026-33671) — Trivy false positive in dev-only deps
 # Trivy reads node_modules/tinyglobby/package.json and extracts "4.0.3" from the
 # "^4.0.3" dep spec as the installed version. npm ci actually resolves and installs

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { defineTool } from "./registry";
-import { buildThumbUrl, getPlexMachineId, searchLibrary, findShowPlexKey } from "@/lib/services/plex";
+import { buildThumbUrl, getPlexMachineId, searchLibrary, findShowPlexKey, getMetadataFromPlexKey } from "@/lib/services/plex";
 import * as overseerr from "@/lib/services/overseerr";
 import { getConfig } from "@/lib/config";
 import type { DisplayTitle } from "@/types/titles";
@@ -74,7 +74,7 @@ For overseerr_list_requests results: one card per request is correct (no season 
         const needsLookup = args.titles
           .map((t, i) => ({ t, i }))
           .filter(({ t }) =>
-            (t.mediaStatus === "available" || t.mediaStatus === "partial") &&
+            (t.mediaStatus === "available" || t.mediaStatus === "partial" || t.mediaStatus === "pending") &&
             !t.plexKey &&
             t.title,
           );
@@ -166,6 +166,54 @@ For overseerr_list_requests results: one card per request is correct (no season 
         }
       }
 
+      // Issues #351, #364: LLMs often drop imdbId and/or thumbPath — sometimes also plexKey —
+      // even when present in search results. For titles with any known plexKey (from the LLM
+      // input OR recovered by plexKeyOverrides above) but missing imdbId/thumbPath, fetch the
+      // Plex metadata in one call per unique key (getMetadataFromPlexKey returns both).
+      // Deduplicated by normalized plexKey (strip /children) — season cards sharing the
+      // same show key fire one fetch, not one per card.
+      const imdbIdOverrides = new Map<number, string>(); // index → imdbId
+      if (baseUrl) {
+        const needsMeta = args.titles
+          .map((t, i) => ({ t, i }))
+          .filter(({ t, i }) => {
+            const effectiveKey = t.plexKey ?? plexKeyOverrides.get(i);
+            return effectiveKey && (
+              ((t.mediaStatus === "available" || t.mediaStatus === "partial") && !t.imdbId) ||
+              !t.thumbPath
+            );
+          });
+
+        if (needsMeta.length > 0) {
+          const byKey = new Map<string, { indices: number[] }>();
+          for (const { t, i } of needsMeta) {
+            const effectiveKey = (t.plexKey ?? plexKeyOverrides.get(i))!;
+            const normalized = effectiveKey.replace(/\/children\/?$/, "");
+            const existing = byKey.get(normalized);
+            if (existing) {
+              existing.indices.push(i);
+            } else {
+              byKey.set(normalized, { indices: [i] });
+            }
+          }
+
+          await Promise.all(
+            Array.from(byKey.entries()).map(async ([plexKey, { indices }]) => {
+              try {
+                const meta = await getMetadataFromPlexKey(plexKey);
+                if (meta.imdbId) {
+                  for (const i of indices) imdbIdOverrides.set(i, meta.imdbId);
+                }
+                if (meta.thumbPath) {
+                  // Store the raw Plex path — the rendering code calls buildThumbUrl() on it
+                  for (const i of indices) thumbPathOverrides.set(i, meta.thumbPath);
+                }
+              } catch { /* non-fatal */ }
+            }),
+          );
+        }
+      }
+
       const displayTitles: DisplayTitle[] = args.titles.map((t, i) => {
         const effectiveThumbPath = t.thumbPath ?? thumbPathOverrides.get(i);
         return {
@@ -189,7 +237,7 @@ For overseerr_list_requests results: one card per request is correct (no season 
         // overseerrId — ensures Request button and More Info link always render.
         overseerrMediaType: t.overseerrMediaType ??
           (t.overseerrId != null ? (t.mediaType === "movie" ? "movie" : "tv") : undefined),
-        imdbId: t.imdbId ?? undefined,
+        imdbId: t.imdbId ?? imdbIdOverrides.get(i) ?? undefined,
         mediaStatus: t.mediaStatus,
         cast: t.cast ?? undefined,
         airDate: t.airDate ?? undefined,

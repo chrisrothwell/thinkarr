@@ -458,3 +458,325 @@ describe("display_titles — seasonNumber recovery from title", () => {
     expect(displayTitles[0].seasonNumber).toBe(1);
   });
 });
+
+describe("display_titles — issue #351: imdbId side-query from Plex Guid", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("injects imdbId for an available Plex title when LLM omits it", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string) => {
+      if ((url as string).includes("/library/metadata/7938")) {
+        // Season metadata — has parentKey
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            MediaContainer: {
+              Metadata: [{
+                type: "season",
+                title: "Season 3",
+                parentKey: "/library/metadata/500",
+              }],
+            },
+          }),
+        });
+      }
+      if ((url as string).includes("/library/metadata/500")) {
+        // Show metadata — has Guid with imdbId
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            MediaContainer: {
+              Metadata: [{
+                type: "show",
+                title: "Euphoria (US)",
+                Guid: [{ id: "imdb://tt8772296" }, { id: "tmdb://85552" }],
+              }],
+            },
+          }),
+        });
+      }
+      // machineId call
+      return Promise.resolve({ ok: true, json: async () => ({ MediaContainer: { machineIdentifier: "abc123" } }) });
+    }));
+
+    const { registerDisplayTitlesTool } = await import("@/lib/tools/display-titles-tool");
+    const { executeTool } = await import("@/lib/tools/registry");
+    registerDisplayTitlesTool();
+
+    const raw = await executeTool("display_titles", JSON.stringify({
+      titles: [{
+        mediaType: "tv",
+        title: "Euphoria (US) — Season 3",
+        showTitle: "Euphoria (US)",
+        seasonNumber: 3,
+        mediaStatus: "available",
+        plexKey: "/library/metadata/7938/children",
+        // no imdbId — LLM dropped it
+      }],
+    }));
+    const { displayTitles } = JSON.parse(raw) as { displayTitles: Array<{ imdbId?: string }> };
+    expect(displayTitles[0].imdbId).toBe("tt8772296");
+  });
+
+  it("does not override an explicitly provided imdbId", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ MediaContainer: { machineIdentifier: "abc123" } }),
+    }));
+
+    const { registerDisplayTitlesTool } = await import("@/lib/tools/display-titles-tool");
+    const { executeTool } = await import("@/lib/tools/registry");
+    registerDisplayTitlesTool();
+
+    const raw = await executeTool("display_titles", JSON.stringify({
+      titles: [{
+        mediaType: "movie",
+        title: "The Matrix",
+        mediaStatus: "available",
+        plexKey: "/library/metadata/1",
+        imdbId: "tt0133093",
+      }],
+    }));
+    const { displayTitles } = JSON.parse(raw) as { displayTitles: Array<{ imdbId?: string }> };
+    expect(displayTitles[0].imdbId).toBe("tt0133093");
+  });
+
+  it("does not run the side-query for not_requested titles", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ MediaContainer: { machineIdentifier: "abc123" } }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { registerDisplayTitlesTool } = await import("@/lib/tools/display-titles-tool");
+    const { executeTool } = await import("@/lib/tools/registry");
+    registerDisplayTitlesTool();
+
+    await executeTool("display_titles", JSON.stringify({
+      titles: [{
+        mediaType: "movie",
+        title: "Inception",
+        mediaStatus: "not_requested",
+        overseerrId: 27205,
+        overseerrMediaType: "movie",
+      }],
+    }));
+
+    const metadataCalls = fetchMock.mock.calls.filter(
+      (c) => (c[0] as string).includes("/library/metadata/"),
+    );
+    expect(metadataCalls).toHaveLength(0);
+  });
+
+  it("deduplicates: two season cards sharing the same normalized plexKey fire one metadata fetch", async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if ((url as string).includes("/library/metadata/100")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            MediaContainer: {
+              Metadata: [{
+                type: "show",
+                title: "Breaking Bad",
+                Guid: [{ id: "imdb://tt0903747" }],
+              }],
+            },
+          }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ MediaContainer: { machineIdentifier: "s1" } }) });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { registerDisplayTitlesTool } = await import("@/lib/tools/display-titles-tool");
+    const { executeTool } = await import("@/lib/tools/registry");
+    registerDisplayTitlesTool();
+
+    const raw = await executeTool("display_titles", JSON.stringify({
+      titles: [
+        { mediaType: "tv", title: "Breaking Bad — Season 1", seasonNumber: 1, mediaStatus: "available", plexKey: "/library/metadata/100" },
+        { mediaType: "tv", title: "Breaking Bad — Season 2", seasonNumber: 2, mediaStatus: "available", plexKey: "/library/metadata/100" },
+      ],
+    }));
+    const { displayTitles } = JSON.parse(raw) as { displayTitles: Array<{ imdbId?: string }> };
+
+    expect(displayTitles[0].imdbId).toBe("tt0903747");
+    expect(displayTitles[1].imdbId).toBe("tt0903747");
+
+    const metadataCalls = fetchMock.mock.calls.filter(
+      (c) => (c[0] as string).includes("/library/metadata/100"),
+    );
+    // Both cards share the same normalized key — only one metadata fetch
+    expect(metadataCalls).toHaveLength(1);
+  });
+
+  it("is non-fatal when Plex metadata fetch fails", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string) => {
+      if ((url as string).includes("/library/metadata/")) {
+        return Promise.reject(new Error("Plex unreachable"));
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ MediaContainer: { machineIdentifier: "abc123" } }) });
+    }));
+
+    const { registerDisplayTitlesTool } = await import("@/lib/tools/display-titles-tool");
+    const { executeTool } = await import("@/lib/tools/registry");
+    registerDisplayTitlesTool();
+
+    const raw = await executeTool("display_titles", JSON.stringify({
+      titles: [{
+        mediaType: "movie",
+        title: "Fight Club",
+        mediaStatus: "available",
+        plexKey: "/library/metadata/1",
+      }],
+    }));
+    const { displayTitles } = JSON.parse(raw) as { displayTitles: Array<{ imdbId?: string }> };
+    // No imdbId but no error thrown
+    expect(displayTitles[0].imdbId).toBeUndefined();
+  });
+
+  it("recovers thumbPath via plexKeyOverrides when LLM drops both thumbPath AND plexKey (issue #367)", async () => {
+    // Simulate: LLM has a Plex-available show but drops both plexKey and thumbPath.
+    // The plexKeyOverrides mechanism finds plexKey via /hubs/search, then thumbPath
+    // recovery must use that resolved key — not just t.plexKey (which is null).
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string) => {
+      if ((url as string).includes("/hubs/search")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            MediaContainer: {
+              Hub: [{
+                type: "show",
+                Metadata: [{ type: "show", title: "Starfleet Academy", year: 2026, key: "/library/metadata/7116", thumb: "/library/metadata/7116/thumb/abc", addedAt: 1700000000 }],
+              }],
+            },
+          }),
+        });
+      }
+      if ((url as string).includes("/library/metadata/7116")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            MediaContainer: {
+              Metadata: [{ type: "show", title: "Starfleet Academy", thumb: "/library/metadata/7116/thumb/abc", Guid: [{ id: "imdb://tt7587890" }] }],
+            },
+          }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ MediaContainer: { machineIdentifier: "abc123" } }) });
+    }));
+
+    const { registerDisplayTitlesTool } = await import("@/lib/tools/display-titles-tool");
+    const { executeTool } = await import("@/lib/tools/registry");
+    registerDisplayTitlesTool();
+
+    const raw = await executeTool("display_titles", JSON.stringify({
+      titles: [{
+        mediaType: "tv",
+        title: "Starfleet Academy",
+        year: 2026,
+        seasonNumber: 1,
+        mediaStatus: "partial",
+        // LLM dropped both plexKey and thumbPath
+      }],
+    }));
+    const { displayTitles } = JSON.parse(raw) as { displayTitles: Array<{ thumbUrl?: string; plexKey?: string }> };
+    expect(displayTitles[0].plexKey).toBe("/library/metadata/7116");  // recovered by plexKeyOverrides
+    expect(displayTitles[0].thumbUrl).toContain("/api/plex/thumb");   // recovered via plexKeyOverrides key
+    expect(displayTitles[0].thumbUrl).toContain("abc");
+  });
+
+  it("recovers thumbPath from Plex metadata when LLM drops it (issue #364)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string) => {
+      if ((url as string).includes("/library/metadata/77")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            MediaContainer: {
+              Metadata: [{
+                type: "show",
+                title: "Starfleet Academy",
+                thumb: "/library/metadata/77/thumb/1234567890",
+                Guid: [{ id: "imdb://tt1234567" }],
+              }],
+            },
+          }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ MediaContainer: { machineIdentifier: "abc123" } }) });
+    }));
+
+    const { registerDisplayTitlesTool } = await import("@/lib/tools/display-titles-tool");
+    const { executeTool } = await import("@/lib/tools/registry");
+    registerDisplayTitlesTool();
+
+    const raw = await executeTool("display_titles", JSON.stringify({
+      titles: [{
+        mediaType: "tv",
+        title: "Starfleet Academy — Season 1",
+        seasonNumber: 1,
+        mediaStatus: "available",
+        plexKey: "/library/metadata/77",
+        // thumbPath intentionally absent — LLM dropped it
+      }],
+    }));
+    const { displayTitles } = JSON.parse(raw) as { displayTitles: Array<{ thumbUrl?: string; imdbId?: string }> };
+    // thumbPath recovered from Plex metadata and proxied through /api/plex/thumb
+    expect(displayTitles[0].thumbUrl).toContain("/api/plex/thumb");
+    expect(displayTitles[0].thumbUrl).toContain("1234567890");
+    // imdbId also recovered in the same fetch
+    expect(displayTitles[0].imdbId).toBe("tt1234567");
+  });
+
+  it("recovers thumbPath for a 'pending' season card when LLM drops plexKey and thumbPath", async () => {
+    // Sonarr per-season 'pending' cards (monitored, nothing downloaded) were not included
+    // in plexKeyOverrides lookup, so thumbPath recovery never fired for them.
+    // Fix: include 'pending' in the needsLookup filter so the show's plexKey is resolved
+    // and thumbPath can be recovered via Plex metadata.
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string) => {
+      if ((url as string).includes("/hubs/search")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            MediaContainer: {
+              Hub: [{
+                type: "show",
+                Metadata: [{ type: "show", title: "Starfleet Academy", year: 2026, key: "/library/metadata/7116", thumb: "/library/metadata/7116/thumb/abc", addedAt: 1700000000 }],
+              }],
+            },
+          }),
+        });
+      }
+      if ((url as string).includes("/library/metadata/7116")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            MediaContainer: {
+              Metadata: [{ type: "show", title: "Starfleet Academy", thumb: "/library/metadata/7116/thumb/abc", Guid: [{ id: "imdb://tt7587890" }] }],
+            },
+          }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ MediaContainer: { machineIdentifier: "abc123" } }) });
+    }));
+
+    const { registerDisplayTitlesTool } = await import("@/lib/tools/display-titles-tool");
+    const { executeTool } = await import("@/lib/tools/registry");
+    registerDisplayTitlesTool();
+
+    const raw = await executeTool("display_titles", JSON.stringify({
+      titles: [{
+        mediaType: "tv",
+        title: "Starfleet Academy — Season 2",
+        year: 2026,
+        seasonNumber: 2,
+        mediaStatus: "pending",
+        // LLM dropped both plexKey and thumbPath
+      }],
+    }));
+    const { displayTitles } = JSON.parse(raw) as { displayTitles: Array<{ thumbUrl?: string }> };
+    expect(displayTitles[0].thumbUrl).toContain("/api/plex/thumb");
+    expect(displayTitles[0].thumbUrl).toContain("abc");
+  });
+});

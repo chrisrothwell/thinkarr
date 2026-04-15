@@ -1640,7 +1640,24 @@ export default function SettingsPage() {
             {/* Langfuse observability */}
             <Card>
               <CardHeader>
-                <CardTitle className="text-lg">Langfuse Observability</CardTitle>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-lg">Langfuse Observability</CardTitle>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    title="Copy as environment variables"
+                    disabled={!langfuseConfig.publicKey && !langfuseConfig.secretKey}
+                    onClick={async () => {
+                      const res = await fetch("/api/settings/langfuse-keys");
+                      const data = await res.json();
+                      if (data.success) {
+                        copyToClipboard(`LANGFUSE_PUBLIC_KEY=${data.data.publicKey}\nLANGFUSE_SECRET_KEY=${data.data.secretKey}`);
+                      }
+                    }}
+                  >
+                    <Copy size={14} />
+                  </Button>
+                </div>
                 <CardDescription>
                   Connect to{" "}
                   <a

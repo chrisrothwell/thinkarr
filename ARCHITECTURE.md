@@ -201,6 +201,7 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 | PATCH | `/api/settings` | Update config (admin only) |
 | GET | `/api/settings/logs` | List log files (admin) |
 | GET | `/api/settings/logs/[filename]` | Read/download log (`?download=true`) |
+| GET | `/api/settings/langfuse-keys` | Get unmasked Langfuse public + secret keys (admin) |
 | GET | `/api/settings/mcp-token` | Get global admin MCP token |
 | POST | `/api/settings/mcp-token` | Regenerate global admin MCP token |
 | GET | `/api/settings/mcp-token/user/[userId]` | Get per-user MCP token (admin; user can self-access) |
@@ -254,7 +255,10 @@ If the server crashes between saving an assistant message with `tool_calls` and 
 `getSeriesStatus()` in `sonarr.ts` prefers an exact (case-insensitive) title match against the `/series` list before falling back to substring matching. This prevents titles like "Celebrity Race Across the World" from being returned when the user asks about "Race Across the World".
 
 ### mediaStatus Normalization
-Overseerr's API returns title-cased status strings (`"Processing"`, `"Not Requested"`, `"Partially Available"`) which conflict with the lowercase enum expected by `display_titles` (`"pending"`, `"not_requested"`, `"partial"`). `normalizeMediaStatus()` in `overseerr.ts` handles the mapping. The `overseerr_search` and `overseerr_discover` tool handlers apply this function before returning results so the LLM always sees display_titles-compatible values. `enrichSonarrSeries()` in `sonarr-tools.ts` also pre-computes `mediaStatus` — `"available"` when found in Plex, normalized Overseerr status when found there, otherwise `"pending"` if monitored or `"not_requested"` if not.
+Overseerr's API returns title-cased status strings (`"Processing"`, `"Not Requested"`, `"Partially Available"`) which conflict with the lowercase enum expected by `display_titles` (`"pending"`, `"not_requested"`, `"partial"`). `normalizeMediaStatus()` in `overseerr.ts` handles the mapping. The `overseerr_search` and `overseerr_discover` tool handlers apply this function before returning results so the LLM always sees display_titles-compatible values. `enrichSonarrSeries()` in `sonarr-tools.ts` and `enrichRadarrMovie()` in `radarr-tools.ts` both pre-compute `mediaStatus` — `"available"` when found in Plex with all expected seasons, `"partial"` when Plex has fewer seasons than Sonarr expects (compares `match.seasons` / `childCount` vs `s.seasonCount`), normalized Overseerr status when found there, otherwise `"partial"` if monitored (being managed — no request button) or `"not_requested"` if not. When partial due to missing Plex seasons, `plexSeasons` is also returned so the LLM can assign `"available"` to individual season cards 1..plexSeasons and `"partial"` to season cards above that. `searchSeries()` in `sonarr.ts` queries `/series` and `searchMovie()` in `radarr.ts` queries `/movie` (both library-only endpoints) and filter results client-side by title substring or exact year; neither calls the `/lookup` variant, which returns external TVDB/TMDB results with unreliable `monitored` values regardless of library membership. Season 0 (specials) is excluded from `seasonCount` in `searchSeries()` and `totalSeasons` in `getSeriesStatus()` so specials don't inflate the season count.
+
+### Plex Metadata Side-Query Recovery
+`display_titles` performs Plex metadata fetches for items that have a `plexKey` but are missing `imdbId` or `thumbPath` (both can be dropped by the LLM). `getMetadataFromPlexKey()` in `plex.ts` fetches the item once and returns both: `thumbPath` from the item itself, `imdbId` from the show-level Guid array (follows `parentKey` for seasons, `grandparentKey` for episodes). Results are deduplicated by normalized plexKey so season cards sharing the same show key fire one fetch, not one per card. For items with no `plexKey` but with `overseerrId`, `display_titles` falls back to an Overseerr `getDetails` call to recover `thumbPath` (existing behaviour).
 
 ### Multi-Endpoint LLM Support
 `llm.endpoints` JSON array stores per-endpoint config including capabilities. Legacy single-key config preserved for backward compat. Capability auto-detection: `testLlm()` probes Whisper, realtime (model list scan + OpenAI-only guard), and TTS. Per-user model override via `user.{id}.defaultModel` + `canChangeModel`.
@@ -269,13 +273,21 @@ Realtime (WebRTC) is restricted to `api.openai.com` only. `probeRealtimeSupport(
 ### Title Card Display System
 `display_titles` tool accepts 1–10 titles with rich metadata. Server resolves `thumbUrl` (Plex proxy + token) and `plexMachineId` (Watch Now universal link). Renders as both a collapsible tool call panel and a full-width TitleCarousel below the message. LLM always calls `display_titles` after searches.
 
+**More Info button:** `TitleCard` builds the More Info href in priority order: IMDb (if `imdbId` is set) → TMDB direct page (if `overseerrId` is set) → Google search (final fallback for Plex-only titles with no external IDs). For TV shows/episodes in the Google fallback, the query uses `showTitle` instead of the full `"Show — Season N"` title string.
+
+**imdbId resolution:** `mapMetadata()` in `plex.ts` extracts `imdbId` from the Plex `Guid` array (`"imdb://tt..."` entries) so it flows through tool results. `display-titles-tool.ts` adds an `imdbId` side-query (same non-fatal pattern as `thumbPathOverrides`): for available/partial titles with a `plexKey` but no `imdbId`, it calls `getImdbIdFromPlexKey()` which fetches the Plex metadata and follows `parentKey` to the show for season cards (Guid lives on the show, not the season). Deduplicated by normalized `plexKey` so season cards for the same show fire one set of fetches.
+
 The `year` field is typed as `number` throughout (`OverseerrSearchResult`, `OverseerrDetails`, `OverseerrRequest`, `OverseerrDiscoverResult`). The `yearFromDate()` helper in `overseerr.ts` parses the ISO date string from TMDB at source. The `display_titles` schema uses `z.coerce.number()` as a defensive measure so string years from any future path are coerced rather than rejected.
+
+**Request status persistence:** After a user clicks Request on a title card and the Overseerr submission succeeds, the "Requested" badge state is written to `localStorage` keyed as `thinkarr:requested:{mediaType}:{overseerrId}` (with an optional `:s{seasonNumber}` suffix for season-specific requests). On mount, `TitleCard` reads this key and initialises `requestStatus` to `"success"` if present, so the badge survives conversation reload without any server round-trip.
 
 ### Langfuse Observability
 Opt-in tracing via `LANGFUSE_SECRET_KEY` + `LANGFUSE_PUBLIC_KEY` env vars, or via Settings UI (env vars take precedence). Each chat request creates a root trace keyed by the user message UUID, with per-round LLM generation spans and per-tool spans. When a user reports an issue, a `user-report` score is attached to the trace and the GitHub issue body includes a `curl` retrieval command instead of a verbose transcript.
 
 ### Logging
 Winston singleton: Console (stdout, JSON) + DailyRotateFile (`/config/logs/`, 14-day retention, 20 MB max). Tool calls and API responses logged with truncation. Settings Logs tab provides file browser, 500-line viewer, and download.
+
+All `OpenAI` client instances (default and per-endpoint) use a `loggingFetch` wrapper (`src/lib/llm/client.ts`) that clones and logs the raw response body of any non-2xx HTTP response before the SDK reads it. The SDK often discards the body on parse failure (e.g. "400 status code (no body)"), so the wrapper ensures the raw body is always captured in logs regardless of model or provider.
 
 ### Chat Mode Toggle
 Three modes: text (default), voice (Whisper STT + TTS read-back), realtime (WebRTC full-duplex). Availability tied to endpoint capabilities. Mode resets to text on model switch if capability unavailable.
@@ -285,6 +297,31 @@ Manifest + service worker (network-first). Platform-aware install UI: Android na
 
 ### Conversation History Cap
 Last 20 messages sent to LLM. Prevents unbounded token growth on long conversations.
+
+### Gemini Empty Response Retry + Dangling Message Cleanup
+When `gemini-2.5-flash-lite` (and similar) returns 0 output tokens with no text and no tool calls after a tool result, the orchestrator retries the LLM call up to `MAX_EMPTY_RESPONSE_RETRIES` (2) times. If all retries are exhausted (or any other error fires), the orchestrator:
+1. Deletes **all tool-round messages** (`assistant(tool_calls)` + `tool(result)` from every round) from the DB — tracked in `toolRoundMessageIds`. Without this, each failure leaves dangling unclosed tool sequences in history; Gemini (stricter about conversation format than OpenAI) refuses to generate output on every subsequent request.
+2. **Keeps the user message** in the DB intentionally — the user genuinely typed and sent it; the UI shows it as "message sent, no reply came back", which is consistent with Langfuse traces.
+3. Yields `{ type: "error" }` rather than a silent empty done event.
+
+**Exception — empty after `display_titles`:** If the previous round's tool calls were exclusively `display_titles`, a zero-token follow-up response is correct and expected (the card is the answer). In this case the orchestrator skips the error path and yields `{ type: "done" }` instead, keeping all tool-round messages in the DB. Tracked via `previousRoundToolNames` in the outer loop.
+
+### Gemini Null/Absent Content in Assistant Tool-Call Messages (issues #328, #337)
+Three related bugs around assistant message content in tool-call sequences were fixed:
+
+**Round 1 (live path, issue #328):** When the LLM emits a tool call with no accompanying text, `fullContent` is `""`. The orchestrator previously pushed `{ role: "assistant", content: null, tool_calls: [...] }` into `apiMessages`. Gemini rejected `content: null`. The fix at the time omitted the field entirely. However, `gemini-3.1-flash-lite-preview` later returned HTTP 400 at round 1 when the `content` field was absent. The current fix always sets `content: fullContent || ""` — an explicit empty string that all known providers accept.
+
+**History path (issue #328):** `loadHistory()` now also sets `content: ""` on assistant messages that have `tool_calls` but no stored content, so reloaded history carries the same explicit empty string.
+
+**Phantom message (issue #328):** The display_titles empty-response special case saves `saveMessage(conversationId, "assistant", "")` — an assistant record with empty content and no tool_calls. `loadHistory()` skips these phantom records (`if (!msg.content && !msg.tool_calls?.length) continue`) so they never reach the LLM.
+
+### Ghost User Turn Collapse
+When a request fails after saving its user message but before saving any assistant response, the user message remains in the DB. If the user retries, `saveMessage()` saves another user message, producing consecutive user turns in history (`[user#1, user#2]`). Gemini's strict alternating-turn format then returns 0 output tokens on every retry, permanently breaking the conversation.
+
+`loadHistory()` detects consecutive user messages and skips the earlier "ghost" messages from the LLM context. Ghost messages remain in the DB for UI display but are never resent to the LLM — only the most recent user message in any consecutive run is included in the API call.
+
+### SSE Heartbeat Interval and Network Error Recovery
+The chat SSE heartbeat is sent every 5 seconds (down from 15 s) to reset reverse-proxy idle timeouts on long LLM responses. When the streaming connection drops mid-response (e.g. a 30+ second GPT-4.1 reply hitting a 30 s proxy timeout), the client `use-chat.ts` now suppresses the "Network error" toast and lets the post-stream reload recover the completed response silently. The error is only surfaced if the server-side reload also fails or returns no assistant content.
 
 ### Gemini Parallel Tool-Call Concatenation Repair
 Some Gemini variants (e.g. `gemini-2.5-flash-lite`) emit parallel tool calls as a single concatenated call: the tool name becomes two registered names joined (e.g. `sonarr_search_seriesplex_search_library`) and the arguments become two JSON objects concatenated (`{"term":"X"}{"query":"X"}`). `trySplitConcatenatedCall()` and `trySplitJsonArgs()` in `orchestrator.ts` detect this pattern and split it back into two valid calls before execution. The system prompt also includes an explicit instruction not to concatenate tool calls.

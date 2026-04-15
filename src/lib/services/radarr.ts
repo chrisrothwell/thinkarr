@@ -40,20 +40,29 @@ export interface RadarrMovie {
   overseerrId?: number;
   cast?: string[];
   imdbId?: string;
+  mediaStatus?: string;
 }
 
 export async function searchMovie(term: string): Promise<RadarrMovie[]> {
-  const data = await radarrFetch(`/movie/lookup?term=${encodeURIComponent(term)}`);
-  return (data || []).slice(0, 10).map((m: Record<string, unknown>) => ({
-    id: m.id as number | undefined,
-    title: m.title as string,
-    year: m.year as number,
-    overview: (m.overview as string)?.substring(0, 200),
-    status: m.status as string,
-    monitored: m.monitored as boolean,
-    hasFile: m.hasFile as boolean,
-    tmdbId: m.tmdbId as number,
-  }));
+  const data = await radarrFetch("/movie");
+  const needle = term.toLowerCase();
+  const yearMatch = /^\d{4}$/.test(term.trim()) ? parseInt(term.trim(), 10) : null;
+  return (data || [])
+    .filter((m: Record<string, unknown>) =>
+      (m.title as string)?.toLowerCase().includes(needle) ||
+      (yearMatch !== null && m.year === yearMatch),
+    )
+    .slice(0, 10)
+    .map((m: Record<string, unknown>) => ({
+      id: m.id as number,
+      title: m.title as string,
+      year: m.year as number,
+      overview: (m.overview as string)?.substring(0, 200),
+      status: m.status as string,
+      monitored: m.monitored as boolean,
+      hasFile: m.hasFile as boolean,
+      tmdbId: m.tmdbId as number,
+    }));
 }
 
 /** @deprecated Avoid in LLM tools — returns all movies as a large payload. Use getMovieStatus instead. */

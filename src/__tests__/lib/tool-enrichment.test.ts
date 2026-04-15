@@ -451,11 +451,12 @@ describe("overseerr_search — mediaStatus normalization (#281 #282)", () => {
 describe("sonarr_search_series — pre-computed mediaStatus (#280)", () => {
   const SONARR_SERIES = { id: 10, title: "Breaking Bad", year: 2008, seasonCount: 5, monitored: true, tvdbId: 81189 };
 
-  it("sets mediaStatus 'available' when the show is found in Plex", async () => {
+  it("sets mediaStatus 'available' and no seasons array when Plex has all seasons", async () => {
     const PLEX_RESULT = {
       title: "Breaking Bad", year: 2008, mediaType: "tv",
       plexKey: "/library/metadata/77", thumbPath: "/library/metadata/77/thumb",
       cast: ["Bryan Cranston"],
+      seasons: 5, // matches SONARR_SERIES.seasonCount
     };
     mockSonarrSearchSeries.mockResolvedValueOnce([SONARR_SERIES]);
     mockPlexSearchLibrary.mockResolvedValueOnce({ results: [PLEX_RESULT], hasMore: false });
@@ -468,6 +469,43 @@ describe("sonarr_search_series — pre-computed mediaStatus (#280)", () => {
     const raw = await executeTool("sonarr_search_series", JSON.stringify({ term: "Breaking Bad" }));
     const results = JSON.parse(raw) as Record<string, unknown>[];
     expect(results[0].mediaStatus).toBe("available");
+    expect(results[0].seasons).toBeUndefined(); // only set when partial
+  });
+
+  it("sets mediaStatus 'partial' and seasons[] derived from Sonarr episode counts when Plex has fewer seasons (issues #364, #367)", async () => {
+    const PLEX_RESULT = {
+      title: "Breaking Bad", year: 2008, mediaType: "tv",
+      plexKey: "/library/metadata/77", thumbPath: "/library/metadata/77/thumb",
+      cast: ["Bryan Cranston"],
+      seasons: 1, // Plex only has S1; Sonarr knows about 2 seasons
+    };
+    // sonarrSeasons: S1 downloaded (episodeCount>0), S2 monitored but not downloaded
+    const SONARR_PARTIAL = {
+      ...SONARR_SERIES,
+      seasonCount: 2,
+      sonarrSeasons: [
+        { seasonNumber: 1, episodeCount: 13, monitored: true },
+        { seasonNumber: 2, episodeCount: 0, monitored: true },
+      ],
+    };
+    mockSonarrSearchSeries.mockResolvedValueOnce([SONARR_PARTIAL]);
+    mockPlexSearchLibrary.mockResolvedValueOnce({ results: [PLEX_RESULT], hasMore: false });
+
+    const { registerSonarrTools } = await import("@/lib/tools/sonarr-tools");
+    const { defineTool, executeTool } = await import("@/lib/tools/registry");
+    (defineTool as unknown as { _registry?: Map<string, unknown> })._registry?.clear?.();
+    registerSonarrTools();
+
+    const raw = await executeTool("sonarr_search_series", JSON.stringify({ term: "Breaking Bad" }));
+    const results = JSON.parse(raw) as Record<string, unknown>[];
+    expect(results[0].mediaStatus).toBe("partial");
+    // seasons[] uses Sonarr episode counts — no Plex lookup needed for per-season status
+    const seasons = results[0].seasons as Array<{ seasonNumber: number; mediaStatus: string }>;
+    expect(seasons).toEqual([
+      { seasonNumber: 1, mediaStatus: "available" },
+      { seasonNumber: 2, mediaStatus: "pending" },
+    ]);
+    expect(mockOverseerrSearch).not.toHaveBeenCalled();
   });
 
   it("sets mediaStatus from Overseerr (normalized) when not in Plex", async () => {
@@ -491,7 +529,7 @@ describe("sonarr_search_series — pre-computed mediaStatus (#280)", () => {
     expect(results[0].mediaStatus).not.toBe("Processing");
   });
 
-  it("sets mediaStatus 'pending' for monitored show not found in Plex or Overseerr", async () => {
+  it("sets mediaStatus 'partial' for monitored show not found in Plex or Overseerr (being managed by Sonarr, no request button)", async () => {
     mockSonarrSearchSeries.mockResolvedValueOnce([{ ...SONARR_SERIES, monitored: true }]);
     mockPlexSearchLibrary.mockRejectedValueOnce(new Error("Plex unavailable"));
     mockOverseerrSearch.mockRejectedValueOnce(new Error("Overseerr unavailable"));
@@ -503,7 +541,7 @@ describe("sonarr_search_series — pre-computed mediaStatus (#280)", () => {
 
     const raw = await executeTool("sonarr_search_series", JSON.stringify({ term: "Breaking Bad" }));
     const results = JSON.parse(raw) as Record<string, unknown>[];
-    expect(results[0].mediaStatus).toBe("pending");
+    expect(results[0].mediaStatus).toBe("partial");
   });
 
   it("sets mediaStatus 'not_requested' for unmonitored show not found in Plex or Overseerr", async () => {

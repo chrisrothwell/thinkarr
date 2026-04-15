@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from "uuid";
 import { getLlmClient, getLlmModel, getLlmClientForEndpoint } from "./client";
 import { buildSystemPrompt } from "./system-prompt";
 import { getDb, schema } from "@/lib/db";
-import { eq, asc } from "drizzle-orm";
+import { eq, asc, inArray } from "drizzle-orm";
 import { initializeTools } from "@/lib/tools/init";
 import { getOpenAITools, executeTool, hasTools, getToolLlmContent, getRegisteredToolNames } from "@/lib/tools/registry";
 import { logger } from "@/lib/logger";
@@ -15,7 +15,7 @@ import type {
   ErrorEvent,
   DoneEvent,
 } from "@/types/chat";
-import type OpenAI from "openai";
+import OpenAI from "openai";
 
 export type OrchestratorEvent =
   | TextDeltaEvent
@@ -34,6 +34,7 @@ interface OrchestratorParams {
 type ChatMessage = OpenAI.ChatCompletionMessageParam;
 
 const MAX_TOOL_ROUNDS = 8;
+const MAX_EMPTY_RESPONSE_RETRIES = 2;
 
 /**
  * Retry an LLM API call on 429 rate-limit responses with exponential backoff.
@@ -103,12 +104,18 @@ function loadHistory(conversationId: string): ChatMessage[] {
       if (row.content) msg.content = row.content;
       if (row.toolCalls) {
         try {
-          const toolCalls = JSON.parse(row.toolCalls) as OpenAI.ChatCompletionMessageToolCall[];
+          // Cast as extended type: thought_signature is a Gemini extension field
+          // stored flat alongside standard tool call fields in the DB JSON.
+          // On the wire it lives under extra_content.google.thought_signature —
+          // the SDK wraps vendor-specific fields there — so we reconstruct that
+          // nested shape when building the messages array for the next request.
+          const toolCalls = JSON.parse(row.toolCalls) as (OpenAI.ChatCompletionMessageToolCall & { thought_signature?: string })[];
           // Compact display_titles call arguments: strip summary, thumbPath, and cast
           // from each title entry. These are the bulky repeated fields (a 20-season show
           // repeats a 300-char summary 20 times). The tool result (via llmSummary) already
           // confirms which cards were shown, so the full args are not needed in history.
           msg.tool_calls = toolCalls.map((tc) => {
+            let result: typeof tc = tc;
             if (
               tc.type === "function" &&
               tc.function.name === "display_titles" &&
@@ -129,20 +136,37 @@ function loadHistory(conversationId: string): ChatMessage[] {
                     ({ summary: _s, cast: _c, ...rest }) => rest,
                   ),
                 };
-                return {
+                result = {
                   ...tc,
                   function: { ...tc.function, arguments: JSON.stringify(compacted) },
                 };
               } catch {
-                return tc;
+                // fall through with original tc
               }
             }
-            return tc;
+            // Restore thought_signature to the nested extra_content.google path
+            // that Gemini's OpenAI-compatible endpoint expects on replay.
+            if (tc.thought_signature) {
+              const { thought_signature, ...rest } = result;
+              return {
+                ...rest,
+                extra_content: { google: { thought_signature } },
+              };
+            }
+            return result;
           });
         } catch {
           // Skip malformed tool calls
         }
       }
+      // Skip assistant messages with neither content nor tool_calls — they are
+      // phantom records (e.g. the empty message saved after the display_titles
+      // empty-response special case).
+      if (!msg.content && !msg.tool_calls?.length) continue;
+      // Ensure assistant messages with tool_calls always carry an explicit content
+      // field (empty string when no text). gemini-3.1-flash-lite-preview returns
+      // HTTP 400 at round 1 when the field is absent entirely.
+      if (!msg.content && msg.tool_calls?.length) msg.content = "";
       messages.push(msg);
     } else if (row.role === "tool") {
       if (row.toolCallId && row.content) {
@@ -201,7 +225,29 @@ function loadHistory(conversationId: string): ChatMessage[] {
     }
   }
 
-  return capConversationHistory(trimToolHistory(repaired, conversationId), conversationId);
+  // Collapse consecutive user messages: if a user message is immediately followed
+  // by another user message with no assistant response in between, the earlier one
+  // is a "ghost" from a prior failed request (the request failed after saving its
+  // user message but before saving any assistant response). Skip it from the LLM
+  // context so the model never sees invalid consecutive user turns.
+  //
+  // The ghost message is intentionally kept in the DB — it represents a real
+  // request the user made and is shown in the UI as "sent, no reply received".
+  // Only the most recent user message in any consecutive run is sent to the LLM.
+  const withoutGhosts: ChatMessage[] = [];
+  for (let i = 0; i < repaired.length; i++) {
+    const msg = repaired[i];
+    const next = repaired[i + 1];
+    if (msg.role === "user" && next?.role === "user") {
+      logger.warn("Skipping ghost user message from prior failed request", {
+        conversationId,
+      });
+      continue;
+    }
+    withoutGhosts.push(msg);
+  }
+
+  return capConversationHistory(trimToolHistory(withoutGhosts, conversationId), conversationId);
 }
 
 export const MAX_TOOL_ROUNDS_IN_HISTORY = 5;
@@ -360,7 +406,16 @@ function saveMessage(
   return id;
 }
 
-type RawToolCall = { id: string; function: { name: string; arguments: string } };
+/** Delete a set of messages by ID (used to clean up dangling tool-round messages on error). */
+function deleteMessages(messageIds: string[]): void {
+  if (messageIds.length === 0) return;
+  const db = getDb();
+  db.delete(schema.messages)
+    .where(inArray(schema.messages.id, messageIds))
+    .run();
+}
+
+type RawToolCall = { id: string; function: { name: string; arguments: string }; thought_signature?: string; };
 
 /**
  * Find the boundary between two back-to-back JSON objects in a string.
@@ -470,138 +525,256 @@ export async function* orchestrate(
   });
 
   // 3. Tool call loop
+  // Tracks tool-round message IDs saved during this request (every assistant +
+  // tool result message). On any error return path these are deleted from the DB
+  // so the conversation history does not accumulate dangling assistant(tool_calls)
+  // + tool(result) sequences that break strict models like Gemini.
+  //
+  // The user message (userMessageId) is intentionally NOT deleted on error: the
+  // user genuinely typed and sent it, and keeping it in the DB lets the UI show
+  // "message sent, no reply" honestly. loadHistory collapses consecutive user
+  // messages (which arise when a prior request fails before saving any assistant
+  // response) so they are never resent to the LLM.
+  const toolRoundMessageIds: string[] = [];
+
+  // Track the tool names executed in the previous round. When the model calls
+  // display_titles and then returns an empty response in the next round, that is
+  // correct behaviour (the card is the answer) — not an error to surface.
+  let previousRoundToolNames: string[] = [];
+
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     let fullContent = "";
-    const toolCalls: { id: string; function: { name: string; arguments: string } }[] = [];
+    const toolCalls: RawToolCall[] = [];
     let llmDurationMs: number | undefined;
     let promptTokens: number | undefined;
     let completionTokens: number | undefined;
     let totalTokens: number | undefined;
 
-    try {
-      const llmStart = Date.now();
-      const generation = trace?.generation({
-        name: `llm-round-${round}`,
-        model,
-        input: apiMessages,
-        startTime: new Date(llmStart),
-      }) ?? null;
-      const stream = await callWithRateLimitRetry(
-        () =>
-          client.chat.completions.create({
-            model,
-            messages: apiMessages,
-            stream: true,
-            stream_options: { include_usage: true },
-            ...(tools && tools.length > 0 ? { tools } : {}),
-          }),
-        conversationId,
-        round,
-      );
+    // Inner retry loop: some models (e.g. Gemini Flash) occasionally return
+    // 0 output tokens with no tool calls — an empty response that leaves the
+    // user staring at a spinner forever. Retry up to MAX_EMPTY_RESPONSE_RETRIES
+    // times before giving up and yielding an error.
+    for (let emptyRetry = 0; emptyRetry <= MAX_EMPTY_RESPONSE_RETRIES; emptyRetry++) {
+      if (emptyRetry > 0) {
+        // Reset accumulators for the retry attempt
+        fullContent = "";
+        toolCalls.length = 0;
+        llmDurationMs = undefined;
+        promptTokens = undefined;
+        completionTokens = undefined;
+        totalTokens = undefined;
+      }
 
-      // Accumulate streaming chunks
-      // Key by tool-call id rather than stream index. OpenAI uses distinct
-      // indices for parallel tool calls; Gemini sends all at index 0 with
-      // distinct ids. Keying by id handles both — indexToCurrentId maps an
-      // index to whichever id arrived most recently at that index, so
-      // continuation chunks (empty id) are associated correctly.
-      const toolCallDeltas: Map<string, { id: string; name: string; args: string }> = new Map();
-      const indexToCurrentId: Map<number, string> = new Map();
+      const roundLabel = emptyRetry === 0 ? `llm-round-${round}` : `llm-round-${round}-retry-${emptyRetry}`;
 
-      for await (const chunk of stream) {
-        // Token usage is sent in the final chunk
-        if (chunk.usage) {
-          promptTokens = chunk.usage.prompt_tokens;
-          completionTokens = chunk.usage.completion_tokens;
-          totalTokens = chunk.usage.total_tokens;
-        }
+      try {
+        const llmStart = Date.now();
+        const generation = trace?.generation({
+          name: roundLabel,
+          model,
+          input: apiMessages,
+          startTime: new Date(llmStart),
+        }) ?? null;
+        const stream = await callWithRateLimitRetry(
+          () =>
+            client.chat.completions.create({
+              model,
+              messages: apiMessages,
+              stream: true,
+              stream_options: { include_usage: true },
+              ...(tools && tools.length > 0 ? { tools } : {}),
+            }),
+          conversationId,
+          round,
+        );
 
-        const choice = chunk.choices[0];
-        if (!choice) continue;
+        // Accumulate streaming chunks
+        // Key by tool-call id rather than stream index. OpenAI uses distinct
+        // indices for parallel tool calls; Gemini sends all at index 0 with
+        // distinct ids. Keying by id handles both — indexToCurrentId maps an
+        // index to whichever id arrived most recently at that index, so
+        // continuation chunks (empty id) are associated correctly.
+        const toolCallDeltas: Map<string, { id: string; name: string; args: string; thought_signature?: string }> = new Map();
+        const indexToCurrentId: Map<number, string> = new Map();
 
-        const delta = choice.delta;
+        for await (const chunk of stream) {
+          // Token usage is sent in the final chunk
+          if (chunk.usage) {
+            promptTokens = chunk.usage.prompt_tokens;
+            completionTokens = chunk.usage.completion_tokens;
+            totalTokens = chunk.usage.total_tokens;
+          }
 
-        // Text content — accumulate but do NOT yield yet.
-        // We defer yielding until after the full stream is consumed so we can
-        // tell whether the LLM also emitted tool calls in this same response.
-        // If it did, the text is a premature / speculative answer produced
-        // before the tools ran and should be suppressed entirely (the next LLM
-        // turn after seeing the tool results will produce the real answer).
-        if (delta?.content) {
-          fullContent += delta.content;
-        }
+          const choice = chunk.choices[0];
+          if (!choice) continue;
 
-        // Tool call deltas
-        if (delta?.tool_calls) {
-          for (const tc of delta.tool_calls) {
-            const idx = tc.index;
-            // A non-empty id signals the start of a new tool call at this index.
-            // Update the index→id mapping so subsequent continuation chunks
-            // (which arrive with an empty id) attach to the right entry.
-            if (tc.id) {
-              indexToCurrentId.set(idx, tc.id);
-              if (!toolCallDeltas.has(tc.id)) {
-                toolCallDeltas.set(tc.id, { id: tc.id, name: "", args: "" });
+          const delta = choice.delta;
+
+          // Text content — accumulate but do NOT yield yet.
+          // We defer yielding until after the full stream is consumed so we can
+          // tell whether the LLM also emitted tool calls in this same response.
+          // If it did, the text is a premature / speculative answer produced
+          // before the tools ran and should be suppressed entirely (the next LLM
+          // turn after seeing the tool results will produce the real answer).
+          if (delta?.content) {
+            fullContent += delta.content;
+          }
+
+          // Tool call deltas
+          if (delta?.tool_calls) {
+            for (const tc of delta.tool_calls) {
+              const idx = tc.index;
+              // A non-empty id signals the start of a new tool call at this index.
+              // Update the index→id mapping so subsequent continuation chunks
+              // (which arrive with an empty id) attach to the right entry.
+              if (tc.id) {
+                indexToCurrentId.set(idx, tc.id);
+                if (!toolCallDeltas.has(tc.id)) {
+                  toolCallDeltas.set(tc.id, { id: tc.id, name: "", args: "" });
+                }
               }
+              const currentId = indexToCurrentId.get(idx);
+              if (!currentId) continue;
+              const entry = toolCallDeltas.get(currentId)!;
+              if (tc.function?.name) entry.name += tc.function.name;
+              if (tc.function?.arguments) entry.args += tc.function.arguments;
+              // Gemini thinking models include a thought_signature on the function
+              // call delta, nested under extra_content.google.thought_signature
+              // (the OpenAI SDK wraps unknown vendor fields in extra_content).
+              // It must be replayed verbatim in the next round's assistant message
+              // or Gemini returns HTTP 400 INVALID_ARGUMENT.
+              const sig = (tc as unknown as { extra_content?: { google?: { thought_signature?: string } } })
+                .extra_content?.google?.thought_signature;
+              if (typeof sig === "string" && sig) entry.thought_signature = sig;
             }
-            const currentId = indexToCurrentId.get(idx);
-            if (!currentId) continue;
-            const entry = toolCallDeltas.get(currentId)!;
-            if (tc.function?.name) entry.name += tc.function.name;
-            if (tc.function?.arguments) entry.args += tc.function.arguments;
           }
         }
-      }
 
-      llmDurationMs = Date.now() - llmStart;
+        llmDurationMs = Date.now() - llmStart;
 
-      // Close the Langfuse generation span with output and token usage
-      generation?.end({
-        output: fullContent || null,
-        usage: {
-          input: promptTokens,
-          output: completionTokens,
-          total: totalTokens,
-          unit: "TOKENS",
-        },
-      });
+        // Close the Langfuse generation span with output and token usage
+        generation?.end({
+          output: fullContent || null,
+          usage: {
+            input: promptTokens,
+            output: completionTokens,
+            total: totalTokens,
+            unit: "TOKENS",
+          },
+        });
 
-      // Collect completed tool calls, repairing Gemini's concatenation bug
-      // where two parallel calls are emitted as one (e.g. name =
-      // "sonarr_search_seriesplex_search_library"). trySplitConcatenatedCall
-      // detects this pattern and returns the two correct calls instead.
-      const registeredNames = getRegisteredToolNames();
-      for (const [, tc] of toolCallDeltas) {
-        if (tc.id && tc.name) {
-          const raw: RawToolCall = { id: tc.id, function: { name: tc.name, arguments: tc.args } };
-          const split = trySplitConcatenatedCall(raw, registeredNames);
-          if (split) {
-            logger.warn("Gemini concatenated tool calls detected, splitting", {
-              conversationId,
-              concatenated: tc.name,
-              into: split.map((s) => s.function.name),
-            });
-            toolCalls.push(...split);
-          } else {
-            toolCalls.push(raw);
+        // Collect completed tool calls, repairing Gemini's concatenation bug
+        // where two parallel calls are emitted as one (e.g. name =
+        // "sonarr_search_seriesplex_search_library"). trySplitConcatenatedCall
+        // detects this pattern and returns the two correct calls instead.
+        const registeredNames = getRegisteredToolNames();
+        for (const [, tc] of toolCallDeltas) {
+          if (tc.id && tc.name) {
+            const raw: RawToolCall = { id: tc.id, function: { name: tc.name, arguments: tc.args }, ...(tc.thought_signature && { thought_signature: tc.thought_signature }) };
+            const split = trySplitConcatenatedCall(raw, registeredNames);
+            if (split) {
+              logger.warn("Gemini concatenated tool calls detected, splitting", {
+                conversationId,
+                concatenated: tc.name,
+                into: split.map((s) => s.function.name),
+              });
+              toolCalls.push(...split);
+            } else {
+              toolCalls.push(raw);
+            }
           }
         }
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : "LLM request failed";
+        const errorCategory = /429|quota|rate.?limit/i.test(msg) ? "rate_limit"
+          : /401|403|unauthorized|forbidden/i.test(msg) ? "auth_error"
+          : "llm_error";
+        // Log richer details when the SDK gives us an APIError (status, code, body).
+        // "400 status code (no body)" errors from preview/experimental models often
+        // carry no body, so status+code alone help narrow down the failure.
+        const apiErr = e instanceof OpenAI.APIError ? e : null;
+        logger.error("LLM request failed", {
+          conversationId,
+          round,
+          error: msg,
+          errorCategory,
+          ...(apiErr && {
+            status: apiErr.status,
+            errorCode: apiErr.code,
+            errorType: apiErr.type,
+            errorBody: apiErr.error,
+          }),
+        });
+        deleteMessages(toolRoundMessageIds);
+        trace?.update({ output: `error: ${errorCategory}` });
+        flushLangfuse();
+        yield { type: "error", message: sanitizeLlmError(msg) };
+        return;
       }
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "LLM request failed";
-      const errorCategory = /429|quota|rate.?limit/i.test(msg) ? "rate_limit"
-        : /401|403|unauthorized|forbidden/i.test(msg) ? "auth_error"
-        : "llm_error";
-      logger.error("LLM request failed", { conversationId, round, error: msg, errorCategory });
-      trace?.update({ output: `error: ${errorCategory}` });
-      flushLangfuse();
-      yield { type: "error", message: sanitizeLlmError(msg) };
-      return;
+
+      // Detect empty response: 0 output tokens, no text, no tool calls.
+      // Some models (notably Gemini Flash variants) silently return nothing
+      // after tool calls. Retry before treating it as a final empty response.
+      const isEmpty = fullContent === "" && toolCalls.length === 0 && (completionTokens ?? 0) === 0;
+      if (isEmpty && emptyRetry < MAX_EMPTY_RESPONSE_RETRIES) {
+        logger.warn("LLM returned empty response, retrying", {
+          conversationId,
+          round,
+          emptyRetry: emptyRetry + 1,
+          model,
+        });
+        continue;
+      }
+      break; // got a real response (or exhausted retries)
     }
 
     // If no tool calls, this is the final assistant response — yield the
     // accumulated text now that we know no tool calls came in this round.
     if (toolCalls.length === 0) {
+      // If retries were exhausted and the response is still empty, surface an
+      // error rather than silently yielding nothing (which leaves the user
+      // staring at a blank message).
+      if (fullContent === "" && (completionTokens ?? 0) === 0) {
+        // Special case: if the previous round exclusively called display_titles,
+        // an empty follow-up is correct — the card is the answer and the model
+        // has nothing more to say. Treat this as a clean completion.
+        if (
+          previousRoundToolNames.length > 0 &&
+          previousRoundToolNames.every((n) => n === "display_titles")
+        ) {
+          const messageId = saveMessage(conversationId, "assistant", "");
+          logger.info("Empty response after display_titles — treating as done", {
+            conversationId,
+            round,
+          });
+          trace?.update({ output: "" });
+          flushLangfuse();
+          yield { type: "done", messageId, llmDurationMs, promptTokens, completionTokens, totalTokens };
+          return;
+        }
+        logger.error("LLM returned empty response after all retries", {
+          conversationId,
+          round,
+          model,
+        });
+        // Roll back all messages saved during this request (user message + every
+        // tool round's assistant and tool result messages). Without this, each
+        // failed attempt leaves a dangling user message and unclosed tool sequences
+        // in history. On the next retry saveMessage saves another user message,
+        // producing consecutive user turns ([user1, user2]) that confuse strict
+        // models like Gemini (which requires strictly alternating user/assistant
+        // turns) causing every subsequent request in the conversation to fail.
+        deleteMessages(toolRoundMessageIds);
+        logger.info("Deleted dangling tool-round messages after empty response", {
+          conversationId,
+          round,
+          deletedCount: toolRoundMessageIds.length,
+        });
+        trace?.update({ output: "error: empty_response" });
+        flushLangfuse();
+        yield { type: "error", message: "The AI service encountered an error. Please try again." };
+        return;
+      }
       if (fullContent) {
         yield { type: "text_delta", content: fullContent };
       }
@@ -635,22 +808,35 @@ export async function* orchestrate(
         id: tc.id,
         type: "function",
         function: tc.function,
+        ...(tc.thought_signature && { thought_signature: tc.thought_signature }),
       })),
     );
-    saveMessage(conversationId, "assistant", fullContent || null, {
+    const assistantMsgId = saveMessage(conversationId, "assistant", fullContent || null, {
       toolCalls: serializedToolCalls,
     });
+    toolRoundMessageIds.push(assistantMsgId);
 
-    // Add assistant message to conversation for next round
-    apiMessages.push({
+    // Add assistant message to conversation for next round.
+    // Always include content (empty string when no text) — some providers
+    // (e.g. gemini-3.1-flash-lite-preview) return HTTP 400 at round 1 when the
+    // assistant message that introduced the tool call omits the content field
+    // entirely. An explicit empty string is accepted by all known providers.
+    const assistantApiMsg: OpenAI.ChatCompletionAssistantMessageParam = {
       role: "assistant",
-      content: fullContent || null,
+      content: fullContent || "",
+      // Cast required: extra_content is a Gemini/OpenAI-SDK extension field not
+      // in the OpenAI type, but JSON.stringify includes it and Gemini requires
+      // thought_signature to be replayed here in round N+1 (thinking models).
       tool_calls: toolCalls.map((tc) => ({
         id: tc.id,
         type: "function" as const,
         function: tc.function,
-      })),
-    });
+        ...(tc.thought_signature && {
+          extra_content: { google: { thought_signature: tc.thought_signature } },
+        }),
+      })) as OpenAI.ChatCompletionMessageToolCall[],
+    };
+    apiMessages.push(assistantApiMsg);
 
     // 4. Execute tool calls in parallel — multiple tool calls in a single round
     //    (e.g. 10 overseerr_get_details calls) run concurrently rather than
@@ -707,11 +893,12 @@ export async function* orchestrate(
     for (const { tc, result, isError, durationMs } of toolResults) {
       // Save tool result to DB (even on error — ensures the API message sequence stays valid)
       try {
-        saveMessage(conversationId, "tool", result, {
+        const toolMsgId = saveMessage(conversationId, "tool", result, {
           toolCallId: tc.id,
           toolName: tc.function.name,
           durationMs,
         });
+        toolRoundMessageIds.push(toolMsgId);
         logger.info("Tool result saved", { conversationId, toolCallId: tc.id, toolName: tc.function.name, durationMs, isError });
       } catch (e: unknown) {
         logger.error("Failed to save tool result — conversation will be broken", {
@@ -742,10 +929,15 @@ export async function* orchestrate(
       };
     }
 
+    // Record this round's tool names so the next round can detect the
+    // "empty after display_titles" case (see empty response handler above).
+    previousRoundToolNames = toolCalls.map((tc) => tc.function.name);
+
     // Loop continues — LLM will see tool results and either respond or call more tools
   }
 
   // Safety: if we exhausted max rounds, yield what we have
+  deleteMessages(toolRoundMessageIds);
   trace?.update({ output: "error: tool call limit reached" });
   flushLangfuse();
   yield { type: "error", message: "Tool call limit reached" };

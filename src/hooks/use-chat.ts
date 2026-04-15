@@ -91,6 +91,10 @@ export function useChat(conversationId: string | null, options?: UseChatOptions)
       abortRef.current = controller;
 
       let phase: "fetch" | "stream" = "fetch";
+      // If the streaming connection drops after the server has already saved
+      // the response (e.g. proxy timeout on a slow LLM), we suppress the
+      // error and let the finally-block reload recover the completed message.
+      let suppressedStreamError: string | null = null;
       try {
         const res = await fetch("/api/chat", {
           method: "POST",
@@ -187,14 +191,25 @@ export function useChat(conversationId: string | null, options?: UseChatOptions)
           online,
           conversationId: convId,
         });
-        const userMsg =
-          errMsg === "Failed to fetch" || errMsg === "NetworkError when attempting to fetch resource."
-            ? online === false
-              ? "Network error: you appear to be offline"
-              : "Network error: could not reach the server"
-            : errMsg;
-        setError(userMsg);
-        setMessages((prev) => prev.filter((m) => m.id !== assistantId || (m.content && m.content.length > 0)));
+        const isNetworkError =
+          errMsg === "Failed to fetch" || errMsg === "NetworkError when attempting to fetch resource.";
+        const userMsg = isNetworkError
+          ? online === false
+            ? "Network error: you appear to be offline"
+            : "Network error: could not reach the server"
+          : errMsg;
+        // If the connection dropped mid-stream (not during the initial fetch),
+        // the server may have completed and saved the response. Suppress the
+        // error for now — the finally-block reload will recover it. Only show
+        // the error if the reload itself also fails or returns no response.
+        if (phase === "stream" && isNetworkError) {
+          suppressedStreamError = userMsg;
+          // Remove the empty placeholder so the reload result fills the slot cleanly
+          setMessages((prev) => prev.filter((m) => m.id !== assistantId || (m.content && m.content.length > 0)));
+        } else {
+          setError(userMsg);
+          setMessages((prev) => prev.filter((m) => m.id !== assistantId || (m.content && m.content.length > 0)));
+        }
       } finally {
         streamingRef.current = false;
         setStreaming(false);
@@ -211,6 +226,17 @@ export function useChat(conversationId: string | null, options?: UseChatOptions)
             if (data.success && data.data.messages && conversationIdRef.current === convId) {
               setMessages(data.data.messages);
               setToolCalls(new Map());
+              // If the stream dropped but the server saved a real assistant
+              // response, the reload recovered it — no error needed.
+              // Only surface the error if the reload produced no response.
+              if (suppressedStreamError) {
+                const hasResponse = (data.data.messages as { role: string; content?: string }[]).some(
+                  (m) => m.role === "assistant" && m.content && m.content.length > 0,
+                );
+                if (!hasResponse) setError(suppressedStreamError);
+              }
+            } else if (suppressedStreamError) {
+              setError(suppressedStreamError);
             }
           } catch (e: unknown) {
             // Best-effort — messages stay as optimistic state if reload fails
@@ -220,7 +246,10 @@ export function useChat(conversationId: string | null, options?: UseChatOptions)
               online: typeof navigator !== "undefined" ? navigator.onLine : null,
               conversationId: convId,
             });
+            if (suppressedStreamError) setError(suppressedStreamError);
           }
+        } else if (suppressedStreamError) {
+          setError(suppressedStreamError);
         }
       }
     },

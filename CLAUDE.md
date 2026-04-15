@@ -230,3 +230,21 @@ missing data, wrong API response), run /beta-logs first to pull the last
 - The command requires `THINKARR_INTERNAL_KEY` to be set in `.claude/settings.json` under `env`
 - Retrieve the key from **Settings → Logs → Internal API Key** in the beta admin UI
 - Do not commit or log the key value
+
+## Rule: use /check-services to diagnose service connectivity issues
+
+When a tool call is failing, returning unexpected results, or the user reports a
+service is unreachable, run /check-services before forming a hypothesis. It
+checks Sonarr, Radarr, Plex, and Overseerr directly and reports version,
+reachability, queue size, and missing item counts.
+
+Use it when:
+- A `sonarr_*`, `radarr_*`, or `overseerr_*` tool is returning errors or empty results
+- The user reports that a service "isn't working" or results look wrong
+- After infrastructure changes (new Docker deploy, reverse-proxy change, IP change)
+- Before raising a bug that could be a connectivity or auth problem
+
+Service base URLs and API keys are stored in `.claude/settings.json` under `env`
+(`SONARR_URL`, `SONARR_API_KEY`, `RADARR_URL`, `RADARR_API_KEY`, `PLEX_URL`,
+`PLEX_TOKEN`, `OVERSEERR_URL`, `OVERSEERR_API_KEY`). The skill will ask for any
+that are missing. Do not commit these values.

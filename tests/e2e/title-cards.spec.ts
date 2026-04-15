@@ -23,6 +23,7 @@ import {
   TRIGGER_MULTIPLE,
   TRIGGER_PENDING,
   TRIGGER_NO_EXTERNAL_IDS,
+  TRIGGER_NO_EXTERNAL_IDS_TV,
   TRIGGER_MISSING_MEDIA_TYPE,
 } from "./helpers/mock-servers";
 
@@ -130,6 +131,26 @@ test.describe("Title card — not_requested movie", () => {
     await expect(card.getByTestId("request-success")).toBeVisible({ timeout: 10_000 });
     await expect(card.getByTestId("request-button")).not.toBeVisible();
   });
+
+  test("Requested badge survives conversation reload (issue #338)", async ({ page }) => {
+    await page.goto("/chat");
+
+    await sendMessage(page, TRIGGER_UNAVAILABLE);
+    await expect(page.getByTestId("message-assistant")).toBeVisible({ timeout: 20_000 });
+    await page.waitForLoadState("networkidle");
+
+    const card = page.getByTestId("title-card").first();
+    await card.getByTestId("request-button").click();
+    await expect(card.getByTestId("request-success")).toBeVisible({ timeout: 10_000 });
+
+    // Reload the page — the Requested badge must still be shown
+    await page.reload();
+    await page.waitForLoadState("networkidle");
+
+    const reloadedCard = page.getByTestId("title-card").first();
+    await expect(reloadedCard.getByTestId("request-success")).toBeVisible({ timeout: 10_000 });
+    await expect(reloadedCard.getByTestId("request-button")).not.toBeVisible();
+  });
 });
 
 test.describe("Title card — multiple titles (carousel)", () => {
@@ -219,7 +240,7 @@ test.describe("Title card — summary and rating", () => {
 });
 
 test.describe("Title card — More Info always visible", () => {
-  test("shows More Info even when no imdbId or overseerrId (falls back to TMDB search)", async ({ page }) => {
+  test("shows More Info even when no imdbId or overseerrId (falls back to Google search)", async ({ page }) => {
     await page.goto("/chat");
 
     await sendMessage(page, TRIGGER_NO_EXTERNAL_IDS);
@@ -233,10 +254,29 @@ test.describe("Title card — More Info always visible", () => {
     const moreInfo = card.getByTestId("more-info-button");
     await expect(moreInfo).toBeVisible();
 
-    // Falls back to TMDB search URL
+    // Falls back to Google search URL
     const href = await moreInfo.getAttribute("href");
-    expect(href).toContain("themoviedb.org/search");
+    expect(href).toContain("google.com/search");
     expect(href).toContain("Local%20Favorite");
+  });
+
+  test("TV season card without external IDs uses showTitle (not 'Show — Season N') in Google search", async ({ page }) => {
+    await page.goto("/chat");
+
+    await sendMessage(page, TRIGGER_NO_EXTERNAL_IDS_TV);
+    await expect(page.getByTestId("message-assistant")).toBeVisible({ timeout: 20_000 });
+
+    const card = page.getByTestId("title-card").first();
+    await expect(card).toBeVisible({ timeout: 10_000 });
+
+    const moreInfo = card.getByTestId("more-info-button");
+    await expect(moreInfo).toBeVisible();
+
+    // Must search by showTitle ("Euphoria (US)"), not the full "Euphoria (US) — Season 3"
+    const href = await moreInfo.getAttribute("href");
+    expect(href).toContain("google.com/search");
+    expect(href).toContain("Euphoria");
+    expect(href).not.toContain("Season");
   });
 
   test("shows More Info with IMDB link when imdbId is present", async ({ page }) => {

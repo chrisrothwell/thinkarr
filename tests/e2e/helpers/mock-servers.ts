@@ -35,6 +35,8 @@ export const TRIGGER_MULTIPLE = "e2e show multiple movies";
 export const TRIGGER_PENDING = "e2e show pending tv";
 /** User message trigger → LLM returns display_titles with no imdbId/overseerrId (Plex-only item, tests More Info fallback) */
 export const TRIGGER_NO_EXTERNAL_IDS = "e2e show plex only movie";
+/** User message trigger → LLM returns display_titles with a TV season card (no external IDs) — tests Google search uses showTitle */
+export const TRIGGER_NO_EXTERNAL_IDS_TV = "e2e show plex only tv";
 /** User message trigger → LLM returns display_titles with overseerrId but no overseerrMediaType (tests inference) */
 export const TRIGGER_MISSING_MEDIA_TYPE = "e2e show missing mediatype";
 
@@ -350,7 +352,7 @@ function llmHandler(req: http.IncomingMessage, res: http.ServerResponse) {
 
         if (lastUserContent.includes(TRIGGER_NO_EXTERNAL_IDS)) {
           // Return a display_titles tool call: available Plex-only movie with no imdbId or overseerrId.
-          // Tests that More Info always renders (TMDB search fallback).
+          // Tests that More Info always renders (Google search fallback).
           const args = JSON.stringify({
             titles: [
               {
@@ -359,6 +361,27 @@ function llmHandler(req: http.IncomingMessage, res: http.ServerResponse) {
                 year: 2015,
                 mediaStatus: "available",
                 plexKey: "/library/metadata/500",
+                // no imdbId, no overseerrId
+              },
+            ],
+          });
+          sendToolCallResponse(res, args);
+          return;
+        }
+
+        if (lastUserContent.includes(TRIGGER_NO_EXTERNAL_IDS_TV)) {
+          // Return a display_titles tool call: available Plex-only TV season card (no imdbId/overseerrId).
+          // Tests that More Info falls back to a Google search using showTitle, not the full "— Season N" title.
+          const args = JSON.stringify({
+            titles: [
+              {
+                mediaType: "tv",
+                title: "Euphoria (US) — Season 3",
+                showTitle: "Euphoria (US)",
+                seasonNumber: 3,
+                year: 2026,
+                mediaStatus: "available",
+                plexKey: "/library/metadata/7938/children",
                 // no imdbId, no overseerrId
               },
             ],
