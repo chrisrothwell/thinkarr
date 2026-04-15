@@ -25,16 +25,16 @@ async function enrichSonarrSeries(s: SonarrSeries): Promise<SonarrSeries> {
     if (match) {
       // If Plex has fewer seasons than Sonarr expects, the show is only partially available.
       // match.seasons is Plex childCount; s.seasonCount is derived from Sonarr (season 0 excluded).
-      const mediaStatus =
-        match.seasons != null && s.seasonCount != null && match.seasons < s.seasonCount
-          ? "partial"
-          : "available";
+      const isPartial = match.seasons != null && s.seasonCount != null && match.seasons < s.seasonCount;
       return {
         ...s,
         thumbPath: match.thumbPath ? plex.buildThumbUrl(match.thumbPath) : undefined,
         plexKey: match.plexKey,
         cast: match.cast,
-        mediaStatus,
+        mediaStatus: isPartial ? "partial" : "available",
+        // Only set plexSeasons when partial — tells the LLM which seasons are in Plex
+        // so it can assign 'available' to seasons 1..plexSeasons and 'partial' above that.
+        plexSeasons: isPartial ? (match.seasons ?? 0) : undefined,
       };
     }
   } catch { /* Plex not configured or unavailable */ }
@@ -72,7 +72,7 @@ async function enrichSonarrSeries(s: SonarrSeries): Promise<SonarrSeries> {
 export function registerSonarrTools() {
   defineTool({
     name: "sonarr_search_series",
-    description: "Search for a TV series by title. Returns results from Sonarr's lookup including monitored status, season count, and whether it's in the Sonarr library. Each result is automatically enriched with thumbPath (poster), plexKey (if available in Plex), overseerrId (if found in Overseerr), cast, imdbId, and a pre-computed mediaStatus — pass these directly to display_titles without manual status inference.",
+    description: "Search for a TV series by title. Returns results from Sonarr's library with enriched metadata: thumbPath (poster), plexKey (if in Plex), overseerrId (if in Overseerr), cast, imdbId, and pre-computed mediaStatus. When creating per-season cards with display_titles: if plexSeasons is set (only present when mediaStatus is 'partial'), assign 'available' to season cards numbered 1..plexSeasons and 'partial' to cards numbered above plexSeasons. Otherwise use the series-level mediaStatus for all season cards.",
     schema: z.object({
       term: z.string().describe("Search term (TV show title)"),
     }),

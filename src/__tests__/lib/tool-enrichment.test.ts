@@ -451,7 +451,7 @@ describe("overseerr_search — mediaStatus normalization (#281 #282)", () => {
 describe("sonarr_search_series — pre-computed mediaStatus (#280)", () => {
   const SONARR_SERIES = { id: 10, title: "Breaking Bad", year: 2008, seasonCount: 5, monitored: true, tvdbId: 81189 };
 
-  it("sets mediaStatus 'available' when the show is found in Plex with all seasons", async () => {
+  it("sets mediaStatus 'available' and no plexSeasons when Plex has all seasons", async () => {
     const PLEX_RESULT = {
       title: "Breaking Bad", year: 2008, mediaType: "tv",
       plexKey: "/library/metadata/77", thumbPath: "/library/metadata/77/thumb",
@@ -469,9 +469,10 @@ describe("sonarr_search_series — pre-computed mediaStatus (#280)", () => {
     const raw = await executeTool("sonarr_search_series", JSON.stringify({ term: "Breaking Bad" }));
     const results = JSON.parse(raw) as Record<string, unknown>[];
     expect(results[0].mediaStatus).toBe("available");
+    expect(results[0].plexSeasons).toBeUndefined(); // only set when partial
   });
 
-  it("sets mediaStatus 'partial' when Plex has fewer seasons than Sonarr (issue #364)", async () => {
+  it("sets mediaStatus 'partial' and plexSeasons when Plex has fewer seasons than Sonarr (issues #364, #367)", async () => {
     const PLEX_RESULT = {
       title: "Breaking Bad", year: 2008, mediaType: "tv",
       plexKey: "/library/metadata/77", thumbPath: "/library/metadata/77/thumb",
@@ -489,6 +490,9 @@ describe("sonarr_search_series — pre-computed mediaStatus (#280)", () => {
     const raw = await executeTool("sonarr_search_series", JSON.stringify({ term: "Breaking Bad" }));
     const results = JSON.parse(raw) as Record<string, unknown>[];
     expect(results[0].mediaStatus).toBe("partial");
+    // plexSeasons tells the LLM how many seasons are in Plex so it can assign
+    // 'available' to S1..plexSeasons and 'partial' to seasons above that
+    expect(results[0].plexSeasons).toBe(1);
     expect(mockOverseerrSearch).not.toHaveBeenCalled();
   });
 

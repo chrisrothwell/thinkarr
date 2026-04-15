@@ -41,6 +41,10 @@ export interface SonarrSeries {
   cast?: string[];
   imdbId?: string;
   mediaStatus?: string;
+  /** Number of seasons currently available in Plex. Only set when mediaStatus is 'partial'
+   *  (Plex has fewer seasons than Sonarr). Use to assign per-season status on season cards:
+   *  seasons 1..plexSeasons → 'available'; seasons above plexSeasons → 'partial'. */
+  plexSeasons?: number;
 }
 
 export async function searchSeries(term: string): Promise<SonarrSeries[]> {
