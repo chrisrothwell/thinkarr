@@ -28,7 +28,7 @@ ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
 ENV TZ=UTC
 
-RUN apk upgrade --no-cache zlib openssl && \
+RUN apk upgrade --no-cache zlib openssl musl musl-utils && \
     apk add --no-cache shadow su-exec tzdata && \
     mkdir -p /config && \
     chown node:node /config
