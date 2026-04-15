@@ -13,7 +13,8 @@ import type { SonarrSeries, SonarrSeriesStatus } from "@/lib/services/sonarr";
  */
 /** Derive per-season mediaStatus from Sonarr's own episode counts — no extra API call needed.
  *  episodeCount > 0 means Sonarr has downloaded episodes → "available".
- *  episodeCount === 0 + monitored → tracked by Sonarr, not yet downloaded → "partial" (suppresses Request button).
+ *  episodeCount === 0 + monitored → Sonarr is tracking it, will download when it airs → "pending"
+ *    (suppresses Request button; does NOT imply any content is present, unlike "partial").
  *  episodeCount === 0 + not monitored → "not_requested". */
 function sonarrPerSeasonStatus(
   sonarrSeasons: SonarrSeries["sonarrSeasons"],
@@ -21,7 +22,7 @@ function sonarrPerSeasonStatus(
   if (!sonarrSeasons || sonarrSeasons.length < 2) return undefined;
   return sonarrSeasons.map(({ seasonNumber, episodeCount, monitored }) => ({
     seasonNumber,
-    mediaStatus: episodeCount > 0 ? "available" : monitored ? "partial" : "not_requested",
+    mediaStatus: episodeCount > 0 ? "available" : monitored ? "pending" : "not_requested",
   }));
 }
 

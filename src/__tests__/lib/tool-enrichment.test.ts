@@ -503,7 +503,7 @@ describe("sonarr_search_series — pre-computed mediaStatus (#280)", () => {
     const seasons = results[0].seasons as Array<{ seasonNumber: number; mediaStatus: string }>;
     expect(seasons).toEqual([
       { seasonNumber: 1, mediaStatus: "available" },
-      { seasonNumber: 2, mediaStatus: "partial" },
+      { seasonNumber: 2, mediaStatus: "pending" },
     ]);
     expect(mockOverseerrSearch).not.toHaveBeenCalled();
   });
