@@ -451,11 +451,12 @@ describe("overseerr_search — mediaStatus normalization (#281 #282)", () => {
 describe("sonarr_search_series — pre-computed mediaStatus (#280)", () => {
   const SONARR_SERIES = { id: 10, title: "Breaking Bad", year: 2008, seasonCount: 5, monitored: true, tvdbId: 81189 };
 
-  it("sets mediaStatus 'available' when the show is found in Plex", async () => {
+  it("sets mediaStatus 'available' when the show is found in Plex with all seasons", async () => {
     const PLEX_RESULT = {
       title: "Breaking Bad", year: 2008, mediaType: "tv",
       plexKey: "/library/metadata/77", thumbPath: "/library/metadata/77/thumb",
       cast: ["Bryan Cranston"],
+      seasons: 5, // matches SONARR_SERIES.seasonCount
     };
     mockSonarrSearchSeries.mockResolvedValueOnce([SONARR_SERIES]);
     mockPlexSearchLibrary.mockResolvedValueOnce({ results: [PLEX_RESULT], hasMore: false });
@@ -468,6 +469,27 @@ describe("sonarr_search_series — pre-computed mediaStatus (#280)", () => {
     const raw = await executeTool("sonarr_search_series", JSON.stringify({ term: "Breaking Bad" }));
     const results = JSON.parse(raw) as Record<string, unknown>[];
     expect(results[0].mediaStatus).toBe("available");
+  });
+
+  it("sets mediaStatus 'partial' when Plex has fewer seasons than Sonarr (issue #364)", async () => {
+    const PLEX_RESULT = {
+      title: "Breaking Bad", year: 2008, mediaType: "tv",
+      plexKey: "/library/metadata/77", thumbPath: "/library/metadata/77/thumb",
+      cast: ["Bryan Cranston"],
+      seasons: 1, // Plex only has S1; Sonarr knows about 5 seasons
+    };
+    mockSonarrSearchSeries.mockResolvedValueOnce([SONARR_SERIES]);
+    mockPlexSearchLibrary.mockResolvedValueOnce({ results: [PLEX_RESULT], hasMore: false });
+
+    const { registerSonarrTools } = await import("@/lib/tools/sonarr-tools");
+    const { defineTool, executeTool } = await import("@/lib/tools/registry");
+    (defineTool as unknown as { _registry?: Map<string, unknown> })._registry?.clear?.();
+    registerSonarrTools();
+
+    const raw = await executeTool("sonarr_search_series", JSON.stringify({ term: "Breaking Bad" }));
+    const results = JSON.parse(raw) as Record<string, unknown>[];
+    expect(results[0].mediaStatus).toBe("partial");
+    expect(mockOverseerrSearch).not.toHaveBeenCalled();
   });
 
   it("sets mediaStatus from Overseerr (normalized) when not in Plex", async () => {

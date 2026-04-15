@@ -50,10 +50,12 @@ import { getSeriesStatus, searchSeries } from "@/lib/services/sonarr";
 // Library series returned by /series — all have id (issue #361)
 // ---------------------------------------------------------------------------
 const FAKE_LIBRARY = [
-  { id: 10, title: "CIA (2026)", year: 2026, status: "continuing", monitored: true, tvdbId: 462856, seasons: [{}, {}] },
-  { id: 11, title: "CIA Files", year: 2020, status: "ended", monitored: true, tvdbId: 222222, seasons: [{}] },
-  { id: 12, title: "Scrubs (2026)", year: 2026, status: "continuing", monitored: true, tvdbId: 465690, seasons: [{}, {}, {}] },
+  { id: 10, title: "CIA (2026)", year: 2026, status: "continuing", monitored: true, tvdbId: 462856, seasons: [{ seasonNumber: 1 }, { seasonNumber: 2 }] },
+  { id: 11, title: "CIA Files", year: 2020, status: "ended", monitored: true, tvdbId: 222222, seasons: [{ seasonNumber: 1 }] },
+  { id: 12, title: "Scrubs (2026)", year: 2026, status: "continuing", monitored: true, tvdbId: 465690, seasons: [{ seasonNumber: 1 }, { seasonNumber: 2 }, { seasonNumber: 3 }] },
   { id: 13, title: "Run", year: 2019, status: "ended", monitored: false, tvdbId: 333333, seasons: [] },
+  // Season 0 (specials) must not count toward seasonCount (issue #364)
+  { id: 14, title: "Lord of the Flies (2025)", year: 2025, status: "continuing", monitored: true, tvdbId: 999999, seasons: [{ seasonNumber: 0 }, { seasonNumber: 1 }] },
 ];
 
 describe("searchSeries — searches library only, never /series/lookup (issue #361)", () => {
@@ -87,6 +89,11 @@ describe("searchSeries — searches library only, never /series/lookup (issue #3
   it("derives seasonCount from seasons array", async () => {
     const results = await searchSeries("CIA (2026)");
     expect(results[0].seasonCount).toBe(2);
+  });
+
+  it("excludes season 0 (specials) from seasonCount (issue #364)", async () => {
+    const results = await searchSeries("Lord of the Flies");
+    expect(results[0].seasonCount).toBe(1);
   });
 });
 

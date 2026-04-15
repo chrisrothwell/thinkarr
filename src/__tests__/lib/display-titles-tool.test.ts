@@ -635,4 +635,46 @@ describe("display_titles — issue #351: imdbId side-query from Plex Guid", () =
     // No imdbId but no error thrown
     expect(displayTitles[0].imdbId).toBeUndefined();
   });
+
+  it("recovers thumbPath from Plex metadata when LLM drops it (issue #364)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string) => {
+      if ((url as string).includes("/library/metadata/77")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            MediaContainer: {
+              Metadata: [{
+                type: "show",
+                title: "Starfleet Academy",
+                thumb: "/library/metadata/77/thumb/1234567890",
+                Guid: [{ id: "imdb://tt1234567" }],
+              }],
+            },
+          }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ MediaContainer: { machineIdentifier: "abc123" } }) });
+    }));
+
+    const { registerDisplayTitlesTool } = await import("@/lib/tools/display-titles-tool");
+    const { executeTool } = await import("@/lib/tools/registry");
+    registerDisplayTitlesTool();
+
+    const raw = await executeTool("display_titles", JSON.stringify({
+      titles: [{
+        mediaType: "tv",
+        title: "Starfleet Academy — Season 1",
+        seasonNumber: 1,
+        mediaStatus: "available",
+        plexKey: "/library/metadata/77",
+        // thumbPath intentionally absent — LLM dropped it
+      }],
+    }));
+    const { displayTitles } = JSON.parse(raw) as { displayTitles: Array<{ thumbUrl?: string; imdbId?: string }> };
+    // thumbPath recovered from Plex metadata and proxied through /api/plex/thumb
+    expect(displayTitles[0].thumbUrl).toContain("/api/plex/thumb");
+    expect(displayTitles[0].thumbUrl).toContain("1234567890");
+    // imdbId also recovered in the same fetch
+    expect(displayTitles[0].imdbId).toBe("tt1234567");
+  });
 });

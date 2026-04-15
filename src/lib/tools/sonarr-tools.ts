@@ -23,12 +23,18 @@ async function enrichSonarrSeries(s: SonarrSeries): Promise<SonarrSeries> {
         (!s.year || !r.year || r.year === s.year),
     );
     if (match) {
+      // If Plex has fewer seasons than Sonarr expects, the show is only partially available.
+      // match.seasons is Plex childCount; s.seasonCount is derived from Sonarr (season 0 excluded).
+      const mediaStatus =
+        match.seasons != null && s.seasonCount != null && match.seasons < s.seasonCount
+          ? "partial"
+          : "available";
       return {
         ...s,
         thumbPath: match.thumbPath ? plex.buildThumbUrl(match.thumbPath) : undefined,
         plexKey: match.plexKey,
         cast: match.cast,
-        mediaStatus: "available",
+        mediaStatus,
       };
     }
   } catch { /* Plex not configured or unavailable */ }

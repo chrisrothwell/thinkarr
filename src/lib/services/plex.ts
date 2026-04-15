@@ -119,19 +119,26 @@ export async function getPlexMachineId(): Promise<string | undefined> {
 }
 
 /**
- * Resolve an IMDb ID for a given Plex metadata key by fetching the item's Guid array.
- * For season keys, follows parentKey to the show (Guid lives on the show, not the season).
- * Returns undefined if the item has no IMDb Guid or Plex is unreachable.
+ * Resolve metadata from a Plex key: returns both the IMDb ID (from the show's Guid array)
+ * and the item's own thumbPath. thumbPath is captured before following parentKey so it
+ * reflects the actual item (e.g. a season's thumb), not the show's thumb.
  *
- * Used by display-titles-tool as a side-query to recover imdbId when the LLM drops it.
+ * For season keys, follows parentKey to the show for IMDb resolution (Guid lives on the show).
+ * Returns empty object if Plex is unreachable.
+ *
+ * Used by display-titles-tool as a side-query to recover imdbId and thumbPath when the LLM
+ * drops them (issues #351, #364).
  */
-export async function getImdbIdFromPlexKey(plexKey: string): Promise<string | undefined> {
+export async function getMetadataFromPlexKey(plexKey: string): Promise<{ imdbId?: string; thumbPath?: string }> {
   // Strip /children to get the metadata item path (e.g. "/library/metadata/7938/children" → "/library/metadata/7938")
   const normalizedKey = plexKey.replace(/\/children\/?$/, "");
   const path = normalizedKey.startsWith("/") ? normalizedKey : `/${normalizedKey}`;
 
   const data = await plexFetch(path);
   let item: Record<string, unknown> = data?.MediaContainer?.Metadata?.[0] ?? {};
+
+  // thumb lives on the item itself — capture before following parentKey
+  const thumbPath = item.thumb as string | undefined;
 
   // IMDb Guid is on the show — follow parentKey for seasons, grandparentKey for episodes
   const itemType = item.type as string | undefined;
@@ -153,7 +160,15 @@ export async function getImdbIdFromPlexKey(plexKey: string): Promise<string | un
     } catch { /* fall through to episode's own Guid */ }
   }
 
-  return extractImdbId(item);
+  return { imdbId: extractImdbId(item), thumbPath };
+}
+
+/**
+ * Resolve an IMDb ID for a given Plex metadata key.
+ * @deprecated Use getMetadataFromPlexKey — returns both imdbId and thumbPath in one fetch.
+ */
+export async function getImdbIdFromPlexKey(plexKey: string): Promise<string | undefined> {
+  return (await getMetadataFromPlexKey(plexKey)).imdbId;
 }
 
 /**
