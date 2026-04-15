@@ -728,4 +728,55 @@ describe("display_titles — issue #351: imdbId side-query from Plex Guid", () =
     // imdbId also recovered in the same fetch
     expect(displayTitles[0].imdbId).toBe("tt1234567");
   });
+
+  it("recovers thumbPath for a 'pending' season card when LLM drops plexKey and thumbPath", async () => {
+    // Sonarr per-season 'pending' cards (monitored, nothing downloaded) were not included
+    // in plexKeyOverrides lookup, so thumbPath recovery never fired for them.
+    // Fix: include 'pending' in the needsLookup filter so the show's plexKey is resolved
+    // and thumbPath can be recovered via Plex metadata.
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string) => {
+      if ((url as string).includes("/hubs/search")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            MediaContainer: {
+              Hub: [{
+                type: "show",
+                Metadata: [{ type: "show", title: "Starfleet Academy", year: 2026, key: "/library/metadata/7116", thumb: "/library/metadata/7116/thumb/abc", addedAt: 1700000000 }],
+              }],
+            },
+          }),
+        });
+      }
+      if ((url as string).includes("/library/metadata/7116")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            MediaContainer: {
+              Metadata: [{ type: "show", title: "Starfleet Academy", thumb: "/library/metadata/7116/thumb/abc", Guid: [{ id: "imdb://tt7587890" }] }],
+            },
+          }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ MediaContainer: { machineIdentifier: "abc123" } }) });
+    }));
+
+    const { registerDisplayTitlesTool } = await import("@/lib/tools/display-titles-tool");
+    const { executeTool } = await import("@/lib/tools/registry");
+    registerDisplayTitlesTool();
+
+    const raw = await executeTool("display_titles", JSON.stringify({
+      titles: [{
+        mediaType: "tv",
+        title: "Starfleet Academy — Season 2",
+        year: 2026,
+        seasonNumber: 2,
+        mediaStatus: "pending",
+        // LLM dropped both plexKey and thumbPath
+      }],
+    }));
+    const { displayTitles } = JSON.parse(raw) as { displayTitles: Array<{ thumbUrl?: string }> };
+    expect(displayTitles[0].thumbUrl).toContain("/api/plex/thumb");
+    expect(displayTitles[0].thumbUrl).toContain("abc");
+  });
 });

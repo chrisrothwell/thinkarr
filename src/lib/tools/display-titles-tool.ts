@@ -74,7 +74,7 @@ For overseerr_list_requests results: one card per request is correct (no season 
         const needsLookup = args.titles
           .map((t, i) => ({ t, i }))
           .filter(({ t }) =>
-            (t.mediaStatus === "available" || t.mediaStatus === "partial") &&
+            (t.mediaStatus === "available" || t.mediaStatus === "partial" || t.mediaStatus === "pending") &&
             !t.plexKey &&
             t.title,
           );
