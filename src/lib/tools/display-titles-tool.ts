@@ -166,8 +166,9 @@ For overseerr_list_requests results: one card per request is correct (no season 
         }
       }
 
-      // Issues #351, #364: LLMs often drop imdbId and/or thumbPath even when present in
-      // Plex search results. For titles with a plexKey but missing either field, fetch the
+      // Issues #351, #364: LLMs often drop imdbId and/or thumbPath — sometimes also plexKey —
+      // even when present in search results. For titles with any known plexKey (from the LLM
+      // input OR recovered by plexKeyOverrides above) but missing imdbId/thumbPath, fetch the
       // Plex metadata in one call per unique key (getMetadataFromPlexKey returns both).
       // Deduplicated by normalized plexKey (strip /children) — season cards sharing the
       // same show key fire one fetch, not one per card.
@@ -175,17 +176,19 @@ For overseerr_list_requests results: one card per request is correct (no season 
       if (baseUrl) {
         const needsMeta = args.titles
           .map((t, i) => ({ t, i }))
-          .filter(({ t }) =>
-            t.plexKey && (
+          .filter(({ t, i }) => {
+            const effectiveKey = t.plexKey ?? plexKeyOverrides.get(i);
+            return effectiveKey && (
               ((t.mediaStatus === "available" || t.mediaStatus === "partial") && !t.imdbId) ||
               !t.thumbPath
-            ),
-          );
+            );
+          });
 
         if (needsMeta.length > 0) {
           const byKey = new Map<string, { indices: number[] }>();
           for (const { t, i } of needsMeta) {
-            const normalized = t.plexKey!.replace(/\/children\/?$/, "");
+            const effectiveKey = (t.plexKey ?? plexKeyOverrides.get(i))!;
+            const normalized = effectiveKey.replace(/\/children\/?$/, "");
             const existing = byKey.get(normalized);
             if (existing) {
               existing.indices.push(i);

@@ -636,6 +636,57 @@ describe("display_titles — issue #351: imdbId side-query from Plex Guid", () =
     expect(displayTitles[0].imdbId).toBeUndefined();
   });
 
+  it("recovers thumbPath via plexKeyOverrides when LLM drops both thumbPath AND plexKey (issue #367)", async () => {
+    // Simulate: LLM has a Plex-available show but drops both plexKey and thumbPath.
+    // The plexKeyOverrides mechanism finds plexKey via /hubs/search, then thumbPath
+    // recovery must use that resolved key — not just t.plexKey (which is null).
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string) => {
+      if ((url as string).includes("/hubs/search")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            MediaContainer: {
+              Hub: [{
+                type: "show",
+                Metadata: [{ type: "show", title: "Starfleet Academy", year: 2026, key: "/library/metadata/7116", thumb: "/library/metadata/7116/thumb/abc", addedAt: 1700000000 }],
+              }],
+            },
+          }),
+        });
+      }
+      if ((url as string).includes("/library/metadata/7116")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            MediaContainer: {
+              Metadata: [{ type: "show", title: "Starfleet Academy", thumb: "/library/metadata/7116/thumb/abc", Guid: [{ id: "imdb://tt7587890" }] }],
+            },
+          }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ MediaContainer: { machineIdentifier: "abc123" } }) });
+    }));
+
+    const { registerDisplayTitlesTool } = await import("@/lib/tools/display-titles-tool");
+    const { executeTool } = await import("@/lib/tools/registry");
+    registerDisplayTitlesTool();
+
+    const raw = await executeTool("display_titles", JSON.stringify({
+      titles: [{
+        mediaType: "tv",
+        title: "Starfleet Academy",
+        year: 2026,
+        seasonNumber: 1,
+        mediaStatus: "partial",
+        // LLM dropped both plexKey and thumbPath
+      }],
+    }));
+    const { displayTitles } = JSON.parse(raw) as { displayTitles: Array<{ thumbUrl?: string; plexKey?: string }> };
+    expect(displayTitles[0].plexKey).toBe("/library/metadata/7116");  // recovered by plexKeyOverrides
+    expect(displayTitles[0].thumbUrl).toContain("/api/plex/thumb");   // recovered via plexKeyOverrides key
+    expect(displayTitles[0].thumbUrl).toContain("abc");
+  });
+
   it("recovers thumbPath from Plex metadata when LLM drops it (issue #364)", async () => {
     vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string) => {
       if ((url as string).includes("/library/metadata/77")) {
