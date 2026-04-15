@@ -59,7 +59,7 @@ export async function searchSeries(term: string): Promise<SonarrSeries[]> {
       year: s.year as number,
       overview: (s.overview as string)?.substring(0, 200),
       status: s.status as string,
-      seasonCount: ((s.seasons as unknown[]) || []).length || undefined,
+      seasonCount: ((s.seasons as Array<Record<string, unknown>>) || []).filter((season) => (season.seasonNumber as number) > 0).length || undefined,
       monitored: s.monitored as boolean,
       tvdbId: s.tvdbId as number,
     }));
@@ -124,7 +124,7 @@ export async function getSeriesStatus(title: string): Promise<SonarrSeriesStatus
     year: detail.year as number | undefined,
     networkStatus: detail.status as string,
     monitored: detail.monitored as boolean,
-    totalSeasons: (detail.seasons as unknown[])?.length ?? 0,
+    totalSeasons: ((detail.seasons as Array<Record<string, unknown>>) || []).filter((s) => (s.seasonNumber as number) > 0).length,
     totalEpisodes: (stats?.totalEpisodeCount as number) ?? 0,
     downloadedEpisodes: (stats?.episodeCount as number) ?? 0,
     missingEpisodes: ((stats?.totalEpisodeCount as number) ?? 0) - ((stats?.episodeCount as number) ?? 0),
