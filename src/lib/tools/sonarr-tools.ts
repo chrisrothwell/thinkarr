@@ -46,7 +46,7 @@ async function enrichSonarrSeries(s: SonarrSeries): Promise<SonarrSeries> {
       const isPartial = match.seasons != null && s.seasonCount != null && match.seasons < s.seasonCount;
       return {
         ...rest,
-        thumbPath: match.thumbPath ? plex.buildThumbUrl(match.thumbPath) : undefined,
+        thumbPath: match.thumbPath,
         plexKey: match.plexKey,
         cast: match.cast,
         mediaStatus: isPartial ? "partial" : "available",

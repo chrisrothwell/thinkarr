@@ -27,7 +27,7 @@ async function enrichRadarrMovie(m: RadarrMovie): Promise<RadarrMovie> {
     if (match) {
       return {
         ...m,
-        thumbPath: match.thumbPath ? plex.buildThumbUrl(match.thumbPath) : undefined,
+        thumbPath: match.thumbPath,
         plexKey: match.plexKey,
         cast: match.cast,
       };
