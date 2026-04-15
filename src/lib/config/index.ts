@@ -99,7 +99,9 @@ export function getNextPeriodStart(period: RateLimitPeriod): Date {
 // ---------------------------------------------------------------------------
 
 export function getUserMcpToken(userId: number): string | null {
-  return getConfig(`user.${userId}.mcpToken`);
+  const db = getDb();
+  const row = db.select({ mcpToken: schema.users.mcpToken }).from(schema.users).where(eq(schema.users.id, userId)).get();
+  return row?.mcpToken ?? null;
 }
 
 export function setUserMcpToken(userId: number, token: string): void {

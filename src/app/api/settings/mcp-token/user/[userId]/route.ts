@@ -3,7 +3,7 @@ import { randomBytes } from "crypto";
 import { getSession } from "@/lib/auth/session";
 import { getDb, schema } from "@/lib/db";
 import { eq } from "drizzle-orm";
-import { getUserMcpToken, setUserMcpToken } from "@/lib/config";
+import { getConfig, getUserMcpToken, setUserMcpToken } from "@/lib/config";
 import { logger } from "@/lib/logger";
 import type { ApiResponse } from "@/types/api";
 
@@ -52,7 +52,9 @@ export async function GET(
 
   let token = getUserMcpToken(userId);
   if (!token) {
-    token = randomBytes(32).toString("hex");
+    // Check legacy app_config path (pre-0002 migration) before generating a new token
+    const legacyToken = getConfig(`user.${userId}.mcpToken`);
+    token = legacyToken ?? randomBytes(32).toString("hex");
     setUserMcpToken(userId, token);
   }
 

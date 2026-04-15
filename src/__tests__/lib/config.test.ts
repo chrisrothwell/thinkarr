@@ -227,6 +227,25 @@ describe("getUserMcpToken / setUserMcpToken / getUserIdByMcpToken", () => {
     expect(getUserIdByMcpToken("old-token")).toBeNull();
     expect(getUserIdByMcpToken("new-token")).toBe(uid);
   });
+
+  it("getUserMcpToken returns null if only app_config has the token (pre-migration state)", () => {
+    // Simulate a user whose token was never written to users.mcp_token (pre-0002 schema)
+    const uid = insertUser("mcp-user-6");
+    setConfig(`user.${uid}.mcpToken`, "legacy-token");
+    // getUserMcpToken reads from users.mcp_token, not app_config — returns null
+    expect(getUserMcpToken(uid)).toBeNull();
+    // getUserIdByMcpToken also returns null — token is not yet active
+    expect(getUserIdByMcpToken("legacy-token")).toBeNull();
+  });
+
+  it("backfill: writing token to users.mcp_token activates legacy app_config token", () => {
+    const uid = insertUser("mcp-user-7");
+    setConfig(`user.${uid}.mcpToken`, "legacy-token");
+    // Backfill path: read from app_config, write to users.mcp_token via setUserMcpToken
+    setUserMcpToken(uid, "legacy-token");
+    expect(getUserMcpToken(uid)).toBe("legacy-token");
+    expect(getUserIdByMcpToken("legacy-token")).toBe(uid);
+  });
 });
 
 // ---------------------------------------------------------------------------
