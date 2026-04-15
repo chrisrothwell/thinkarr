@@ -451,7 +451,7 @@ describe("overseerr_search — mediaStatus normalization (#281 #282)", () => {
 describe("sonarr_search_series — pre-computed mediaStatus (#280)", () => {
   const SONARR_SERIES = { id: 10, title: "Breaking Bad", year: 2008, seasonCount: 5, monitored: true, tvdbId: 81189 };
 
-  it("sets mediaStatus 'available' and no plexSeasons when Plex has all seasons", async () => {
+  it("sets mediaStatus 'available' and no seasons array when Plex has all seasons", async () => {
     const PLEX_RESULT = {
       title: "Breaking Bad", year: 2008, mediaType: "tv",
       plexKey: "/library/metadata/77", thumbPath: "/library/metadata/77/thumb",
@@ -469,17 +469,26 @@ describe("sonarr_search_series — pre-computed mediaStatus (#280)", () => {
     const raw = await executeTool("sonarr_search_series", JSON.stringify({ term: "Breaking Bad" }));
     const results = JSON.parse(raw) as Record<string, unknown>[];
     expect(results[0].mediaStatus).toBe("available");
-    expect(results[0].plexSeasons).toBeUndefined(); // only set when partial
+    expect(results[0].seasons).toBeUndefined(); // only set when partial
   });
 
-  it("sets mediaStatus 'partial' and plexSeasons when Plex has fewer seasons than Sonarr (issues #364, #367)", async () => {
+  it("sets mediaStatus 'partial' and seasons[] derived from Sonarr episode counts when Plex has fewer seasons (issues #364, #367)", async () => {
     const PLEX_RESULT = {
       title: "Breaking Bad", year: 2008, mediaType: "tv",
       plexKey: "/library/metadata/77", thumbPath: "/library/metadata/77/thumb",
       cast: ["Bryan Cranston"],
-      seasons: 1, // Plex only has S1; Sonarr knows about 5 seasons
+      seasons: 1, // Plex only has S1; Sonarr knows about 2 seasons
     };
-    mockSonarrSearchSeries.mockResolvedValueOnce([SONARR_SERIES]);
+    // sonarrSeasons: S1 downloaded (episodeCount>0), S2 monitored but not downloaded
+    const SONARR_PARTIAL = {
+      ...SONARR_SERIES,
+      seasonCount: 2,
+      sonarrSeasons: [
+        { seasonNumber: 1, episodeCount: 13, monitored: true },
+        { seasonNumber: 2, episodeCount: 0, monitored: true },
+      ],
+    };
+    mockSonarrSearchSeries.mockResolvedValueOnce([SONARR_PARTIAL]);
     mockPlexSearchLibrary.mockResolvedValueOnce({ results: [PLEX_RESULT], hasMore: false });
 
     const { registerSonarrTools } = await import("@/lib/tools/sonarr-tools");
@@ -490,9 +499,12 @@ describe("sonarr_search_series — pre-computed mediaStatus (#280)", () => {
     const raw = await executeTool("sonarr_search_series", JSON.stringify({ term: "Breaking Bad" }));
     const results = JSON.parse(raw) as Record<string, unknown>[];
     expect(results[0].mediaStatus).toBe("partial");
-    // plexSeasons tells the LLM how many seasons are in Plex so it can assign
-    // 'available' to S1..plexSeasons and 'partial' to seasons above that
-    expect(results[0].plexSeasons).toBe(1);
+    // seasons[] uses Sonarr episode counts — no Plex lookup needed for per-season status
+    const seasons = results[0].seasons as Array<{ seasonNumber: number; mediaStatus: string }>;
+    expect(seasons).toEqual([
+      { seasonNumber: 1, mediaStatus: "available" },
+      { seasonNumber: 2, mediaStatus: "partial" },
+    ]);
     expect(mockOverseerrSearch).not.toHaveBeenCalled();
   });
 

@@ -11,7 +11,24 @@ import type { SonarrSeries, SonarrSeriesStatus } from "@/lib/services/sonarr";
  * 2. Falling back to Overseerr search + getDetails (gives overseerrId, thumbPath, cast, imdbId)
  * Non-fatal: returns the unmodified series if both lookups fail.
  */
+/** Derive per-season mediaStatus from Sonarr's own episode counts — no extra API call needed.
+ *  episodeCount > 0 means Sonarr has downloaded episodes → "available".
+ *  episodeCount === 0 + monitored → tracked by Sonarr, not yet downloaded → "partial" (suppresses Request button).
+ *  episodeCount === 0 + not monitored → "not_requested". */
+function sonarrPerSeasonStatus(
+  sonarrSeasons: SonarrSeries["sonarrSeasons"],
+): Array<{ seasonNumber: number; mediaStatus: string }> | undefined {
+  if (!sonarrSeasons || sonarrSeasons.length < 2) return undefined;
+  return sonarrSeasons.map(({ seasonNumber, episodeCount, monitored }) => ({
+    seasonNumber,
+    mediaStatus: episodeCount > 0 ? "available" : monitored ? "partial" : "not_requested",
+  }));
+}
+
 async function enrichSonarrSeries(s: SonarrSeries): Promise<SonarrSeries> {
+  // Strip internal sonarrSeasons — it's consumed here; the LLM sees the derived `seasons` field instead.
+  const { sonarrSeasons, ...rest } = s;
+
   // --- Plex check ---
   try {
     const { results } = await plex.searchLibrary(s.title);
@@ -27,14 +44,14 @@ async function enrichSonarrSeries(s: SonarrSeries): Promise<SonarrSeries> {
       // match.seasons is Plex childCount; s.seasonCount is derived from Sonarr (season 0 excluded).
       const isPartial = match.seasons != null && s.seasonCount != null && match.seasons < s.seasonCount;
       return {
-        ...s,
+        ...rest,
         thumbPath: match.thumbPath ? plex.buildThumbUrl(match.thumbPath) : undefined,
         plexKey: match.plexKey,
         cast: match.cast,
         mediaStatus: isPartial ? "partial" : "available",
-        // Only set plexSeasons when partial — tells the LLM which seasons are in Plex
-        // so it can assign 'available' to seasons 1..plexSeasons and 'partial' above that.
-        plexSeasons: isPartial ? (match.seasons ?? 0) : undefined,
+        // When partial, include per-season status from Sonarr episode counts so the LLM
+        // can assign the correct status to each season card without a Plex lookup.
+        seasons: isPartial ? sonarrPerSeasonStatus(sonarrSeasons) : undefined,
       };
     }
   } catch { /* Plex not configured or unavailable */ }
@@ -53,7 +70,7 @@ async function enrichSonarrSeries(s: SonarrSeries): Promise<SonarrSeries> {
       // getDetails gives accurate cast and imdbId; thumbPath is already on the search result
       const detail = await overseerr.getDetails(match.overseerrId, "tv");
       return {
-        ...s,
+        ...rest,
         thumbPath: match.thumbPath ?? detail.thumbPath,
         overseerrId: match.overseerrId,
         cast: detail.cast,
@@ -66,13 +83,13 @@ async function enrichSonarrSeries(s: SonarrSeries): Promise<SonarrSeries> {
 
   // In Sonarr library but not yet in Plex — it is being actively managed.
   // Use "partial" to suppress the request button; "pending" is reserved for Overseerr requests.
-  return { ...s, mediaStatus: s.monitored ? "partial" : "not_requested" };
+  return { ...rest, mediaStatus: s.monitored ? "partial" : "not_requested" };
 }
 
 export function registerSonarrTools() {
   defineTool({
     name: "sonarr_search_series",
-    description: "Search for a TV series by title. Returns results from Sonarr's library with enriched metadata: thumbPath (poster), plexKey (if in Plex), overseerrId (if in Overseerr), cast, imdbId, and pre-computed mediaStatus. When creating per-season cards with display_titles: if plexSeasons is set (only present when mediaStatus is 'partial'), assign 'available' to season cards numbered 1..plexSeasons and 'partial' to cards numbered above plexSeasons. Otherwise use the series-level mediaStatus for all season cards.",
+    description: "Search for a TV series by title. Returns results from Sonarr's library with enriched metadata: thumbPath (poster), plexKey (if in Plex), overseerrId (if in Overseerr), cast, imdbId, and pre-computed mediaStatus. When creating per-season cards with display_titles: if seasons is set (only present when mediaStatus is 'partial'), use seasons[].mediaStatus for each individual season card. Otherwise use the series-level mediaStatus for all season cards.",
     schema: z.object({
       term: z.string().describe("Search term (TV show title)"),
     }),
@@ -84,7 +101,7 @@ export function registerSonarrTools() {
      *  LLM has already acted on the search. Keep all identity, status, and enrichment fields. */
     llmSummary: (result: unknown) => {
       return (result as SonarrSeries[]).map(
-        ({ overview: _ov, ...rest }) => rest,
+        ({ overview: _ov, sonarrSeasons: _raw, ...rest }) => rest,
       );
     },
   });

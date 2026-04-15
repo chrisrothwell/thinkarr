@@ -34,6 +34,9 @@ export interface SonarrSeries {
   seasonCount?: number;
   monitored?: boolean;
   tvdbId?: number;
+  // Internal: raw per-season data from Sonarr /series — consumed by enrichSonarrSeries,
+  // never exposed to the LLM (stripped by llmSummary).
+  sonarrSeasons?: Array<{ seasonNumber: number; episodeCount: number; monitored: boolean }>;
   // Enrichment fields — populated by the tool handler via Plex / Overseerr lookups
   thumbPath?: string;
   plexKey?: string;
@@ -41,10 +44,10 @@ export interface SonarrSeries {
   cast?: string[];
   imdbId?: string;
   mediaStatus?: string;
-  /** Number of seasons currently available in Plex. Only set when mediaStatus is 'partial'
-   *  (Plex has fewer seasons than Sonarr). Use to assign per-season status on season cards:
-   *  seasons 1..plexSeasons → 'available'; seasons above plexSeasons → 'partial'. */
-  plexSeasons?: number;
+  /** Per-season status derived from Sonarr episode counts. Only set when mediaStatus is
+   *  'partial' (show spans multiple seasons, some downloaded and some not). The LLM uses
+   *  this to assign the correct mediaStatus to each individual season card. */
+  seasons?: Array<{ seasonNumber: number; mediaStatus: string }>;
 }
 
 export async function searchSeries(term: string): Promise<SonarrSeries[]> {
@@ -57,16 +60,28 @@ export async function searchSeries(term: string): Promise<SonarrSeries[]> {
       (yearMatch !== null && s.year === yearMatch),
     )
     .slice(0, 10)
-    .map((s: Record<string, unknown>) => ({
-      id: s.id as number,
-      title: s.title as string,
-      year: s.year as number,
-      overview: (s.overview as string)?.substring(0, 200),
-      status: s.status as string,
-      seasonCount: ((s.seasons as Array<Record<string, unknown>>) || []).filter((season) => (season.seasonNumber as number) > 0).length || undefined,
-      monitored: s.monitored as boolean,
-      tvdbId: s.tvdbId as number,
-    }));
+    .map((s: Record<string, unknown>) => {
+      const rawSeasons = ((s.seasons as Array<Record<string, unknown>>) || [])
+        .filter((season) => (season.seasonNumber as number) > 0);
+      return {
+        id: s.id as number,
+        title: s.title as string,
+        year: s.year as number,
+        overview: (s.overview as string)?.substring(0, 200),
+        status: s.status as string,
+        seasonCount: rawSeasons.length || undefined,
+        monitored: s.monitored as boolean,
+        tvdbId: s.tvdbId as number,
+        sonarrSeasons: rawSeasons.map((season) => {
+          const stats = season.statistics as Record<string, unknown> | undefined;
+          return {
+            seasonNumber: season.seasonNumber as number,
+            monitored: season.monitored as boolean,
+            episodeCount: (stats?.episodeCount as number) ?? 0,
+          };
+        }),
+      };
+    });
 }
 
 /** @deprecated Avoid in LLM tools — returns all series as a large payload. Use getSeriesStatus instead. */
