@@ -24,9 +24,9 @@ LLM-powered chat assistant for managing your media stack. Connect your Plex, Son
 
 ## Quick Start
 
-It is recommended to run this as a Docker container, alongside your other Arrs tools.
-The docker-compose.yml is designed to be similar to these other Arrs for ease of set up.
-If you are already running Sonarr/Radarr/Overseerr as Docker containers, you can follow the same steps to run the Thinkarr container on your chosen platform.
+- It is recommended to run this as a Docker container, alongside your other Arrs tools.
+- The docker-compose.yml is designed to be similar to these other Arrs for ease of set up.
+- If you are already running Sonarr/Radarr/Overseerr as Docker containers, you can follow the same steps to run the Thinkarr container on your chosen platform.
 
 ```yaml
 # docker-compose.yml
@@ -81,36 +81,36 @@ Depending on your preference and willingness to pay, you can sign up for and con
 
 | Organisation | Model Availability | Platform Link | Model Documentation |
 |--------------|--------------------|---------------|---------------------|
-| OpenAI | GPT 4, GPT 5 | https://platform.openai.com | https://developers.openai.com/api/docs/models |
-| Google | Gemini 2.5, 3 | https://aistudio.google.com | https://ai.google.dev/gemini-api/docs/models |
-| OpenRouter | Many | https://openrouter.ai/ | https://openrouter.ai/models |
+| OpenAI | GPT 4, GPT 5 | [OpenAI Platform](https://platform.openai.com) | [Models](https://developers.openai.com/api/docs/models) |
+| Google | Gemini 2.5, 3 | [Google AI Studio](https://aistudio.google.com) | [Models](https://ai.google.dev/gemini-api/docs/models) |
+| OpenRouter | Many | [OpenRouter Homepage](https://openrouter.ai/) | [Models](https://openrouter.ai/models) |
 
-You may also wish to run your own LLMs e.g. OLlama, which is outside the scope of this document.
-Any OpenAI compatible endpoint should work, although models and providers have various quirks which may require a code fix before they work.
+- You may also wish to run your own LLMs e.g. OLlama, which is outside the scope of this document.
+- Any OpenAI compatible endpoint should work, although models and providers have various quirks which may require a code fix before they work.
 
 ## Choosing an LLM
 
 The system prompt, tools and LLM call flow has been tested in the following configurations:
 
-| Model | Hosted by | Capabilities | Quality | Cost per turn $USD |
+| Model | Base URL | Capabilities | Quality | Cost per turn $USD |
 |-------|-----------|--------------|---------|--------------------|
-| `OpenAI gpt-4.1` | OpenAI (https://api.openai.com/v1) | Text, STT (Whisper), TTS | Very Good | $0.04342 |
-| `OpenAI gpt-5-mini` | OpenAI (https://api.openai.com/v1) | Text, STT (Whisper), TTS | Under testing | $X.XX |
-| `gemini-2.5-flash-lite` | Google (generativelanguage.googleapis.com/v1beta/openai) | Text | Medium, hallucinates tool calls, struggles with JSON handling, quickly forgets context | $0.002 |
-| `gemini-3.1-flash-lite-preview` | Google (generativelanguage.googleapis.com/v1beta/openai) | Text | Very Good | $0.0068 |
-| `moonshotai/kimi-k2.5` | OpenRouter (https://openrouter.ai/api/v1) | Text | Very Good, when available | Free Tier |
+| `OpenAI gpt-4.1` | https://api.openai.com/v1 | Text, STT (Whisper), TTS | Very Good | $0.04342 |
+| `OpenAI gpt-5-mini` | https://api.openai.com/v1 | Text, STT (Whisper), TTS | Under testing | $X.XX |
+| `gemini-2.5-flash-lite` | https://generativelanguage.googleapis.com/v1beta/openai | Text | Medium, hallucinates tool calls, struggles with JSON handling, quickly forgets context | $0.002 |
+| `gemini-3.1-flash-lite-preview` | https://generativelanguage.googleapis.com/v1beta/openai | Text | Very Good | $0.0068 |
+| `moonshotai/kimi-k2.5` | https://openrouter.ai/api/v1 | Text | Very Good, when available | Free Tier |
 
-Cost per turn is the approximate token cost observed during testing for a question which results in one API tool call and displaying the title carousel.
-These were all tested using the Default prompt.  You may be able to achieve better results on cheaper models by tweaking the system prompt.
-When selecting a model, you may wish to consider that the input:output ratio is approximately 60:1 so you should prioritize models with cheaper input / cached input costs.
-Please let me know which combination of model & prompt works best for you!!
+- Cost per turn is the approximate token cost observed during testing for a question which results in one API tool call and displaying the title carousel.
+- These were all tested using the Default prompt.  You may be able to achieve better results on cheaper models by tweaking the system prompt.
+- When selecting a model, you may wish to consider that the input:output ratio is approximately 60:1 so you should prioritize models with cheaper input / cached input costs.
+- Please let me know which combination of model & prompt works best for you!!
 
 ## Development
 
-Contributions are welcome! Feel free to fork the repo and clone to your local device.
-Please make changes on a new branch with a meaningful name, and be sure to test before pushing upstream.
+- Contributions are welcome! Feel free to fork the repo and clone to your local device.
+- Please make changes on a new branch with a meaningful name, and be sure to test before pushing upstream.
 
-Building from source:
+### Building from source:
 
 ```bash
 # Install dependencies
@@ -128,6 +128,6 @@ npx drizzle-kit generate
 
 ## Support and Feedback
 
-You can ask questions in the Help category of our [GitHub Discussions](https://github.com/chrisrothwell/thinkarr/discussions).
-Bug reports and feature requests can be submitted via [GitHub Issues](https://github.com/chrisrothwell/thinkarr/issues).
-I would love to get your input!
+- You can ask questions in the Help category of our [GitHub Discussions](https://github.com/chrisrothwell/thinkarr/discussions).
+- Bug reports and feature requests can be submitted via [GitHub Issues](https://github.com/chrisrothwell/thinkarr/issues).
+- I would love to get your input!
