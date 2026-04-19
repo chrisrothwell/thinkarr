@@ -949,6 +949,90 @@ describe("getSeriesEpisodes — issue #197", () => {
   });
 });
 
+describe("getPlexDevices — plex.tv resources endpoint", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  const PLEX_RESOURCES = [
+    {
+      name: "plexorcist",
+      clientIdentifier: "abc123",
+      accessToken: "server-token",
+      owned: true,
+      provides: "server",
+      connection: [
+        { protocol: "http", address: "192.168.1.20", port: 32400, uri: "http://192.168.1.20:32400", local: true },
+        { protocol: "https", address: "1-2-3-4.plex.direct", port: 32400, uri: "https://1-2-3-4.plex.direct:32400", local: false },
+      ],
+    },
+    {
+      name: "My Plex Player",
+      clientIdentifier: "def456",
+      accessToken: "player-token",
+      owned: true,
+      provides: "player",
+      connection: [],
+    },
+  ];
+
+  it("filters to server devices only and maps connection key correctly", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => PLEX_RESOURCES,
+    }));
+
+    const { getPlexDevices } = await import("@/lib/services/plex-auth");
+    const servers = await getPlexDevices("user-token");
+
+    expect(servers).toHaveLength(1);
+    expect(servers[0].name).toBe("plexorcist");
+    expect(servers[0].accessToken).toBe("server-token");
+    expect(servers[0].connections).toHaveLength(2);
+    expect(servers[0].connections[0].local).toBe(true);
+    expect(servers[0].connections[1].protocol).toBe("https");
+  });
+
+  it("sends required Plex headers and passes token as header not query param", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [],
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { getPlexDevices } = await import("@/lib/services/plex-auth");
+    await getPlexDevices("my-token");
+
+    const [url, opts] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const headers = opts.headers as Record<string, string>;
+    expect(headers["X-Plex-Product"]).toBe("Thinkarr");
+    expect(headers["X-Plex-Client-Identifier"]).toBe("thinkarr");
+    expect(headers["X-Plex-Token"]).toBe("my-token");
+    expect(url).not.toContain("X-Plex-Token");
+  });
+
+  it("throws with HTTP status when plex.tv returns an error", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+    }));
+
+    const { getPlexDevices } = await import("@/lib/services/plex-auth");
+    await expect(getPlexDevices("bad-token")).rejects.toThrow("Plex.tv returned HTTP 400");
+  });
+
+  it("returns empty array when no server devices present", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [PLEX_RESOURCES[1]], // player only
+    }));
+
+    const { getPlexDevices } = await import("@/lib/services/plex-auth");
+    const servers = await getPlexDevices("user-token");
+    expect(servers).toHaveLength(0);
+  });
+});
+
 describe("searchLibrary — episode filtering — issue #206", () => {
   beforeEach(() => {
     vi.resetModules();

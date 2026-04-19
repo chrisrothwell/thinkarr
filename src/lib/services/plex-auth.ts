@@ -126,6 +126,57 @@ export async function checkUserHasLibraryAccess(
   }
 }
 
+export interface PlexResourceConnection {
+  protocol: string;
+  address: string;
+  port: number;
+  uri: string;
+  local: boolean;
+}
+
+export interface PlexResource {
+  name: string;
+  clientIdentifier: string;
+  accessToken: string;
+  owned: boolean;
+  connections: PlexResourceConnection[];
+}
+
+/** Fetch the list of Plex server resources accessible to the authenticated user. */
+export async function getPlexDevices(authToken: string): Promise<PlexResource[]> {
+  const res = await fetch(
+    `${PLEX_API_BASE}/api/v2/resources?includeHttps=1&includeRelay=1`,
+    {
+      headers: {
+        ...PLEX_HEADERS,
+        "X-Plex-Token": authToken,
+      },
+      signal: AbortSignal.timeout(10000),
+    },
+  );
+
+  if (!res.ok) {
+    throw new Error(`Plex.tv returned HTTP ${res.status}`);
+  }
+
+  const raw = await res.json() as Record<string, unknown>[];
+  return raw
+    .filter((d) => (d.provides as string | undefined)?.split(",").includes("server"))
+    .map((d) => ({
+      name: d.name as string,
+      clientIdentifier: d.clientIdentifier as string,
+      accessToken: d.accessToken as string,
+      owned: d.owned as boolean,
+      connections: ((d.connection as Record<string, unknown>[]) || []).map((c) => ({
+        protocol: c.protocol as string,
+        address: c.address as string,
+        port: c.port as number,
+        uri: c.uri as string,
+        local: c.local as boolean,
+      })),
+    }));
+}
+
 /** Fetch user info from a Plex auth token. */
 export async function getPlexUser(authToken: string): Promise<PlexUser> {
   const res = await fetch(`${PLEX_API_BASE}/api/v2/user`, {
