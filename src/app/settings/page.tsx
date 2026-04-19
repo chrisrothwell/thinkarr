@@ -163,9 +163,15 @@ export default function SettingsPage() {
   useEffect(() => {
     // Always fetch session first to determine admin status
     fetch("/api/auth/session")
-      .then((r) => r.json())
+      .then(async (r) => {
+        if (r.status === 401) {
+          router.replace("/login");
+          return;
+        }
+        return r.json();
+      })
       .then(async (sessionData) => {
-        if (!sessionData.success) return;
+        if (!sessionData || !sessionData.success) return;
         const user = sessionData.data.user;
         setCurrentUser(user);
 
