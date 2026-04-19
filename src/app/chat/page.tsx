@@ -78,13 +78,17 @@ function ChatPageContent() {
   // Load current user
   useEffect(() => {
     fetch("/api/auth/session")
-      .then((r) => r.json())
-      .then((data) => {
+      .then(async (r) => {
+        if (r.status === 401) {
+          router.replace("/login");
+          return;
+        }
+        const data = await r.json();
         if (data.success) setUser(data.data.user);
       })
       .catch(() => {})
       .finally(() => setUserLoading(false));
-  }, []);
+  }, [router]);
 
   // Load available models, restoring the last-used model from localStorage
   useEffect(() => {
