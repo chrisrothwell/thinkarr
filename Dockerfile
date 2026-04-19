@@ -1,12 +1,11 @@
-# Base image is pinned to a specific digest to prevent supply-chain attacks via
-# tag mutation. Dependabot will open PRs to keep this current automatically.
-# To refresh manually: docker pull node:22-alpine && docker inspect node:22-alpine --format '{{index .RepoDigests 0}}'
-# Stage 1: Install dependencies
+# Node base image — Dependabot keeps this tag current.
+# To pin to a digest instead: docker pull node:25-alpine && docker inspect node:25-alpine --format '{{index .RepoDigests 0}}'
+# Stage 1: Install dependencies (includes native build tools for better-sqlite3)
 FROM node:25-alpine AS deps
 WORKDIR /app
+RUN apk add --no-cache python3 make g++
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
-# Rebuild better-sqlite3 for Alpine
 RUN npm rebuild better-sqlite3
 
 # Stage 2: Build the application
@@ -28,7 +27,7 @@ ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
 ENV TZ=UTC
 
-RUN apk upgrade --no-cache zlib openssl musl musl-utils && \
+RUN apk upgrade --no-cache && \
     apk add --no-cache shadow su-exec tzdata && \
     mkdir -p /config && \
     chown node:node /config

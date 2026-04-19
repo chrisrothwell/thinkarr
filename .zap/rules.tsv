@@ -1,0 +1,47 @@
+# ZAP alert filter — accepted risks and confirmed false positives.
+# Format (tab-separated): <alert_id>	<action>	[parameter	[evidence	[url]]]
+# Actions: IGNORE (suppress entirely), WARN (log but don't fail), FAIL (fail workflow)
+#
+# This file is used by the scheduled ZAP baseline scan (.github/workflows/zap.yml).
+# Assumes PR #402 has been merged (CORP, COOP, X-Powered-By, img-src, form-action fixed).
+# Remaining suppressed findings are either structural Next.js constraints, reverse-proxy
+# responsibilities, or confirmed false positives — each documented below.
+
+# CSP: script-src unsafe-inline / style-src unsafe-inline / connect-src https:
+# unsafe-inline is a Next.js App Router requirement (inline hydration scripts and Tailwind styles).
+# connect-src https: is intentionally broad — LLM base URLs are user-configured at runtime.
+# Both are documented accepted risks; removing them would require significant rework.
+10055	IGNORE
+
+# Proxy Disclosure (TRACE / OPTIONS methods leaking nginx presence)
+# This is a Synology reverse-proxy config issue, not an application fix.
+# Mitigation: disable TRACE in nginx upstream config.
+40025	IGNORE
+
+# HSTS (Strict-Transport-Security) not set
+# Intentionally excluded from the app — HSTS set in-app would permanently break
+# HTTP-only LAN deployments. Must be configured in the reverse proxy (nginx) only.
+# See next.config.ts comment for full rationale.
+10035	IGNORE
+
+# Cross-Origin-Embedder-Policy (COEP) header missing
+# require-corp would break blob: TTS audio (URL.createObjectURL) and WebRTC.
+# COOP and CORP are set (PR #402); COEP is the only remaining 90004 finding.
+90004	IGNORE
+
+# Cookie Slack Detector — false positive
+# The thinkarr_session cookie correctly has no effect on /_next/static/* and other
+# public routes. The middleware intentionally bypasses auth for these paths.
+90027	IGNORE
+
+# Big Redirect Detected — false positive
+# Next.js redirects / → /chat with a full HTML body; this is framework behaviour,
+# not an information leak. The body contains no sensitive data.
+10044	IGNORE
+
+# Informational — no action required
+# These alerts are expected for any modern Next.js application.
+10109	IGNORE
+10049	IGNORE
+10015	IGNORE
+10104	IGNORE

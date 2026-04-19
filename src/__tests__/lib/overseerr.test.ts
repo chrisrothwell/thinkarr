@@ -784,6 +784,222 @@ describe("discover — issue #207", () => {
     const url = fetchMock.mock.calls[0][0] as string;
     expect(url).toContain("/discover/movies/upcoming");
   });
+
+  it("calls /genres/movie (not /discover/genres/movie) when resolving genre ID", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ([{ id: 28, name: "Action" }]),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ results: [], totalPages: 1 }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { discover } = await import("@/lib/services/overseerr");
+    await discover("movie", "Action");
+
+    const genreUrl = fetchMock.mock.calls[0][0] as string;
+    expect(genreUrl).toContain("/genres/movie");
+    expect(genreUrl).not.toContain("/discover/genres");
+  });
+
+  it("calls /genres/tv (not /discover/genres/tv) when resolving genre ID for TV", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ([{ id: 10765, name: "Sci-Fi & Fantasy" }]),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ results: [], totalPages: 1 }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { discover } = await import("@/lib/services/overseerr");
+    await discover("tv", "Sci-Fi & Fantasy");
+
+    const genreUrl = fetchMock.mock.calls[0][0] as string;
+    expect(genreUrl).toContain("/genres/tv");
+    expect(genreUrl).not.toContain("/discover/genres");
+  });
+});
+
+describe("similar — returns titles like a given movie or TV show", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  const SIMILAR_RESULTS = [
+    { id: 11, mediaType: "movie", title: "Similar Film A", releaseDate: "2023-01-01", posterPath: "/a.jpg", overview: "A similar film.", voteAverage: 7.0, mediaInfo: { status: 5 } },
+    { id: 12, mediaType: "movie", title: "Similar Film B", releaseDate: "2023-06-01", posterPath: "/b.jpg", overview: "Another similar film.", voteAverage: 6.5 },
+  ];
+
+  it("calls /movie/{id}/similar for movies", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ results: SIMILAR_RESULTS, totalPages: 1 }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { similar } = await import("@/lib/services/overseerr");
+    const { results, hasMore } = await similar(550, "movie");
+
+    const url = fetchMock.mock.calls[0][0] as string;
+    expect(url).toContain("/movie/550/similar");
+    expect(results).toHaveLength(2);
+    expect(results[0].title).toBe("Similar Film A");
+    expect(results[0].mediaStatus).toBe("Available");
+    expect(results[1].mediaStatus).toBe("Not Requested");
+    expect(hasMore).toBe(false);
+  });
+
+  it("calls /tv/{id}/similar for TV shows", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ results: [], totalPages: 1 }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { similar } = await import("@/lib/services/overseerr");
+    await similar(1396, "tv");
+
+    const url = fetchMock.mock.calls[0][0] as string;
+    expect(url).toContain("/tv/1396/similar");
+  });
+
+  it("passes page param to the API", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ results: [], totalPages: 3 }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { similar } = await import("@/lib/services/overseerr");
+    await similar(550, "movie", 2);
+
+    const url = fetchMock.mock.calls[0][0] as string;
+    expect(url).toContain("page=2");
+  });
+
+  it("returns hasMore=true when more pages exist", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ results: SIMILAR_RESULTS, totalPages: 3 }),
+    }));
+
+    const { similar } = await import("@/lib/services/overseerr");
+    const { hasMore } = await similar(550, "movie", 1);
+    expect(hasMore).toBe(true);
+  });
+
+  it("includes thumbPath and rating from similar results", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ results: [SIMILAR_RESULTS[0]], totalPages: 1 }),
+    }));
+
+    const { similar } = await import("@/lib/services/overseerr");
+    const { results } = await similar(550, "movie");
+    expect(results[0].thumbPath).toBe("https://image.tmdb.org/t/p/w300/a.jpg");
+    expect(results[0].rating).toBe(7.0);
+  });
+});
+
+describe("createIssue — reports a playback issue to Seerr", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("POSTs to /issue with issueType, message, and mediaId", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 201,
+      json: async () => ({ id: 42, issueType: 1, message: "Video stutters at 30 min" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { createIssue, IssueType } = await import("@/lib/services/overseerr");
+    const result = await createIssue(99, IssueType.Video, "Video stutters at 30 min");
+
+    expect(result.success).toBe(true);
+    expect(result.issueId).toBe(42);
+
+    const [url, opts] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain("/issue");
+    expect((opts as RequestInit).method).toBe("POST");
+    const body = JSON.parse((opts as RequestInit).body as string);
+    expect(body.mediaId).toBe(99);
+    expect(body.issueType).toBe(1);
+    expect(body.message).toBe("Video stutters at 30 min");
+  });
+
+  it("returns success=false with error message when API throws", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      json: async () => ({ message: "Forbidden" }),
+    }));
+
+    const { createIssue, IssueType } = await import("@/lib/services/overseerr");
+    const result = await createIssue(99, IssueType.Audio, "Audio issue");
+
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("403");
+  });
+});
+
+describe("getDetails — exposes seerrMediaId from mediaInfo", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("returns seerrMediaId from mediaInfo.id for movies", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        title: "Inception",
+        releaseDate: "2010-07-16",
+        runtime: 148,
+        credits: { cast: [] },
+        genres: [],
+        externalIds: {},
+        mediaInfo: { id: 77, status: 5, requests: [], seasons: [] },
+      }),
+    }));
+
+    const { getDetails } = await import("@/lib/services/overseerr");
+    const detail = await getDetails(27205, "movie");
+    expect(detail.seerrMediaId).toBe(77);
+  });
+
+  it("returns seerrMediaId undefined when mediaInfo is absent", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        title: "Unknown Film",
+        releaseDate: "2020-01-01",
+        credits: { cast: [] },
+        genres: [],
+        externalIds: {},
+        mediaInfo: undefined,
+      }),
+    }));
+
+    const { getDetails } = await import("@/lib/services/overseerr");
+    const detail = await getDetails(999, "movie");
+    expect(detail.seerrMediaId).toBeUndefined();
+  });
 });
 
 describe("normalizeMediaStatus — issues #281 #282: title-cased Overseerr values must map to display_titles enum", () => {
@@ -877,5 +1093,110 @@ describe("getSeasonEpisodes — issue #291: includes thumbPath from stillPath", 
     const { getSeasonEpisodes } = await import("@/lib/services/overseerr");
     const result = await getSeasonEpisodes(999, 2);
     expect(result.episodes[0].thumbPath).toBeUndefined();
+  });
+});
+
+describe("getSeerrUserId — resolves Plex username to Seerr user ID", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("returns the Seerr user ID for a matching plexUsername", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        results: [
+          { id: 42, plexUsername: "alice" },
+          { id: 7, plexUsername: "bob" },
+        ],
+      }),
+    }));
+
+    const { getSeerrUserId } = await import("@/lib/services/overseerr");
+    const id = await getSeerrUserId("alice");
+    expect(id).toBe(42);
+  });
+
+  it("is case-insensitive when matching plexUsername", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ results: [{ id: 99, plexUsername: "Alice" }] }),
+    }));
+
+    const { getSeerrUserId } = await import("@/lib/services/overseerr");
+    const id = await getSeerrUserId("alice");
+    expect(id).toBe(99);
+  });
+
+  it("returns null when plexUsername not found in Seerr user list", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ results: [{ id: 1, plexUsername: "other" }] }),
+    }));
+
+    const { getSeerrUserId } = await import("@/lib/services/overseerr");
+    const id = await getSeerrUserId("unknown");
+    expect(id).toBeNull();
+  });
+
+  it("returns null when the /user API call fails", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => ({ message: "Internal server error" }),
+    }));
+
+    const { getSeerrUserId } = await import("@/lib/services/overseerr");
+    const id = await getSeerrUserId("alice");
+    expect(id).toBeNull();
+  });
+});
+
+describe("listRequests — seerrUserId filter (issue #380)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  const makeRequest = (id: number, title: string) => ({
+    id,
+    type: "movie",
+    status: 2,
+    media: { id: id * 10, mediaType: "movie", tmdbId: id * 100, title },
+    requestedBy: { displayName: "alice" },
+    createdAt: "2026-01-01T00:00:00.000Z",
+    seasons: [],
+  });
+
+  it("appends requestedBy param when seerrUserId is provided", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ results: [makeRequest(1, "Film A")], pageInfo: { results: 1 } }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { listRequests } = await import("@/lib/services/overseerr");
+    await listRequests(1, 42);
+
+    const url = fetchMock.mock.calls[0][0] as string;
+    expect(url).toContain("requestedBy=42");
+  });
+
+  it("omits requestedBy param when seerrUserId is undefined (admin)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ results: [], pageInfo: { results: 0 } }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { listRequests } = await import("@/lib/services/overseerr");
+    await listRequests(1, undefined);
+
+    const url = fetchMock.mock.calls[0][0] as string;
+    expect(url).not.toContain("requestedBy");
   });
 });

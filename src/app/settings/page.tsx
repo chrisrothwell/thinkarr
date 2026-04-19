@@ -92,7 +92,7 @@ interface UserEntry {
 const ARR_SERVICES = [
   { key: "sonarr", label: "Sonarr", hint: "http://localhost:8989" },
   { key: "radarr", label: "Radarr", hint: "http://localhost:7878" },
-  { key: "overseerr", label: "Overseerr", hint: "http://localhost:5055" },
+  { key: "overseerr", label: "Seerr", hint: "http://localhost:5055" },
 ] as const;
 
 export default function SettingsPage() {
@@ -163,9 +163,15 @@ export default function SettingsPage() {
   useEffect(() => {
     // Always fetch session first to determine admin status
     fetch("/api/auth/session")
-      .then((r) => r.json())
+      .then(async (r) => {
+        if (r.status === 401) {
+          router.replace("/login");
+          return;
+        }
+        return r.json();
+      })
       .then(async (sessionData) => {
-        if (!sessionData.success) return;
+        if (!sessionData || !sessionData.success) return;
         const user = sessionData.data.user;
         setCurrentUser(user);
 
@@ -1294,7 +1300,7 @@ export default function SettingsPage() {
                         { name: "Plex", tools: ["search_library", "get_watch_history", "get_on_deck", "check_availability"] },
                         { name: "Sonarr", tools: ["search_series", "get_calendar", "get_queue", "list_series", "monitor_series"] },
                         { name: "Radarr", tools: ["search_movie", "list_movies", "get_queue", "monitor_movie"] },
-                        { name: "Overseerr", tools: ["search", "request_movie", "request_tv", "list_requests"] },
+                        { name: "Seerr", tools: ["search", "request_movie", "request_tv", "list_requests"] },
                       ].map((svc) => (
                         <div key={svc.name} className="rounded-lg border p-3">
                           <p className="font-medium text-foreground mb-1">{svc.name}</p>
