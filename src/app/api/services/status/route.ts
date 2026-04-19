@@ -21,7 +21,8 @@ async function checkSingleLlmEndpoint(
     const { default: OpenAI } = await import("openai");
     const client = new OpenAI({ baseURL: baseUrl, apiKey });
     if (model) {
-      // Some non-OpenAI endpoints reject max_tokens — retry without it
+      // GPT-5+ rejects max_tokens (HTTP 400); retry with max_completion_tokens.
+      // If that also fails (non-OpenAI endpoint quirk), retry without either.
       try {
         await client.chat.completions.create({
           model,
@@ -29,10 +30,18 @@ async function checkSingleLlmEndpoint(
           max_tokens: 1,
         });
       } catch {
-        await client.chat.completions.create({
-          model,
-          messages: [{ role: "user", content: "Hi" }],
-        });
+        try {
+          await client.chat.completions.create({
+            model,
+            messages: [{ role: "user", content: "Hi" }],
+            max_completion_tokens: 1,
+          });
+        } catch {
+          await client.chat.completions.create({
+            model,
+            messages: [{ role: "user", content: "Hi" }],
+          });
+        }
       }
       return { name, status: "green", message: `Connected (${model})` };
     }
