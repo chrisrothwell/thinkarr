@@ -227,7 +227,7 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 | Plex | `plex_search_library`, `plex_get_on_deck`, `plex_get_recently_added`, `plex_check_availability`, `plex_search_collection`, `plex_search_by_tag`, `plex_get_title_tags` |
 | Sonarr | `sonarr_search_series`, `sonarr_get_series_status`, `sonarr_get_calendar`, `sonarr_get_queue` |
 | Radarr | `radarr_search_movie`, `radarr_get_movie_status`, `radarr_get_queue` |
-| Overseerr | `overseerr_search`, `overseerr_get_details`, `overseerr_list_requests`, `overseerr_discover`, `overseerr_get_season_episodes` |
+| Seerr | `overseerr_search`, `overseerr_get_details`, `overseerr_list_requests`, `overseerr_discover`, `overseerr_get_season_episodes`, `overseerr_similar`, `overseerr_report_issue` |
 | Built-in | `display_titles` — renders TitleCarousel in chat (always registered) |
 
 External MCP access via bearer token (`mcp.bearerToken`). Optional `X-User-Id` header scopes operations to a user's permission level. Per-user tokens stored as `user.{id}.mcpToken`.
@@ -337,3 +337,9 @@ Additionally, `executeTool()` detects when `display_titles` receives a flat sing
 
 ### Episode Thumbnails from Overseerr
 `overseerr.getSeasonEpisodes()` now maps the `stillPath` field from the TMDB/Overseerr season endpoint to a full `thumbPath` URL (`https://image.tmdb.org/t/p/w300{stillPath}`) on each `OverseerrEpisode`. The `overseerr_get_season_episodes` tool's `llmSummary` includes `thumbPath` so the LLM passes it to `display_titles` for episode cards.
+
+### Request Visibility: Non-Admin Users See Only Their Own Requests
+`overseerr_list_requests` now filters by the calling user for non-admins. The tool handler calls `getSession()` (available in the request context) to check `user.isAdmin` and `user.plexUsername`. For non-admins it calls `getSeerrUserId(plexUsername)` which fetches `/user?take=100` from Seerr and matches by `plexUsername` (case-insensitive). The resulting Seerr user ID is passed to `listRequests()` as the `requestedBy` query parameter. Results are cached in a process-level Map so the `/user` list is fetched at most once per process restart. Admins see all requests unchanged.
+
+### Seerr Migration: Genre Endpoint, Similar, and Issue Creation
+Upgraded from Overseerr to Seerr. The genre list endpoint moved from `/discover/genres/{mediaType}` to `/genres/{mediaType}` (e.g. `/genres/movie`, `/genres/tv`). `discover()` in `overseerr.ts` was updated to use the new path. Two new service functions were added: `similar(id, mediaType, page)` calls `/movie/{id}/similar` or `/tv/{id}/similar` to find titles like a given one; `createIssue(seerrMediaId, issueType, message)` posts to `/issue` to report a playback problem. `getDetails()` now also returns `seerrMediaId` (the Seerr internal `mediaInfo.id`, distinct from the TMDB ID) which is the required `mediaId` parameter for issue creation. Two new tools expose this: `overseerr_similar` (genre-browse-style results from the similar endpoint) and `overseerr_report_issue` (guided issue creation — LLM must ask the user for a description before calling). The `IssueType` enum (1=Video, 2=Audio, 3=Subtitles, 4=Other) is exported from `overseerr.ts`.

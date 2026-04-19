@@ -8,6 +8,34 @@
 
 import { test, expect } from "@playwright/test";
 
+test.describe("stale session redirect", () => {
+  test("/chat redirects to /login when session cookie is invalid", async ({ page, context }) => {
+    await context.addCookies([
+      {
+        name: "thinkarr_session",
+        value: "00000000-0000-0000-0000-000000000000",
+        domain: "localhost",
+        path: "/",
+      },
+    ]);
+    await page.goto("/chat");
+    await expect(page).toHaveURL(/\/login/, { timeout: 5000 });
+  });
+
+  test("/settings redirects to /login when session cookie is invalid", async ({ page, context }) => {
+    await context.addCookies([
+      {
+        name: "thinkarr_session",
+        value: "00000000-0000-0000-0000-000000000000",
+        domain: "localhost",
+        path: "/",
+      },
+    ]);
+    await page.goto("/settings");
+    await expect(page).toHaveURL(/\/login/, { timeout: 5000 });
+  });
+});
+
 test.describe("root redirect — post-setup", () => {
   test("/ redirects unauthenticated visitors to /login", async ({ page }) => {
     // Root page redirects to /chat when users exist, but the auth middleware

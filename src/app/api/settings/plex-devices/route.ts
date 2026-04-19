@@ -3,23 +3,8 @@ import { getSession } from "@/lib/auth/session";
 import { getDb, schema } from "@/lib/db";
 import { eq } from "drizzle-orm";
 import { logger } from "@/lib/logger";
+import { getPlexDevices } from "@/lib/services/plex-auth";
 import type { ApiResponse } from "@/types/api";
-
-export interface PlexConnection {
-  protocol: string;
-  address: string;
-  port: number;
-  uri: string;
-  local: boolean;
-}
-
-export interface PlexDevice {
-  name: string;
-  clientIdentifier: string;
-  accessToken: string;
-  owned: boolean;
-  connections: PlexConnection[];
-}
 
 export async function GET(): Promise<NextResponse> {
   const session = await getSession();
@@ -30,7 +15,6 @@ export async function GET(): Promise<NextResponse> {
     );
   }
 
-  // Fetch the full user row to get the stored plexToken
   const db = getDb();
   let user: { plexToken: string | null } | undefined;
   try {
@@ -55,45 +39,15 @@ export async function GET(): Promise<NextResponse> {
     );
   }
 
-  let raw: unknown[];
   try {
-    const res = await fetch(
-      `https://plex.tv/api/v2/resources?includeHttps=1&includeRelay=1&X-Plex-Token=${user.plexToken}`,
-      {
-        headers: { Accept: "application/json" },
-        signal: AbortSignal.timeout(10000),
-      },
-    );
-    if (!res.ok) {
-      return NextResponse.json<ApiResponse>(
-        { success: false, error: `Plex.tv returned HTTP ${res.status}` },
-        { status: 502 },
-      );
-    }
-    raw = await res.json();
-  } catch {
+    const servers = await getPlexDevices(user.plexToken);
+    return NextResponse.json<ApiResponse>({ success: true, data: servers });
+  } catch (e: unknown) {
+    const error = e instanceof Error ? e.message : "Unknown error";
+    logger.error("Failed to fetch Plex devices", { userId: session.user.id, error });
     return NextResponse.json<ApiResponse>(
-      { success: false, error: "Failed to reach plex.tv — check your internet connection" },
+      { success: false, error },
       { status: 502 },
     );
   }
-
-  // Filter to server devices only and shape the response
-  const servers: PlexDevice[] = (raw as Record<string, unknown>[])
-    .filter((d) => (d.provides as string[] | undefined)?.includes("server"))
-    .map((d) => ({
-      name: d.name as string,
-      clientIdentifier: d.clientIdentifier as string,
-      accessToken: d.accessToken as string,
-      owned: d.owned as boolean,
-      connections: ((d.connection as Record<string, unknown>[]) || []).map((c) => ({
-        protocol: c.protocol as string,
-        address: c.address as string,
-        port: c.port as number,
-        uri: c.uri as string,
-        local: c.local as boolean,
-      })),
-    }));
-
-  return NextResponse.json<ApiResponse>({ success: true, data: servers });
 }

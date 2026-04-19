@@ -955,18 +955,22 @@ export async function generateTitle(
     const client = getLlmClient();
     const model = getLlmModel();
 
-    const response = await client.chat.completions.create({
-      model,
-      messages: [
-        {
-          role: "system",
-          content:
-            "Generate a very short summary (3-6 words, no quotes) summarizing this chat message. Most conversations will be about TV and Movies and/or their avaialability in a Media Library so assume this is the case.  If the chat was about a specific title, reply with ONLY the title and the year e.g. Ghostbusters (1984), nothing else.  If the chat as about multiple titles or something else, reply with ONLY the short summary, nothing else.",
-        },
-        { role: "user", content: firstUserMessage },
-      ],
-      max_tokens: 20,
-    });
+    const messages = [
+      {
+        role: "system" as const,
+        content:
+          "Generate a very short summary (3-6 words, no quotes) summarizing this chat message. Most conversations will be about TV and Movies and/or their avaialability in a Media Library so assume this is the case.  If the chat was about a specific title, reply with ONLY the title and the year e.g. Ghostbusters (1984), nothing else.  If the chat as about multiple titles or something else, reply with ONLY the short summary, nothing else.",
+      },
+      { role: "user" as const, content: firstUserMessage },
+    ];
+
+    let response;
+    try {
+      response = await client.chat.completions.create({ model, messages, max_tokens: 20 });
+    } catch {
+      // GPT-5+ rejects max_tokens — retry without token limit
+      response = await client.chat.completions.create({ model, messages });
+    }
 
     const title = response.choices[0]?.message?.content?.trim();
     if (title) {

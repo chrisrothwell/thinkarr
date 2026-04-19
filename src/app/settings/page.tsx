@@ -92,7 +92,7 @@ interface UserEntry {
 const ARR_SERVICES = [
   { key: "sonarr", label: "Sonarr", hint: "http://localhost:8989" },
   { key: "radarr", label: "Radarr", hint: "http://localhost:7878" },
-  { key: "overseerr", label: "Overseerr", hint: "http://localhost:5055" },
+  { key: "overseerr", label: "Seerr", hint: "http://localhost:5055" },
 ] as const;
 
 export default function SettingsPage() {
@@ -163,9 +163,15 @@ export default function SettingsPage() {
   useEffect(() => {
     // Always fetch session first to determine admin status
     fetch("/api/auth/session")
-      .then((r) => r.json())
+      .then(async (r) => {
+        if (r.status === 401) {
+          router.replace("/login");
+          return;
+        }
+        return r.json();
+      })
       .then(async (sessionData) => {
-        if (!sessionData.success) return;
+        if (!sessionData || !sessionData.success) return;
         const user = sessionData.data.user;
         setCurrentUser(user);
 
@@ -1078,7 +1084,7 @@ export default function SettingsPage() {
               <CardHeader className="pb-3">
                 <CardTitle className="text-lg">Plex</CardTitle>
                 <CardDescription>
-                  Discover servers automatically using your linked Plex account, or enter details manually.
+                  Discover servers from your linked Plex account. The access token is configured automatically.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
@@ -1133,24 +1139,11 @@ export default function SettingsPage() {
                     }}
                     placeholder="http://localhost:32400"
                   />
-                  <p className="text-xs text-muted-foreground">e.g. http://localhost:32400</p>
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="plex-token">Plex Token</Label>
-                  <Input
-                    id="plex-token"
-                    name="plex-token"
-                    type="password"
-                    value={plexConfig.token}
-                    onChange={(e) => {
-                      setPlexConfig((prev) => ({ ...prev, token: e.target.value }));
-                      setSaved(false);
-                    }}
-                    placeholder="Paste your Plex token (or use Discover above)"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Manual entry: Plex Web → Settings → Troubleshooting → Your Account Token.
-                  </p>
+                  {plexConfig.url && !plexConfig.token ? (
+                    <p className="text-xs text-amber-500">No access token — use Discover above to select a server.</p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">You can edit the URL after selecting a server, e.g. to change the port.</p>
+                  )}
                 </div>
               </CardContent>
               <CardFooter className="flex items-center gap-3">
@@ -1158,7 +1151,7 @@ export default function SettingsPage() {
                   variant="secondary"
                   size="sm"
                   onClick={() => testConnection("plex", plexConfig.url, plexConfig.token)}
-                  disabled={!plexConfig.url}
+                  disabled={!plexConfig.url || !plexConfig.token}
                 >
                   Test
                 </Button>
@@ -1294,7 +1287,7 @@ export default function SettingsPage() {
                         { name: "Plex", tools: ["search_library", "get_watch_history", "get_on_deck", "check_availability"] },
                         { name: "Sonarr", tools: ["search_series", "get_calendar", "get_queue", "list_series", "monitor_series"] },
                         { name: "Radarr", tools: ["search_movie", "list_movies", "get_queue", "monitor_movie"] },
-                        { name: "Overseerr", tools: ["search", "request_movie", "request_tv", "list_requests"] },
+                        { name: "Seerr", tools: ["search", "request_movie", "request_tv", "list_requests"] },
                       ].map((svc) => (
                         <div key={svc.name} className="rounded-lg border p-3">
                           <p className="font-medium text-foreground mb-1">{svc.name}</p>
