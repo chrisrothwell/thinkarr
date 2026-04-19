@@ -21,7 +21,8 @@ async function checkSingleLlmEndpoint(
     const { default: OpenAI } = await import("openai");
     const client = new OpenAI({ baseURL: baseUrl, apiKey });
     if (model) {
-      // Some non-OpenAI endpoints reject max_tokens — retry without it
+      // GPT-5+ rejects max_tokens with HTTP 400 and enforces a minimum on
+      // max_completion_tokens, so retry without any token limit on failure.
       try {
         await client.chat.completions.create({
           model,

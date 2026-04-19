@@ -81,8 +81,9 @@ async function testLlm(url: string, apiKey: string, model?: string): Promise<Tes
     const { default: OpenAI, APIError } = await import("openai");
     const client = new OpenAI({ baseURL: url, apiKey });
     if (model) {
-      // Quick completion test — some non-OpenAI endpoints reject max_tokens,
-      // so fall back to a plain request without it if the first attempt fails.
+      // Quick completion test. GPT-5+ rejects max_tokens with HTTP 400 (unsupported_parameter)
+      // and also enforces a minimum on max_completion_tokens, so the safest retry is no token
+      // limit at all — the cost difference on a one-off connection test is negligible.
       try {
         await client.chat.completions.create({
           model,
@@ -90,14 +91,24 @@ async function testLlm(url: string, apiKey: string, model?: string): Promise<Tes
           max_tokens: 1,
         });
       } catch (inner: unknown) {
-        // If the first attempt failed with a non-HTTP-error (e.g. network, max_tokens
-        // rejection), try again without max_tokens. Re-throw HTTP errors immediately so
-        // the outer catch can format them with full diagnostic detail.
-        if (inner instanceof APIError && inner.status !== undefined) throw inner;
-        await client.chat.completions.create({
-          model,
-          messages: [{ role: "user", content: "Hi" }],
-        });
+        if (inner instanceof APIError && inner.status !== undefined) {
+          // GPT-5+ rejects max_tokens with a specific 400 — retry without any token limit.
+          const errParam = (inner.error as Record<string, unknown> | null)?.param;
+          if (inner.status === 400 && errParam === "max_tokens") {
+            await client.chat.completions.create({
+              model,
+              messages: [{ role: "user", content: "Hi" }],
+            });
+          } else {
+            throw inner;
+          }
+        } else {
+          // Non-HTTP error (network etc.) — retry without any token limit.
+          await client.chat.completions.create({
+            model,
+            messages: [{ role: "user", content: "Hi" }],
+          });
+        }
       }
     } else {
       // Just list models to verify connectivity
