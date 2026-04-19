@@ -1095,3 +1095,108 @@ describe("getSeasonEpisodes — issue #291: includes thumbPath from stillPath", 
     expect(result.episodes[0].thumbPath).toBeUndefined();
   });
 });
+
+describe("getSeerrUserId — resolves Plex username to Seerr user ID", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("returns the Seerr user ID for a matching plexUsername", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        results: [
+          { id: 42, plexUsername: "alice" },
+          { id: 7, plexUsername: "bob" },
+        ],
+      }),
+    }));
+
+    const { getSeerrUserId } = await import("@/lib/services/overseerr");
+    const id = await getSeerrUserId("alice");
+    expect(id).toBe(42);
+  });
+
+  it("is case-insensitive when matching plexUsername", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ results: [{ id: 99, plexUsername: "Alice" }] }),
+    }));
+
+    const { getSeerrUserId } = await import("@/lib/services/overseerr");
+    const id = await getSeerrUserId("alice");
+    expect(id).toBe(99);
+  });
+
+  it("returns null when plexUsername not found in Seerr user list", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ results: [{ id: 1, plexUsername: "other" }] }),
+    }));
+
+    const { getSeerrUserId } = await import("@/lib/services/overseerr");
+    const id = await getSeerrUserId("unknown");
+    expect(id).toBeNull();
+  });
+
+  it("returns null when the /user API call fails", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => ({ message: "Internal server error" }),
+    }));
+
+    const { getSeerrUserId } = await import("@/lib/services/overseerr");
+    const id = await getSeerrUserId("alice");
+    expect(id).toBeNull();
+  });
+});
+
+describe("listRequests — seerrUserId filter (issue #380)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  const makeRequest = (id: number, title: string) => ({
+    id,
+    type: "movie",
+    status: 2,
+    media: { id: id * 10, mediaType: "movie", tmdbId: id * 100, title },
+    requestedBy: { displayName: "alice" },
+    createdAt: "2026-01-01T00:00:00.000Z",
+    seasons: [],
+  });
+
+  it("appends requestedBy param when seerrUserId is provided", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ results: [makeRequest(1, "Film A")], pageInfo: { results: 1 } }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { listRequests } = await import("@/lib/services/overseerr");
+    await listRequests(1, 42);
+
+    const url = fetchMock.mock.calls[0][0] as string;
+    expect(url).toContain("requestedBy=42");
+  });
+
+  it("omits requestedBy param when seerrUserId is undefined (admin)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ results: [], pageInfo: { results: 0 } }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { listRequests } = await import("@/lib/services/overseerr");
+    await listRequests(1, undefined);
+
+    const url = fetchMock.mock.calls[0][0] as string;
+    expect(url).not.toContain("requestedBy");
+  });
+});

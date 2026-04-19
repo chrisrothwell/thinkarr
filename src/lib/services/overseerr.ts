@@ -259,12 +259,37 @@ export interface OverseerrRequest {
   overseerrId?: number; // Same as tmdbId — pass directly as overseerrId to display_titles
 }
 
-export async function listRequests(page = 1): Promise<{ results: OverseerrRequest[]; hasMore: boolean }> {
+/**
+ * Resolve a Plex username to a Seerr user ID.
+ * Results are cached for the lifetime of the process since user IDs are stable.
+ */
+const seerrUserIdCache = new Map<string, number | null>();
+
+export async function getSeerrUserId(plexUsername: string): Promise<number | null> {
+  const cached = seerrUserIdCache.get(plexUsername);
+  if (cached !== undefined) return cached;
+
+  try {
+    // Seerr's /user endpoint returns paginated results — fetch a generous page.
+    const data = await overseerrFetch("/user?take=100&skip=0");
+    const users = (data?.results as Array<{ id: number; plexUsername?: string }>) ?? [];
+    const match = users.find((u) => u.plexUsername?.toLowerCase() === plexUsername.toLowerCase());
+    const id = match?.id ?? null;
+    seerrUserIdCache.set(plexUsername, id);
+    return id;
+  } catch {
+    return null;
+  }
+}
+
+export async function listRequests(page = 1, seerrUserId?: number): Promise<{ results: OverseerrRequest[]; hasMore: boolean }> {
   // Fetch 50 items from the API; return 10 per LLM page (5 LLM pages per API batch).
   const apiBatch = Math.floor((page - 1) / 5);
   const skip = apiBatch * 50;
   const llmOffset = ((page - 1) % 5) * 10;
-  const data = await overseerrFetch(`/request?take=50&skip=${skip}&sort=added`);
+  // When seerrUserId is provided (non-admin users) filter to that user's requests only.
+  const userFilter = seerrUserId != null ? `&requestedBy=${seerrUserId}` : "";
+  const data = await overseerrFetch(`/request?take=50&skip=${skip}&sort=added${userFilter}`);
   const rawRequests: Record<string, unknown>[] = data?.results || [];
 
   // Build initial title map from fields already in the media object.

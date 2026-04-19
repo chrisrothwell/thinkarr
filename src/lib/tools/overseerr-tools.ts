@@ -3,6 +3,7 @@ import { defineTool } from "./registry";
 import * as overseerr from "@/lib/services/overseerr";
 import { IssueType } from "@/lib/services/overseerr";
 import type { OverseerrSearchResult, OverseerrRequest, OverseerrDetails, OverseerrDiscoverResult, OverseerrEpisode } from "@/lib/services/overseerr";
+import { getSession } from "@/lib/auth/session";
 
 const pageParam = z.number().int().min(1).optional().describe("Page number (1-based). Omit or use 1 for the first page. Use hasMore from the previous response to know whether a next page exists.");
 
@@ -121,7 +122,18 @@ export function registerOverseerrTools() {
       page: pageParam,
     }),
     handler: async (args) => {
-      const { results, hasMore } = await overseerr.listRequests(args.page ?? 1);
+      // Non-admin users see only their own requests. Admins see all.
+      // Resolve the Seerr user ID from the Plex username in the current session.
+      let seerrUserId: number | undefined;
+      try {
+        const session = await getSession();
+        if (session && !session.user.isAdmin) {
+          const id = await overseerr.getSeerrUserId(session.user.plexUsername);
+          seerrUserId = id ?? undefined;
+        }
+      } catch { /* non-fatal — fall back to showing all requests */ }
+
+      const { results, hasMore } = await overseerr.listRequests(args.page ?? 1, seerrUserId);
       // Enrich each result with thumbPath and (for TV) per-season availability by
       // calling getDetails in parallel. The /request endpoint does not reliably
       // include posterPath in the media object, so this is the only way to get
