@@ -57,7 +57,8 @@ describe("testConnection LLM — max_tokens fallback", () => {
 
     expect(result.success).toBe(true);
     expect(createMock.mock.calls[0][0]).toMatchObject({ max_tokens: 1 });
-    expect(createMock.mock.calls[1][0]).toMatchObject({ max_completion_tokens: 1 });
+    expect(createMock.mock.calls[1][0]).not.toHaveProperty("max_tokens");
+    expect(createMock.mock.calls[1][0]).not.toHaveProperty("max_completion_tokens");
   });
 
   it("reports failure (not retries) when model returns a 401 auth error", async () => {

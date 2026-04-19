@@ -81,10 +81,9 @@ async function testLlm(url: string, apiKey: string, model?: string): Promise<Tes
     const { default: OpenAI, APIError } = await import("openai");
     const client = new OpenAI({ baseURL: url, apiKey });
     if (model) {
-      // Quick completion test with a 3-tier fallback for token-limit params:
-      // 1. max_tokens:1 (works for GPT-4.x, most non-OpenAI endpoints)
-      // 2. max_completion_tokens:1 (GPT-5+ rejects max_tokens with HTTP 400)
-      // 3. No token limit (catch-all for non-OpenAI endpoints that reject both)
+      // Quick completion test. GPT-5+ rejects max_tokens with HTTP 400 (unsupported_parameter)
+      // and also enforces a minimum on max_completion_tokens, so the safest retry is no token
+      // limit at all — the cost difference on a one-off connection test is negligible.
       try {
         await client.chat.completions.create({
           model,
@@ -93,13 +92,12 @@ async function testLlm(url: string, apiKey: string, model?: string): Promise<Tes
         });
       } catch (inner: unknown) {
         if (inner instanceof APIError && inner.status !== undefined) {
-          // GPT-5+ rejects max_tokens with a specific 400 — retry with max_completion_tokens.
+          // GPT-5+ rejects max_tokens with a specific 400 — retry without any token limit.
           const errParam = (inner.error as Record<string, unknown> | null)?.param;
           if (inner.status === 400 && errParam === "max_tokens") {
             await client.chat.completions.create({
               model,
               messages: [{ role: "user", content: "Hi" }],
-              max_completion_tokens: 1,
             });
           } else {
             throw inner;

@@ -968,8 +968,8 @@ export async function generateTitle(
     try {
       response = await client.chat.completions.create({ model, messages, max_tokens: 20 });
     } catch {
-      // GPT-5+ rejects max_tokens — retry with max_completion_tokens
-      response = await client.chat.completions.create({ model, messages, max_completion_tokens: 20 });
+      // GPT-5+ rejects max_tokens — retry without token limit
+      response = await client.chat.completions.create({ model, messages });
     }
 
     const title = response.choices[0]?.message?.content?.trim();
