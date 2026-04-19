@@ -78,12 +78,28 @@ export interface OverseerrDetails {
   seasons?: OverseerrSeasonStatus[];   // Per-season availability
   requests?: OverseerrRequestSummary[]; // Pending/active requests
   mediaStatus?: string;         // Normalized display_titles-compatible status string
+  seerrMediaId?: number;        // Seerr internal media ID — required for issue creation
 }
 
 function yearFromDate(date: string | undefined): number | undefined {
   if (!date) return undefined;
   const n = parseInt(date.substring(0, 4), 10);
   return isNaN(n) ? undefined : n;
+}
+
+// Issue types as defined by the Seerr API
+export enum IssueType {
+  Video = 1,
+  Audio = 2,
+  Subtitles = 3,
+  Other = 4,
+}
+
+export interface OverseerrIssue {
+  id: number;
+  issueType: number;
+  mediaId: number;
+  message: string;
 }
 
 function mediaStatusLabel(info?: Record<string, unknown>): string {
@@ -210,6 +226,7 @@ export async function getDetails(id: number, mediaType: "movie" | "tv"): Promise
     seasons: seasons.length > 0 ? seasons : undefined,
     requests: requests.length > 0 ? requests : undefined,
     mediaStatus: mediaStatusLabel(mediaInfo),
+    seerrMediaId: (mediaInfo?.id as number | undefined) ?? undefined,
   };
 }
 
@@ -341,10 +358,11 @@ export async function discover(
   // for the genre list endpoint, and "tv" for both TV endpoints.
   const discoverSegment = mediaType === "movie" ? "movies" : "tv";
 
-  // Resolve genre name to a TMDB genre ID when provided
+  // Resolve genre name to a TMDB genre ID when provided.
+  // Seerr moved the genre list from /discover/genres/{mediaType} to /genres/{mediaType}.
   let genreId: number | undefined;
   if (genre) {
-    const genresData = await overseerrFetch(`/discover/genres/${mediaType}`);
+    const genresData = await overseerrFetch(`/genres/${mediaType}`);
     const genres = (genresData as Array<{ id: number; name: string }>) ?? [];
     const match = genres.find((g) => g.name.toLowerCase() === genre.toLowerCase());
     genreId = match?.id;
@@ -456,5 +474,54 @@ export async function requestTv(
     return { success: true, message: "TV show request submitted successfully" };
   } catch (e: unknown) {
     return { success: false, message: e instanceof Error ? e.message : "Request failed" };
+  }
+}
+
+export async function similar(
+  id: number,
+  mediaType: "movie" | "tv",
+  page = 1,
+): Promise<{ results: OverseerrDiscoverResult[]; hasMore: boolean }> {
+  // Seerr uses /movie/{id}/similar and /tv/{id}/similar
+  const segment = mediaType === "movie" ? "movie" : "tv";
+  const data = await overseerrFetch(`/${segment}/${id}/similar?page=${page}&language=en`);
+  const raw = (data?.results || []) as Record<string, unknown>[];
+  const totalPages = (data?.totalPages as number | undefined) ?? 1;
+  const hasMore = raw.length > 10 || page < totalPages;
+  const page10 = raw.slice(0, 10);
+
+  const results: OverseerrDiscoverResult[] = page10.map((r) => {
+    const mediaInfo = r.mediaInfo as Record<string, unknown> | undefined;
+    const isTV = mediaType === "tv";
+    const posterPath = r.posterPath as string | undefined;
+    return {
+      overseerrId: (r.id || r.tmdbId) as number,
+      overseerrMediaType: mediaType,
+      title: (r.title || r.name) as string,
+      year: yearFromDate((r.releaseDate || r.firstAirDate) as string | undefined),
+      summary: (r.overview as string | undefined)?.substring(0, 300),
+      rating: r.voteAverage as number | undefined,
+      mediaStatus: mediaStatusLabel(mediaInfo),
+      thumbPath: posterPath ? `https://image.tmdb.org/t/p/w300${posterPath}` : undefined,
+      seasonCount: isTV ? (r.numberOfSeasons as number | undefined) : undefined,
+    };
+  });
+
+  return { results, hasMore };
+}
+
+export async function createIssue(
+  seerrMediaId: number,
+  issueType: IssueType,
+  message: string,
+): Promise<{ success: boolean; message: string; issueId?: number }> {
+  try {
+    const data = await overseerrFetch("/issue", {
+      method: "POST",
+      body: JSON.stringify({ mediaId: seerrMediaId, issueType, message }),
+    });
+    return { success: true, message: "Issue reported successfully", issueId: (data as Record<string, unknown>)?.id as number | undefined };
+  } catch (e: unknown) {
+    return { success: false, message: e instanceof Error ? e.message : "Failed to create issue" };
   }
 }

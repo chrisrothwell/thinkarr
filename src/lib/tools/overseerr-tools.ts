@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { defineTool } from "./registry";
 import * as overseerr from "@/lib/services/overseerr";
+import { IssueType } from "@/lib/services/overseerr";
 import type { OverseerrSearchResult, OverseerrRequest, OverseerrDetails, OverseerrDiscoverResult, OverseerrEpisode } from "@/lib/services/overseerr";
 
 const pageParam = z.number().int().min(1).optional().describe("Page number (1-based). Omit or use 1 for the first page. Use hasMore from the previous response to know whether a next page exists.");
@@ -107,6 +108,7 @@ export function registerOverseerrTools() {
         episodeRuntime: r.episodeRuntime,
         seasonCount: r.seasonCount,
         ...(r.thumbPath ? { thumbPath: r.thumbPath } : {}),
+        seerrMediaId: r.seerrMediaId,
         ...(seasonsCompact ? { seasons: seasonsCompact } : {}),
       };
     },
@@ -185,10 +187,10 @@ export function registerOverseerrTools() {
 
   defineTool({
     name: "overseerr_discover",
-    description: "Discover movies or TV shows from Overseerr/TMDB without a specific title. Use this when the user asks for trending content, popular titles, upcoming releases, or wants to browse by genre (e.g. 'what movies are trending', 'show me upcoming movies', 'find some action movies'). Returns full details for each result including cast, imdbId, accurate seasonCount, per-season availability, mediaStatus, summary, rating, thumbPath, overseerrId, and overseerrMediaType — pass directly to display_titles. Returns up to 10 results per page with a hasMore flag.",
+    description: "Discover movies or TV shows from Seerr/TMDB without a specific title. Use this when the user asks for trending content, popular titles, upcoming releases, or wants to browse by genre (e.g. 'what movies are trending', 'show me upcoming sci-fi shows', 'find some horror movies'). Returns full details for each result including cast, imdbId, accurate seasonCount, per-season availability, mediaStatus, summary, rating, thumbPath, overseerrId, and overseerrMediaType — pass directly to display_titles. Returns up to 10 results per page with a hasMore flag.",
     schema: z.object({
       mediaType: z.enum(["movie", "tv"]).describe("Whether to discover movies or TV shows"),
-      genre: z.string().optional().describe("Genre name to filter by (e.g. 'Action', 'Comedy', 'Drama'). Omit for general trending results."),
+      genre: z.string().optional().describe("Genre name to filter by (e.g. 'Action', 'Comedy', 'Drama', 'Science Fiction', 'Horror'). Omit for general trending results. Genre names are case-insensitive and matched against the TMDB genre list."),
       category: z.enum(["trending", "upcoming"]).optional().describe("'trending' for popular titles (default), 'upcoming' for titles not yet released"),
       page: pageParam,
     }),
@@ -234,5 +236,36 @@ export function registerOverseerrTools() {
         hasMore: r.hasMore,
       };
     },
+  });
+
+  defineTool({
+    name: "overseerr_similar",
+    description: "Find movies or TV shows similar to a specific title. Use this when the user asks for recommendations based on something they liked (e.g. 'find movies like Inception', 'show me TV shows similar to Breaking Bad'). Requires the overseerrId from a previous overseerr_search call. For TV shows always call overseerr_get_details before display_titles. Returns up to 10 results per page with a hasMore flag.",
+    schema: z.object({
+      id: z.number().int().describe("The overseerrId (TMDB ID) of the reference title — from overseerr_search results"),
+      mediaType: z.enum(["movie", "tv"]).describe("Media type of the reference title"),
+      page: pageParam,
+    }),
+    handler: async (args) => overseerr.similar(args.id, args.mediaType, args.page ?? 1),
+    llmSummary: (result: unknown) => {
+      const r = result as { results: OverseerrDiscoverResult[]; hasMore: boolean };
+      return {
+        results: r.results.map(({ overseerrId, overseerrMediaType, title, year, rating, mediaStatus, seasonCount, thumbPath }) => ({
+          overseerrId, overseerrMediaType, title, year, rating, mediaStatus, seasonCount, thumbPath,
+        })),
+        hasMore: r.hasMore,
+      };
+    },
+  });
+
+  defineTool({
+    name: "overseerr_report_issue",
+    description: `Report a playback or quality issue for a movie or TV show in Seerr. Use this when the user wants to flag a problem with existing content (e.g. audio out of sync, wrong subtitles, video quality issues). IMPORTANT workflow: (1) If you don't already have the seerrMediaId, call overseerr_search then overseerr_get_details to obtain it. (2) Ask the user to describe the issue in detail before calling this tool. (3) Map the issue to the correct issueType: 1=Video (picture quality, wrong version, stuttering), 2=Audio (out of sync, missing audio, wrong language), 3=Subtitles (missing, wrong language, out of sync), 4=Other.`,
+    schema: z.object({
+      seerrMediaId: z.number().int().describe("The Seerr internal media ID — from the seerrMediaId field returned by overseerr_get_details. This is NOT the TMDB ID."),
+      issueType: z.number().int().min(1).max(4).describe("Issue category: 1=Video, 2=Audio, 3=Subtitles, 4=Other"),
+      message: z.string().min(10).describe("Detailed description of the issue as provided by the user"),
+    }),
+    handler: async (args) => overseerr.createIssue(args.seerrMediaId, args.issueType as IssueType, args.message),
   });
 }
