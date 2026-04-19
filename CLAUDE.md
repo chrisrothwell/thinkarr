@@ -71,9 +71,10 @@ Only the human manages the release flow. All version bumps go through PRs — ne
 
 ### Workflow
 
-1. Compare `package.json` on `dev` vs `beta` (or `beta` vs `main` for a full release).
-2. If the versions match, the feature branch that last landed on `dev` should have included the bump (see workflow step 4 above). If it didn't, raise a `claude/bump-version-*` PR to `dev` and wait for it to be merged before opening the release PR.
-3. When raising the `dev → beta` PR, use `?template=dev-to-beta.md` so the checklist pre-fills.
+1. Run `git fetch --all` before comparing versions. `git pull origin dev` only updates the dev tracking ref — `origin/beta` and `origin/main` will be stale unless explicitly fetched.
+2. Compare `package.json` on `dev` vs `beta` (or `beta` vs `main` for a full release).
+3. If the versions match, the feature branch that last landed on `dev` should have included the bump (see workflow step 4 above). If it didn't, raise a `claude/bump-version-*` PR to `dev` and wait for it to be merged before opening the release PR.
+4. When raising the `dev → beta` PR, use `?template=dev-to-beta.md` so the checklist pre-fills.
 
 ### Rules
 - Never open a `dev → beta` PR if `package.json` on `dev` still matches `beta`.
