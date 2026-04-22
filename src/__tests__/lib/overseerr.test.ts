@@ -726,7 +726,7 @@ describe("discover — issue #207", () => {
     expect(hasMore).toBe(false);
   });
 
-  it("includes genreIds param when genre resolves to a known ID", async () => {
+  it("uses /discover/movies/genre/{id} path when genre resolves to a known ID", async () => {
     const fetchMock = vi.fn()
       // First call: genre list
       .mockResolvedValueOnce({
@@ -746,10 +746,11 @@ describe("discover — issue #207", () => {
     await discover("movie", "Action");
 
     const discoverUrl = fetchMock.mock.calls[1][0] as string;
-    expect(discoverUrl).toContain("genreIds=28");
+    expect(discoverUrl).toContain("/discover/movies/genre/28");
+    expect(discoverUrl).not.toContain("genreIds");
   });
 
-  it("skips genreIds when genre name not found in genre list", async () => {
+  it("falls back to /discover/movies when genre name not found in genre list", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({
         ok: true,
@@ -767,7 +768,8 @@ describe("discover — issue #207", () => {
     await discover("movie", "UnknownGenre");
 
     const discoverUrl = fetchMock.mock.calls[1][0] as string;
-    expect(discoverUrl).not.toContain("genreIds");
+    expect(discoverUrl).toContain("/discover/movies");
+    expect(discoverUrl).not.toContain("/genre/");
   });
 
   it("uses /discover/movies/upcoming for upcoming category", async () => {
