@@ -393,14 +393,16 @@ export async function discover(
     genreId = match?.id;
   }
 
+  // Seerr uses a path-based genre endpoint: /discover/movies/genre/{genreId}
+  // (not a query parameter). Genre and upcoming are mutually exclusive — the
+  // genre endpoint does not have an /upcoming variant.
   let path: string;
-  if (category === "upcoming") {
+  if (genreId != null) {
+    path = `/discover/${discoverSegment}/genre/${genreId}?page=${page}`;
+  } else if (category === "upcoming") {
     path = `/discover/${discoverSegment}/upcoming?page=${page}`;
   } else {
     path = `/discover/${discoverSegment}?page=${page}`;
-  }
-  if (genreId != null) {
-    path += `&genreIds=${genreId}`;
   }
 
   const data = await overseerrFetch(path);
