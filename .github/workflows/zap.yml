@@ -25,7 +25,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: ZAP Baseline Scan
-        uses: zaproxy/action-baseline@v0.14.0
+        uses: zaproxy/action-baseline@v0.15.0
         with:
           target: ${{ vars.ZAP_TARGET_URL }}
           rules_file_name: '.zap/rules.tsv'
@@ -33,4 +33,4 @@ jobs:
           allow_issue_writing: false
           artifact_name: zap-baseline-${{ github.run_number }}
           cmd_options: >-
-            -config spider.excludeList=.*\/api\/chat.*,.*\/api\/realtime\/.*,.*\/api\/voice\/.*,.*\/api\/report-issue.*,.*\/api\/mcp.*,.*\/api\/plex\/.*,.*\/api\/tmdb\/.*,.*\/api\/services\/.*,.*\/api\/setup\/.*,.*\/api\/settings\/langfuse.*,.*\/api\/internal.*
+            -z "-config spider.excludeList=.*\/api\/chat.*,.*\/api\/realtime\/.*,.*\/api\/voice\/.*,.*\/api\/report-issue.*,.*\/api\/mcp.*,.*\/api\/plex\/.*,.*\/api\/tmdb\/.*,.*\/api\/services\/.*,.*\/api\/setup\/.*,.*\/api\/settings\/langfuse.*,.*\/api\/internal.*"
