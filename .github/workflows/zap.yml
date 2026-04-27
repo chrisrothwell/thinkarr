@@ -33,4 +33,4 @@ jobs:
           allow_issue_writing: false
           artifact_name: zap-baseline-${{ github.run_number }}
           cmd_options: >-
-            -config spider.excludeList=.*\/api\/chat.*,.*\/api\/realtime\/.*,.*\/api\/voice\/.*,.*\/api\/report-issue.*,.*\/api\/mcp.*,.*\/api\/plex\/.*,.*\/api\/tmdb\/.*,.*\/api\/services\/.*,.*\/api\/setup\/.*,.*\/api\/settings\/langfuse.*,.*\/api\/internal.*
+            -z "-config spider.excludeList=.*\/api\/chat.*,.*\/api\/realtime\/.*,.*\/api\/voice\/.*,.*\/api\/report-issue.*,.*\/api\/mcp.*,.*\/api\/plex\/.*,.*\/api\/tmdb\/.*,.*\/api\/services\/.*,.*\/api\/setup\/.*,.*\/api\/settings\/langfuse.*,.*\/api\/internal.*"
