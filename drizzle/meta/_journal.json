@@ -15,6 +15,13 @@
       "when": 1742651582000,
       "tag": "0001_add_message_duration",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1748354400000,
+      "tag": "0002_mcp_channel_integration",
+      "breakpoints": true
     }
   ]
 }

@@ -1,19 +1,29 @@
 import { NextResponse } from "next/server";
+import { randomBytes } from "crypto";
 import { getConfig, getUserIdByMcpToken } from "@/lib/config";
 import { initializeTools } from "@/lib/tools/init";
 import { getOpenAITools, executeTool, hasTools } from "@/lib/tools/registry";
 import { getDb, schema } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { getClientIp } from "@/lib/auth/rate-limit";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
+import { formatDisplayTitlesAsText } from "@/lib/tools/display-titles-text";
+import { createBasket, resolveBasket } from "@/lib/tools/pending-basket";
+import * as overseerr from "@/lib/services/overseerr";
+import type { DisplayTitle } from "@/types/titles";
 
 type McpPermission = "admin" | "user";
+
+interface AuthResult {
+  permission: McpPermission;
+  userId?: number;
+}
 
 /**
  * Authenticate an MCP request via Bearer token.
  * Returns the permission level, or null if unauthorized.
  */
-function authenticateMcp(request: Request): { permission: McpPermission; userId?: number } | null {
+function authenticateMcp(request: Request): AuthResult | null {
   const authHeader = request.headers.get("authorization");
   if (!authHeader?.startsWith("Bearer ")) return null;
 
@@ -56,13 +66,53 @@ function authenticateMcp(request: Request): { permission: McpPermission; userId?
 }
 
 /**
+ * Resolve channel identity headers to a Thinkarr user.
+ * Returns the resolved AuthResult on match, "unregistered" if headers present but no mapping,
+ * or null if no channel headers (caller should use the base auth result).
+ */
+function resolveChannelIdentity(
+  request: Request,
+  baseUrl: string,
+): AuthResult | "unregistered" | null {
+  const channelType = request.headers.get("x-channel-type");
+  const channelUserId = request.headers.get("x-channel-user-id");
+  if (!channelType || !channelUserId) return null;
+
+  const db = getDb();
+  const identity = db
+    .select()
+    .from(schema.mcpChannelIdentities)
+    .where(
+      and(
+        eq(schema.mcpChannelIdentities.channelType, channelType),
+        eq(schema.mcpChannelIdentities.channelUserId, channelUserId),
+      ),
+    )
+    .get();
+
+  if (!identity) {
+    // Issue a short-lived registration token and return the link
+    const token = randomBytes(16).toString("hex");
+    const expiresAt = Math.floor(Date.now() / 1000) + 900; // 15 min
+    db.insert(schema.mcpRegistrationTokens)
+      .values({ token, channelType, channelUserId, expiresAt })
+      .run();
+    logger.info("MCP_CHANNEL_UNREGISTERED", { channelType, registrationToken: token });
+    return "unregistered";
+  }
+
+  const user = db.select().from(schema.users).where(eq(schema.users.id, identity.userId)).get();
+  if (!user) return "unregistered";
+  return { permission: user.isAdmin ? "admin" : "user", userId: user.id };
+}
+
+/**
  * Check if a user has permission to execute a tool.
  * Admin: all tools. User: query-only tools (no delete, no acting on behalf of others).
  */
 function canExecuteTool(toolName: string, permission: McpPermission): boolean {
   if (permission === "admin") return true;
 
-  // Users can use all query/read tools
   const readOnlyTools = [
     "plex_search_library",
     "plex_get_watch_history",
@@ -79,7 +129,6 @@ function canExecuteTool(toolName: string, permission: McpPermission): boolean {
     "overseerr_list_requests",
   ];
 
-  // Users can also request content on their own behalf
   const userActionTools = [
     "overseerr_request_movie",
     "overseerr_request_tv",
@@ -90,13 +139,48 @@ function canExecuteTool(toolName: string, permission: McpPermission): boolean {
   return readOnlyTools.includes(toolName) || userActionTools.includes(toolName);
 }
 
-/**
- * MCP endpoint — supports both tool listing and tool execution.
- *
- * GET  /api/mcp          → List available tools (OpenAI function format)
- * POST /api/mcp          → Execute a tool (JSON-RPC style)
- * POST /api/mcp (list)   → List tools via POST
- */
+/** Extra tool definition exposed only in text mode. */
+const CONFIRM_REQUEST_TOOL = {
+  type: "function" as const,
+  function: {
+    name: "confirm_request",
+    description:
+      "Submit a media download request that the user has explicitly confirmed. ONLY call this after the user sends a clear positive confirmation (e.g. 'yes', 'request it', 'request #2'). Never call this speculatively.",
+    parameters: {
+      type: "object",
+      properties: {
+        pendingKey: {
+          type: "string",
+          description: "The pendingKey returned by display_titles in this conversation turn.",
+        },
+        selection: {
+          type: "number",
+          description: "The 1-based number the user selected from the displayed list.",
+        },
+      },
+      required: ["pendingKey", "selection"],
+    },
+  },
+};
+
+function buildToolList(permission: McpPermission, textMode: boolean) {
+  const allTools = getOpenAITools();
+  const filtered =
+    permission === "admin"
+      ? allTools
+      : allTools.filter((t) => t.type === "function" && canExecuteTool(t.function.name, permission));
+
+  if (textMode) {
+    return [...filtered, CONFIRM_REQUEST_TOOL];
+  }
+  return filtered;
+}
+
+function getRegistrationUrl(request: Request): string {
+  const url = new URL(request.url);
+  return `${url.origin}/mcp/link`;
+}
+
 export async function GET(request: Request) {
   const auth = authenticateMcp(request);
   if (!auth) {
@@ -113,19 +197,16 @@ export async function GET(request: Request) {
     return NextResponse.json({ tools: [] });
   }
 
-  const allTools = getOpenAITools();
-
-  // Filter based on permission
-  const tools = auth.permission === "admin"
-    ? allTools
-    : allTools.filter((t) => t.type === "function" && canExecuteTool(t.function.name, auth.permission));
+  const { searchParams } = new URL(request.url);
+  const textMode = searchParams.get("mode") === "text";
+  const tools = buildToolList(auth.permission, textMode);
 
   return NextResponse.json({ tools });
 }
 
 export async function POST(request: Request) {
-  const auth = authenticateMcp(request);
-  if (!auth) {
+  const baseAuth = authenticateMcp(request);
+  if (!baseAuth) {
     logger.warn("MCP_AUTH_FAILURE", { ip: getClientIp(request), path: "POST /api/mcp" });
     return NextResponse.json(
       { error: "Unauthorized. Provide a valid Bearer token." },
@@ -134,6 +215,42 @@ export async function POST(request: Request) {
   }
 
   initializeTools();
+
+  const { searchParams } = new URL(request.url);
+  const textMode = searchParams.get("mode") === "text";
+
+  // Resolve channel identity when in text mode
+  let auth = baseAuth;
+  if (textMode) {
+    const resolved = resolveChannelIdentity(request, getRegistrationUrl(request));
+    if (resolved === "unregistered") {
+      const url = new URL(request.url);
+      // Find the token we just inserted so we can return it
+      const channelType = request.headers.get("x-channel-type")!;
+      const channelUserId = request.headers.get("x-channel-user-id")!;
+      const db = getDb();
+      const now = Math.floor(Date.now() / 1000);
+      const row = db
+        .select()
+        .from(schema.mcpRegistrationTokens)
+        .where(
+          and(
+            eq(schema.mcpRegistrationTokens.channelType, channelType),
+            eq(schema.mcpRegistrationTokens.channelUserId, channelUserId),
+          ),
+        )
+        .orderBy(schema.mcpRegistrationTokens.expiresAt)
+        .get();
+      const token = row?.token ?? "";
+      return NextResponse.json({
+        error: "unregistered",
+        registrationUrl: `${url.origin}/mcp/link?token=${token}`,
+      });
+    }
+    if (resolved !== null) {
+      auth = resolved;
+    }
+  }
 
   let body: {
     method?: string;
@@ -144,18 +261,12 @@ export async function POST(request: Request) {
   try {
     body = await request.json();
   } catch {
-    return NextResponse.json(
-      { error: "Invalid JSON body" },
-      { status: 400 },
-    );
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
   // Handle "list" method
   if (body.method === "list" || body.method === "tools/list") {
-    const allTools = getOpenAITools();
-    const tools = auth.permission === "admin"
-      ? allTools
-      : allTools.filter((t) => t.type === "function" && canExecuteTool(t.function.name, auth.permission));
+    const tools = buildToolList(auth.permission, textMode);
     return NextResponse.json({ tools });
   }
 
@@ -163,13 +274,67 @@ export async function POST(request: Request) {
   if (body.method === "execute" || body.method === "tools/call" || body.tool) {
     const toolName = body.tool || "";
     if (!toolName) {
+      return NextResponse.json({ error: "tool name is required" }, { status: 400 });
+    }
+
+    // confirm_request: text mode only, handled inline
+    if (toolName === "confirm_request") {
+      if (!textMode) {
+        return NextResponse.json(
+          { error: "confirm_request is only available in text mode" },
+          { status: 403 },
+        );
+      }
+      if (!auth.userId) {
+        return NextResponse.json(
+          { error: "User identity required for confirm_request" },
+          { status: 403 },
+        );
+      }
+
+      const args =
+        typeof body.arguments === "string"
+          ? (JSON.parse(body.arguments) as { pendingKey?: string; selection?: number })
+          : (body.arguments as { pendingKey?: string; selection?: number } | undefined) ?? {};
+
+      const { pendingKey, selection } = args;
+      if (!pendingKey || typeof selection !== "number") {
+        return NextResponse.json({ error: "pendingKey and selection are required" }, { status: 400 });
+      }
+
+      const item = resolveBasket(pendingKey, selection, auth.userId);
+      if (!item) {
+        return NextResponse.json({
+          tool: "confirm_request",
+          result: { success: false, message: "That selection is no longer valid. Please search again." },
+        });
+      }
+
+      logger.info("MCP_CONFIRM_REQUEST", { userId: auth.userId, title: item.title, mediaType: item.mediaType });
+
+      const result =
+        item.mediaType === "movie"
+          ? await overseerr.requestMovie(item.overseerrId)
+          : await overseerr.requestTv(
+              item.overseerrId,
+              item.seasonNumber != null ? [item.seasonNumber] : undefined,
+            );
+
+      const message = result.success
+        ? `✅ *${item.title}* has been requested.`
+        : `❌ Could not request *${item.title}*: ${result.message}`;
+
+      return NextResponse.json({ tool: "confirm_request", result: { ...result, message } });
+    }
+
+    // Block direct request tools in text mode — only confirm_request may submit requests
+    if (textMode && (toolName === "overseerr_request_movie" || toolName === "overseerr_request_tv")) {
       return NextResponse.json(
-        { error: "tool name is required" },
-        { status: 400 },
+        { error: "Use confirm_request in text mode — direct request tools are disabled." },
+        { status: 403 },
       );
     }
 
-    // Permission check
     if (!canExecuteTool(toolName, auth.permission)) {
       logger.warn("MCP_PERMISSION_DENIED", { tool: toolName, permission: auth.permission, userId: auth.userId });
       return NextResponse.json(
@@ -178,24 +343,37 @@ export async function POST(request: Request) {
       );
     }
 
-    const args = typeof body.arguments === "string"
-      ? body.arguments
-      : JSON.stringify(body.arguments || {});
+    const args =
+      typeof body.arguments === "string"
+        ? body.arguments
+        : JSON.stringify(body.arguments || {});
 
     logger.info("MCP_TOOL_EXEC", { tool: toolName, permission: auth.permission, userId: auth.userId });
 
     try {
-      const result = await executeTool(toolName, args);
-      return NextResponse.json({
-        tool: toolName,
-        result: JSON.parse(result),
-      });
+      const resultStr = await executeTool(toolName, args);
+      const result = JSON.parse(resultStr);
+
+      // In text mode, intercept display_titles and convert to markdown + pending basket
+      if (textMode && toolName === "display_titles") {
+        const displayTitles: DisplayTitle[] = result?.displayTitles ?? [];
+        const { text, requestableItems } = formatDisplayTitlesAsText(displayTitles);
+
+        let pendingKey: string | undefined;
+        if (requestableItems.length > 0 && auth.userId != null) {
+          pendingKey = createBasket(requestableItems, auth.userId);
+        }
+
+        return NextResponse.json({
+          tool: toolName,
+          result: { text, ...(pendingKey ? { pendingKey } : {}) },
+        });
+      }
+
+      return NextResponse.json({ tool: toolName, result });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Tool execution failed";
-      return NextResponse.json(
-        { error: msg },
-        { status: 500 },
-      );
+      return NextResponse.json({ error: msg }, { status: 500 });
     }
   }
 
