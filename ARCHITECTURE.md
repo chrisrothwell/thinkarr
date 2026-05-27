@@ -23,7 +23,9 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 ├── entrypoint.sh                    # PUID/PGID user creation + server start
 ├── docker-compose.yml               # Development/example compose
 ├── drizzle/
-│   └── 0000_short_gressill.sql      # Initial migration (5 tables)
+│   ├── 0000_short_gressill.sql      # Initial migration (5 tables)
+│   ├── 0001_add_message_duration.sql
+│   └── 0002_mcp_channel_integration.sql  # mcp_channel_identities, mcp_registration_tokens, mcp_pending_baskets
 ├── public/
 │   ├── manifest.json                # PWA web app manifest
 │   └── sw.js                        # Service worker (network-first)
@@ -42,7 +44,9 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
     │   │   │       ├── route.ts             # GET with messages / DELETE
     │   │   │       ├── messages/route.ts    # POST save realtime turn
     │   │   │       └── title/route.ts       # PATCH rename
-    │   │   ├── mcp/route.ts                 # GET list tools / POST execute (bearer auth)
+    │   │   ├── mcp/
+    │   │   │   ├── route.ts                 # GET list tools / POST execute (bearer auth; ?mode=text for channel adapter)
+    │   │   │   └── link/route.ts            # GET validate registration token / POST complete Plex OAuth → store channel identity
     │   │   ├── models/route.ts              # GET available models for current user
     │   │   ├── plex/
     │   │   │   └── avatar/[userId]/route.ts # GET server-side Plex avatar proxy
@@ -70,6 +74,8 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
     │   │       └── tts/route.ts             # POST text → OpenAI TTS
     │   ├── chat/page.tsx            # Chat page (sidebar, model picker, messages, input)
     │   ├── login/page.tsx           # Plex OAuth login
+    │   ├── mcp/
+    │   │   └── link/page.tsx        # Channel identity registration (Plex OAuth for external channels)
     │   ├── settings/page.tsx        # 5-tab settings (General, LLM, Plex & Arrs, MCP, Users, Logs)
     │   ├── setup/page.tsx           # Welcome splash (first-time setup)
     │   ├── globals.css              # Dark theme CSS variables + Tailwind 4
@@ -106,7 +112,7 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
     │   ├── db/
     │   │   ├── index.ts             # DB singleton + auto-migration
     │   │   ├── migrate.ts           # runMigrations standalone utility
-    │   │   └── schema.ts            # 5 tables
+    │   │   └── schema.ts            # 8 tables
     │   ├── llm/
     │   │   ├── client.ts            # OpenAI client factory (per-endpoint)
     │   │   ├── default-prompt.ts    # DEFAULT_SYSTEM_PROMPT + DEFAULT_REALTIME_SYSTEM_PROMPT
@@ -125,8 +131,10 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
     │   │   └── test-connection.ts   # Connectivity testers + capability probing
     │   ├── tools/
     │   │   ├── display-titles-tool.ts  # display_titles (builds DisplayTitle[], resolves thumbUrl)
+    │   │   ├── display-titles-text.ts  # formatDisplayTitlesAsText() — markdown renderer for text channels
     │   │   ├── init.ts              # Auto-register tools based on configured services
     │   │   ├── overseerr-tools.ts
+    │   │   ├── pending-basket.ts    # createBasket / resolveBasket (one-time-use, 10-min TTL)
     │   │   ├── plex-tools.ts        # 8 tools
     │   │   ├── radarr-tools.ts      # 3 tools
     │   │   ├── registry.ts          # defineTool, getOpenAITools, executeTool + tool logging
@@ -152,6 +160,9 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 | `sessions` | `id` (UUID PK), `userId` (FK), `expiresAt` |
 | `conversations` | `id` (UUID PK), `userId` (FK), `title`, `createdAt`, `updatedAt` |
 | `messages` | `id` (UUID PK), `conversationId` (FK), `role`, `content`, `toolCalls`, `toolCallId`, `toolName` |
+| `mcp_channel_identities` | `(channelType, channelUserId)` (composite PK), `userId` (FK) — maps external channel user (WhatsApp/Telegram/etc.) to a Thinkarr user |
+| `mcp_registration_tokens` | `token` (PK), `channelType`, `channelUserId`, `expiresAt` — short-lived (15 min) self-registration link tokens |
+| `mcp_pending_baskets` | `token` (PK), `itemsJson`, `userId`, `expiresAt` — one-time-use (10 min) confirm_request validation state |
 
 ---
 
@@ -193,8 +204,10 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 | DELETE | `/api/conversations/[id]` | Delete conversation |
 | PATCH | `/api/conversations/[id]/title` | Rename (max 200 chars) |
 | POST | `/api/conversations/[id]/messages` | Save realtime turn |
-| GET | `/api/mcp` | List MCP tools (bearer auth, permission-filtered) |
-| POST | `/api/mcp` | Execute tool (bearer auth) |
+| GET | `/api/mcp` | List MCP tools (bearer auth, permission-filtered; `?mode=text` adds `confirm_request`) |
+| POST | `/api/mcp` | Execute tool (bearer auth; `?mode=text` enables text-channel adapter) |
+| GET | `/api/mcp/link` | Validate a channel registration token |
+| POST | `/api/mcp/link` | Complete channel registration: exchange Plex PIN + registration token → store identity |
 | GET | `/api/models` | Available models for current user |
 | GET | `/api/services/status` | Service health (LLM, Plex, Sonarr, Radarr, Overseerr) |
 | GET | `/api/settings` | Get config (secrets masked, admin only) |
@@ -229,8 +242,11 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 | Radarr | `radarr_search_movie`, `radarr_get_movie_status`, `radarr_get_queue` |
 | Seerr | `overseerr_search`, `overseerr_get_details`, `overseerr_list_requests`, `overseerr_discover`, `overseerr_get_season_episodes`, `overseerr_similar`, `overseerr_report_issue` |
 | Built-in | `display_titles` — renders TitleCarousel in chat (always registered) |
+| Text-channel only | `confirm_request` — submits an Overseerr request after explicit user confirmation; only available in `?mode=text` |
 
 External MCP access via bearer token (`mcp.bearerToken`). Optional `X-User-Id` header scopes operations to a user's permission level. Per-user tokens stored as `user.{id}.mcpToken`.
+
+In `?mode=text` (OpenClaw / external channel adapter): channel identity is resolved from `X-Channel-Type` + `X-Channel-User-Id` headers via `mcp_channel_identities`; `display_titles` results are transformed to markdown; `confirm_request` replaces the direct request tools as the only path to submit Overseerr requests.
 
 ---
 
@@ -269,6 +285,16 @@ Realtime (WebRTC) is restricted to `api.openai.com` only. `probeRealtimeSupport(
 ### Rate Limiting (Multi-Layer)
 1. **Message-based**: Per-user configurable (`user.{id}.rateLimit`), calendar-aligned, checked before each `/api/chat` stream.
 2. **API-based**: Per-user in-memory (60 req/min sliding window) on `/api/conversations/*` and `/api/settings/*`; returns HTTP 429.
+
+### Text-Channel Adapter (`?mode=text`)
+
+Enables external channel gateways (e.g. OpenClaw) to drive Thinkarr via MCP without a web UI. Three behaviour changes activate when `?mode=text` is appended to MCP requests:
+
+1. **Channel identity resolution**: `X-Channel-Type` + `X-Channel-User-Id` headers resolve to a `users` row via `mcp_channel_identities`. Unregistered users receive `{ error: "unregistered", registrationUrl: "..." }` pointing to `/mcp/link?token=...`. The token is short-lived (15 min) and stored in `mcp_registration_tokens`.
+
+2. **`display_titles` interception**: The route post-processes the tool result before returning. `formatDisplayTitlesAsText()` converts `displayTitles[]` to a markdown numbered list. Requestable items (`mediaStatus: "not_requested"` with an `overseerrId`) are stored in `mcp_pending_baskets` (10-min TTL) and the basket token is returned as `pendingKey` alongside the text.
+
+3. **`confirm_request` tool**: Exposed only in text mode. Takes `{ pendingKey, selection }`, validates the basket (token, TTL, ownership), calls `overseerr.requestMovie` or `overseerr.requestTv`, and returns a user-facing confirmation string. The basket is deleted on resolution (one-time use). `overseerr_request_movie` and `overseerr_request_tv` are hard-blocked in text mode — `confirm_request` is the only path to submit a request.
 
 ### Title Card Display System
 `display_titles` tool accepts 1–10 titles with rich metadata. Server resolves `thumbUrl` (Plex proxy + token) and `plexMachineId` (Watch Now universal link). Renders as both a collapsible tool call panel and a full-width TitleCarousel below the message. LLM always calls `display_titles` after searches.
