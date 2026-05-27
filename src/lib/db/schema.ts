@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, primaryKey } from "drizzle-orm/sqlite-core";
 
 export const appConfig = sqliteTable("app_config", {
   key: text("key").primaryKey(),
@@ -45,6 +45,31 @@ export const conversations = sqliteTable("conversations", {
   updatedAt: integer("updated_at", { mode: "timestamp" })
     .notNull()
     .$defaultFn(() => new Date()),
+});
+
+export const mcpChannelIdentities = sqliteTable("mcp_channel_identities", {
+  channelType: text("channel_type").notNull(),
+  channelUserId: text("channel_user_id").notNull(),
+  userId: integer("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .$defaultFn(() => new Date()),
+}, (t) => [primaryKey({ columns: [t.channelType, t.channelUserId] })]);
+
+export const mcpRegistrationTokens = sqliteTable("mcp_registration_tokens", {
+  token: text("token").primaryKey(),
+  channelType: text("channel_type").notNull(),
+  channelUserId: text("channel_user_id").notNull(),
+  expiresAt: integer("expires_at").notNull(),
+});
+
+export const mcpPendingBaskets = sqliteTable("mcp_pending_baskets", {
+  token: text("token").primaryKey(),
+  itemsJson: text("items_json").notNull(),
+  userId: integer("user_id").notNull(),
+  expiresAt: integer("expires_at").notNull(),
 });
 
 export const messages = sqliteTable("messages", {
