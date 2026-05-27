@@ -1,7 +1,7 @@
 # Node base image — Dependabot keeps this tag current.
 # To pin to a digest instead: docker pull node:25-alpine && docker inspect node:25-alpine --format '{{index .RepoDigests 0}}'
 # Stage 1: Install dependencies (includes native build tools for better-sqlite3)
-FROM node:25-alpine AS deps
+FROM node:26-alpine AS deps
 WORKDIR /app
 RUN apk add --no-cache python3 make g++
 COPY package.json package-lock.json ./
@@ -9,7 +9,7 @@ RUN npm ci --ignore-scripts
 RUN npm rebuild better-sqlite3
 
 # Stage 2: Build the application
-FROM node:25-alpine AS builder
+FROM node:26-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
@@ -18,7 +18,7 @@ ENV NEXT_PUBLIC_APP_VERSION=$APP_VERSION
 RUN npm run build
 
 # Stage 3: Production runner
-FROM node:25-alpine AS runner
+FROM node:26-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
