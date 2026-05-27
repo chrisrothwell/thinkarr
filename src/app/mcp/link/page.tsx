@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { Suspense, useState, useCallback, useEffect, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -8,7 +8,7 @@ import { Spinner } from "@/components/ui/spinner";
 
 type PageState = "loading" | "ready" | "waiting" | "success" | "error" | "expired";
 
-export default function McpLinkPage() {
+function McpLinkContent() {
   const searchParams = useSearchParams();
   const token = searchParams.get("token") ?? "";
 
@@ -83,48 +83,56 @@ export default function McpLinkPage() {
     : "messaging";
 
   return (
+    <Card className="w-full max-w-md">
+      <CardHeader>
+        <CardTitle>Connect your Plex account</CardTitle>
+        <CardDescription>
+          Link your Plex account to use Thinkarr from {channelLabel}.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        {state === "loading" && <Spinner className="mx-auto" />}
+
+        {state === "expired" && (
+          <p className="text-destructive text-sm">
+            This link has expired or is invalid. Send another message to get a new one.
+          </p>
+        )}
+
+        {state === "ready" && (
+          <Button onClick={startPlexAuth}>Connect with Plex</Button>
+        )}
+
+        {state === "waiting" && (
+          <div className="flex flex-col items-center gap-3 text-sm text-muted-foreground">
+            <Spinner />
+            <p>Waiting for Plex authorisation…</p>
+          </div>
+        )}
+
+        {state === "success" && (
+          <p className="text-sm text-green-500">
+            ✓ Account linked. You can close this tab and return to {channelLabel}.
+          </p>
+        )}
+
+        {state === "error" && (
+          <>
+            <p className="text-destructive text-sm">{error}</p>
+            <Button variant="outline" onClick={() => setState("ready")}>Try again</Button>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+export default function McpLinkPage() {
+  return (
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle>Connect your Plex account</CardTitle>
-          <CardDescription>
-            Link your Plex account to use Thinkarr from {channelLabel}.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          {state === "loading" && <Spinner className="mx-auto" />}
-
-          {state === "expired" && (
-            <p className="text-destructive text-sm">
-              This link has expired or is invalid. Send another message to get a new one.
-            </p>
-          )}
-
-          {state === "ready" && (
-            <Button onClick={startPlexAuth}>Connect with Plex</Button>
-          )}
-
-          {state === "waiting" && (
-            <div className="flex flex-col items-center gap-3 text-sm text-muted-foreground">
-              <Spinner />
-              <p>Waiting for Plex authorisation…</p>
-            </div>
-          )}
-
-          {state === "success" && (
-            <p className="text-sm text-green-500">
-              ✓ Account linked. You can close this tab and return to {channelLabel}.
-            </p>
-          )}
-
-          {state === "error" && (
-            <>
-              <p className="text-destructive text-sm">{error}</p>
-              <Button variant="outline" onClick={() => setState("ready")}>Try again</Button>
-            </>
-          )}
-        </CardContent>
-      </Card>
+      <Suspense fallback={<Spinner className="mx-auto" />}>
+        <McpLinkContent />
+      </Suspense>
     </div>
   );
 }
