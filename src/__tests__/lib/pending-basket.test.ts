@@ -41,6 +41,7 @@ describe("pending-basket", () => {
     insertedRow = null;
     mockGet.mockReset();
     mockRun.mockReset();
+    mockDelete.mockClear();
     vi.resetModules();
   });
 

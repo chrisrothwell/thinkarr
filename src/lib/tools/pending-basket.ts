@@ -43,7 +43,7 @@ export function resolveBasket(
     )
     .get();
 
-  if (!row || row.expiresAt < now) return null;
+  if (!row || row.expiresAt < now || row.userId !== userId) return null;
 
   const items: PendingItem[] = JSON.parse(row.itemsJson);
   const item = items[selection - 1];

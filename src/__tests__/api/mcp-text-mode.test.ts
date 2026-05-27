@@ -151,6 +151,7 @@ describe("/api/mcp?mode=text", () => {
 
     const { POST } = await import("@/app/api/mcp/route");
     const res = await POST(makeRequest({
+      headers: { "x-channel-type": "whatsapp", "x-channel-user-id": "+447700900000" },
       body: { tool: "display_titles", arguments: { titles: [] } },
     }));
     const data = await res.json();
@@ -177,6 +178,7 @@ describe("/api/mcp?mode=text", () => {
 
     const { POST } = await import("@/app/api/mcp/route");
     const res = await POST(makeRequest({
+      headers: { "x-channel-type": "whatsapp", "x-channel-user-id": "+447700900000" },
       body: { tool: "confirm_request", arguments: { pendingKey: "basket-token", selection: 1 } },
     }));
     const data = await res.json();
@@ -204,6 +206,7 @@ describe("/api/mcp?mode=text", () => {
 
     const { POST } = await import("@/app/api/mcp/route");
     const res = await POST(makeRequest({
+      headers: { "x-channel-type": "whatsapp", "x-channel-user-id": "+447700900000" },
       body: { tool: "confirm_request", arguments: { pendingKey: "wrong-token", selection: 1 } },
     }));
     const data = await res.json();

@@ -126,6 +126,7 @@ function canExecuteTool(toolName: string, permission: McpPermission): boolean {
     "radarr_get_queue",
     "overseerr_search",
     "overseerr_list_requests",
+    "display_titles",
   ];
 
   const userActionTools = [
