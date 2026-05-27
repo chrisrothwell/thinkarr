@@ -11,8 +11,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // --- shared mock state ---
 let channelIdentityRow: { userId: number } | undefined;
-let basketRow: { token: string; itemsJson: string; userId: number; expiresAt: number } | undefined;
-let insertedBasket: { token: string; itemsJson: string; userId: number; expiresAt: number } | null = null;
 let insertedRegToken: { token: string; channelType: string; channelUserId: string; expiresAt: number } | null = null;
 
 const mockDbSelect = vi.fn();
@@ -70,7 +68,6 @@ vi.mock("@/lib/services/overseerr", () => ({
 
 vi.mock("@/lib/tools/pending-basket", () => ({
   createBasket: vi.fn().mockImplementation((items: unknown[], userId: number) => {
-    insertedBasket = { token: "basket-token", itemsJson: JSON.stringify(items), userId, expiresAt: 9999999999 };
     return "basket-token";
   }),
   resolveBasket: vi.fn().mockImplementation((token: string, selection: number, userId: number) => {
@@ -98,7 +95,6 @@ function makeRequest(opts: {
 
 describe("/api/mcp?mode=text", () => {
   beforeEach(() => {
-    insertedBasket = null;
     insertedRegToken = null;
     vi.clearAllMocks();
 

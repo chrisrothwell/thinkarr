@@ -72,7 +72,6 @@ function authenticateMcp(request: Request): AuthResult | null {
  */
 function resolveChannelIdentity(
   request: Request,
-  baseUrl: string,
 ): AuthResult | "unregistered" | null {
   const channelType = request.headers.get("x-channel-type");
   const channelUserId = request.headers.get("x-channel-user-id");
@@ -176,10 +175,6 @@ function buildToolList(permission: McpPermission, textMode: boolean) {
   return filtered;
 }
 
-function getRegistrationUrl(request: Request): string {
-  const url = new URL(request.url);
-  return `${url.origin}/mcp/link`;
-}
 
 export async function GET(request: Request) {
   const auth = authenticateMcp(request);
@@ -222,14 +217,13 @@ export async function POST(request: Request) {
   // Resolve channel identity when in text mode
   let auth = baseAuth;
   if (textMode) {
-    const resolved = resolveChannelIdentity(request, getRegistrationUrl(request));
+    const resolved = resolveChannelIdentity(request);
     if (resolved === "unregistered") {
       const url = new URL(request.url);
       // Find the token we just inserted so we can return it
       const channelType = request.headers.get("x-channel-type")!;
       const channelUserId = request.headers.get("x-channel-user-id")!;
       const db = getDb();
-      const now = Math.floor(Date.now() / 1000);
       const row = db
         .select()
         .from(schema.mcpRegistrationTokens)
