@@ -15,11 +15,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: main
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: 'npm'
@@ -27,10 +27,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: npm audit (all severities)
+      - name: npm audit (production deps, all severities)
         id: audit
         run: |
-          npm audit --json > audit.json 2>&1 || true
+          # Production dependencies only — devDependencies (eslint, drizzle-kit,
+          # etc.) never reach the shipped Docker image, so their findings are
+          # noise for a production hygiene report. See scripts/check-npm-audit.mjs.
+          npm audit --omit=dev --json > audit.json 2>&1 || true
           CRITICAL=$(cat audit.json | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('metadata',{}).get('vulnerabilities',{}).get('critical',0))")
           HIGH=$(cat audit.json | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('metadata',{}).get('vulnerabilities',{}).get('high',0))")
           MODERATE=$(cat audit.json | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('metadata',{}).get('vulnerabilities',{}).get('moderate',0))")
@@ -40,7 +43,7 @@ jobs:
           echo "moderate=$MODERATE" >> $GITHUB_OUTPUT
           echo "low=$LOW" >> $GITHUB_OUTPUT
           {
-            echo "## npm audit"
+            echo "## npm audit (production dependencies)"
             echo "| Severity | Count |"
             echo "|----------|-------|"
             echo "| 🔴 Critical | $CRITICAL |"
@@ -48,6 +51,19 @@ jobs:
             echo "| 🟡 Moderate | $MODERATE |"
             echo "| 🔵 Low | $LOW |"
           } >> $GITHUB_STEP_SUMMARY
+
+      - name: npm audit gate
+        id: audit_gate
+        run: |
+          # The actual pass/fail gate — scripts/check-npm-audit.mjs fails on ANY
+          # severity in production deps, with .npmauditignore as the documented
+          # exception for a genuinely upstream-blocked case. This is the same
+          # gate used in ci.yml and docker-publish.yml.
+          if npm run security:audit; then
+            echo "blocking=0" >> $GITHUB_OUTPUT
+          else
+            echo "blocking=1" >> $GITHUB_OUTPUT
+          fi
 
       - name: ESLint (warnings + errors)
         id: lint
@@ -81,12 +97,11 @@ jobs:
 
       - name: Fail if regressions detected
         run: |
-          CRITICAL=${{ steps.audit.outputs.critical }}
-          HIGH=${{ steps.audit.outputs.high }}
+          AUDIT_BLOCKING=${{ steps.audit_gate.outputs.blocking }}
           ERRORS=${{ steps.lint.outputs.errors }}
           FINDINGS=${{ steps.semgrep.outputs.findings }}
-          if [[ "$CRITICAL" -gt 0 || "$HIGH" -gt 0 || "$ERRORS" -gt 0 || "$FINDINGS" -gt 0 ]]; then
+          if [[ "$AUDIT_BLOCKING" -eq 1 || "$ERRORS" -gt 0 || "$FINDINGS" -gt 0 ]]; then
             echo "❌ Regressions detected — see summary above."
             exit 1
           fi
-          echo "✅ No regressions. Moderate/low findings in summary are informational."
+          echo "✅ No regressions."
