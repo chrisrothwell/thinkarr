@@ -1,5 +1,6 @@
 import { getConfig } from "@/lib/config";
 import { logger } from "@/lib/logger";
+import { refreshPlexToken } from "@/lib/services/plex-auth";
 
 function getPlexConfig() {
   const url = getConfig("plex.url");
@@ -8,23 +9,35 @@ function getPlexConfig() {
   return { url: url.replace(/\/$/, ""), token };
 }
 
-async function plexFetch(path: string) {
-  const { url, token } = getPlexConfig();
-  const fullUrl = `${url}${path}`;
-  logger.info("Plex API request", { method: "GET", url: fullUrl });
-  const res = await fetch(fullUrl, {
+function requestPlex(fullUrl: string, token: string) {
+  return fetch(fullUrl, {
     headers: {
       "X-Plex-Token": token,
       Accept: "application/json",
     },
     signal: AbortSignal.timeout(15000),
   });
+}
+
+async function plexFetch(path: string) {
+  const { url, token } = getPlexConfig();
+  const fullUrl = `${url}${path}`;
+  logger.info("Plex API request", { method: "GET", url: fullUrl });
+  let res = await requestPlex(fullUrl, token);
+
   if (res.status === 401) {
-    // Plex tokens don't have a refresh mechanism reachable server-side — renewal
-    // requires the admin to redo the OAuth PIN flow in Settings, so we can't
-    // silently retry here. Surface a message that says so instead of a bare
-    // "HTTP 401" that gives the caller (LLM or human) no next step.
-    logger.warn("Plex API error — token expired or revoked", { url: fullUrl });
+    // The per-server access token can go stale independently of the admin's
+    // plex.tv account login — re-derive it via discovery and retry once
+    // before giving up (see refreshPlexToken for why this doesn't need
+    // interactive browser confirmation).
+    const refreshed = await refreshPlexToken();
+    if (refreshed) {
+      res = await requestPlex(fullUrl, refreshed);
+    }
+  }
+
+  if (res.status === 401) {
+    logger.warn("Plex API error — token expired or revoked, refresh failed", { url: fullUrl });
     throw new Error("Plex token expired or revoked — reconnect Plex in Settings");
   }
   if (!res.ok) {

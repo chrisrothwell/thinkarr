@@ -174,6 +174,7 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 | `llm.endpoints` | JSON array | Multi-endpoint LLM configs (`baseUrl`, `apiKey`, `model`, `systemPrompt`, `isDefault`, `supportsVoice`, `supportsRealtime`, `realtimeModel`, `realtimeSystemPrompt`, `ttsVoice`) |
 | `llm.baseUrl` / `llm.apiKey` / `llm.model` | String | Legacy single-endpoint keys (backward compat) |
 | `plex.url` / `plex.token` | String | Plex server connection |
+| `plex.clientIdentifier` | String | Selected server's Plex `clientIdentifier`, used to re-match it during automatic token refresh |
 | `sonarr.url` / `sonarr.apiKey` | String | Sonarr connection |
 | `radarr.url` / `radarr.apiKey` | String | Radarr connection |
 | `overseerr.url` / `overseerr.apiKey` | String | Overseerr connection |
@@ -261,6 +262,9 @@ In `?mode=text` (OpenClaw / external channel adapter): channel identity is resol
 
 ### Plex PIN OAuth (no NextAuth)
 Custom flow in `src/lib/services/plex-auth.ts`. POST `/api/auth/plex` returns PIN + URL; backend polls until claimed. First user auto-promoted to admin; subsequent users verified via `checkUserHasLibraryAccess()`. Avoids NextAuth dependency; fits the linuxserver.io container model.
+
+### Automatic Plex token refresh on 401 (#457)
+`plex.token` (the per-server access token used for all `plexFetch`/tool-call requests) can go stale independently of a user's `users.plexToken` (their plex.tv account token, from login), which is long-lived and doesn't need re-authenticating in a browser. `refreshPlexToken()` in `plex-auth.ts` reproduces the "click Discover Servers again" fix automatically: it re-runs `getPlexDevices()` against every admin's account token, matches the resource by `plex.clientIdentifier` (stable across LAN IP changes, unlike matching by URL), and stores the fresh `accessToken` as `plex.token`. Both `plexFetch` (`plex.ts`) and `checkPlex` (`services/status/route.ts`) call this and retry once on a 401 before surfacing a "reconnect in Settings" error. `plex.clientIdentifier` is recorded whenever an admin selects a server from Discover Servers in Settings.
 
 ### SQLite + Drizzle (no external DB)
 Stored at `/config/thinkarr.db`, auto-migrated on first connection. Zero external dependencies — no separate DB container. Uses better-sqlite3 (synchronous) configured as an external in `next.config.ts` for standalone builds.

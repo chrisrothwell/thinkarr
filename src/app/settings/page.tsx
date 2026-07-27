@@ -61,6 +61,7 @@ interface ArrConfig {
 interface PlexConfig {
   url: string;
   token: string;
+  clientIdentifier?: string;
 }
 
 interface PlexDevice {
@@ -201,7 +202,11 @@ export default function SettingsPage() {
                 realtimePromptMode: ep.realtimeSystemPrompt ? "custom" : "default",
               })),
             );
-            const loadedPlex = { url: d.plex?.url || "", token: d.plex?.token || "" };
+            const loadedPlex = {
+              url: d.plex?.url || "",
+              token: d.plex?.token || "",
+              clientIdentifier: d.plex?.clientIdentifier || "",
+            };
             setPlexConfig(loadedPlex);
             const arrs: Record<string, ArrConfig> = {};
             for (const svc of ARR_SERVICES) {
@@ -294,7 +299,7 @@ export default function SettingsPage() {
         systemPrompt: _pm === "default" ? "" : ep.systemPrompt,
         realtimeSystemPrompt: _rpm === "default" ? "" : ep.realtimeSystemPrompt,
       })),
-      plex: { url: plexConfig.url, token: plexConfig.token },
+      plex: { url: plexConfig.url, token: plexConfig.token, clientIdentifier: plexConfig.clientIdentifier || "" },
       github: githubConfig,
       langfuse: langfuseConfig,
     };
@@ -369,7 +374,7 @@ export default function SettingsPage() {
       setPlexDiscoverError(selection.error);
       return;
     }
-    setPlexConfig({ url: selection.url, token: device.accessToken });
+    setPlexConfig({ url: selection.url, token: device.accessToken, clientIdentifier: device.clientIdentifier });
     setPlexDevices([]);
     setPlexDiscoverError(null);
     setSaved(false);
