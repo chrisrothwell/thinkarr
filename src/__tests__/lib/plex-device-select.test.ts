@@ -8,6 +8,7 @@ describe("selectPlexConnectionUrl", () => {
     if (!result.ok) {
       expect(result.error).toMatch(/Offline Server/);
       expect(result.error).toMatch(/no reachable connection/i);
+      expect(result.error).toMatch(/publishing itself on plex\.tv/i);
     }
   });
 
