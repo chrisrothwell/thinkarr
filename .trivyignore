@@ -1,10 +1,11 @@
-# Vulnerabilities in npm CLI's own bundled dependencies (tar, minimatch, glob).
+# Vulnerabilities in npm CLI's own bundled dependencies (tar, minimatch, glob,
+# brace-expansion, undici — the latter pulled in via npm's bundled node-gyp).
 # These packages live in /usr/local/lib/node_modules/npm/ and are only used by
 # the npm CLI tool itself. Our production container never runs 'npm install' or
 # any npm commands — it runs 'node server.js' only. The attack surface for these
-# CVEs (malicious archive extraction, glob injection) does not exist at runtime.
+# CVEs (malicious archive extraction, glob injection, DoS) does not exist at runtime.
 #
-# Suppress until the node:22-alpine base image ships a patched npm version,
+# Suppress until the node:26-alpine base image ships a patched npm version,
 # at which point these entries should be removed.
 
 # glob: Command Injection via Malicious Filenames (npm-internal only)
@@ -15,13 +16,25 @@ CVE-2026-26996
 CVE-2026-27903
 CVE-2026-27904
 
-# node-tar: various path traversal / file overwrite (npm-internal only)
+# brace-expansion: DoS via exponential-time complexity (npm-internal only,
+# transitive via npm's bundled minimatch) — issue #469
+CVE-2026-13149
+CVE-2026-14257
+
+# node-tar: various path traversal / file overwrite / DoS (npm-internal only)
 CVE-2026-23745
 CVE-2026-23950
 CVE-2026-24842
 CVE-2026-26960
 CVE-2026-29786
 CVE-2026-31802
+# node-tar: DoS via crafted gzip bomb / malformed archive header — issue #469
+CVE-2026-59873
+CVE-2026-59874
+
+# undici: DoS via unbounded memory growth over WebSocket (npm-internal only,
+# transitive via npm's bundled node-gyp) — issue #469
+CVE-2026-12151
 
 # openssl: NULL pointer DoS in CMS (CVE-2026-28390) — fix is 3.5.6-r0 but that package
 # has not yet landed in Alpine's repos for node:25-alpine. The Dockerfile already runs

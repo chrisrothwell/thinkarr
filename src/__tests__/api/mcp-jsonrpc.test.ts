@@ -1,14 +1,27 @@
 /**
- * Unit tests for the spec-compliant MCP Streamable HTTP / JSON-RPC 2.0 envelope
- * added to POST /api/mcp for issue #461: initialize handshake, tools/list,
- * tools/call, and JSON-RPC notification/error semantics. Discriminated from the
- * pre-existing legacy ad-hoc dispatch by the presence of a `jsonrpc: "2.0"` field.
+ * Unit tests for the spec-compliant MCP Streamable HTTP handling in
+ * POST /api/mcp, implemented on top of the official @modelcontextprotocol/sdk
+ * (#461): initialize handshake, tools/list, tools/call, and JSON-RPC
+ * notification/error semantics — all via the real SDK `Server` +
+ * `WebStandardStreamableHTTPServerTransport`, not a hand-rolled envelope.
+ * Discriminated from the pre-existing legacy ad-hoc dispatch (still hand-rolled,
+ * used by the OpenClaw text-channel adapter) by the presence of a
+ * `jsonrpc: "2.0"` field on the request body.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("@/lib/db", () => ({
-  getDb: () => ({ select: vi.fn(), insert: vi.fn(), delete: vi.fn(), update: vi.fn() }),
+  getDb: () => ({
+    select: () => ({
+      from: () => ({
+        where: () => ({ get: () => ({ id: 7, isAdmin: false }) }),
+      }),
+    }),
+    insert: vi.fn(),
+    delete: vi.fn(),
+    update: vi.fn(),
+  }),
   schema: {
     users: { id: "id" },
     mcpChannelIdentities: {},
@@ -19,7 +32,7 @@ vi.mock("@/lib/db", () => ({
 
 vi.mock("@/lib/config", () => ({
   getConfig: (key: string) => (key === "mcp.bearerToken" ? "test-bearer" : null),
-  getUserIdByMcpToken: () => null,
+  getUserIdByMcpToken: (token: string) => (token === "user-token" ? 7 : null),
 }));
 
 vi.mock("@/lib/tools/init", () => ({ initializeTools: vi.fn() }));
@@ -48,10 +61,16 @@ vi.mock("@/lib/services/overseerr", () => ({ requestMovie: vi.fn(), requestTv: v
 vi.mock("@/lib/tools/pending-basket", () => ({ createBasket: vi.fn(), resolveBasket: vi.fn() }));
 vi.mock("@/lib/tools/display-titles-text", () => ({ formatDisplayTitlesAsText: vi.fn() }));
 
-function makeRequest(body: unknown): Request {
+function makeRequest(body: unknown, bearer = "test-bearer"): Request {
   return new Request("http://localhost/api/mcp", {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: "Bearer test-bearer" },
+    headers: {
+      "Content-Type": "application/json",
+      // Required by the Streamable HTTP spec — the SDK's transport rejects
+      // requests with 406 if this isn't present, same as any real MCP client sends.
+      Accept: "application/json, text/event-stream",
+      Authorization: `Bearer ${bearer}`,
+    },
     body: JSON.stringify(body),
   });
 }
@@ -125,9 +144,33 @@ describe("POST /api/mcp — JSON-RPC 2.0 envelope (#461)", () => {
     const res = await POST(makeRequest({ jsonrpc: "2.0", method: "tools/call", params: {}, id: 4 }));
     const data = await res.json();
 
+    // The SDK validates params.name against its own schema before our handler
+    // ever runs, and surfaces that failure as -32603 (not -32602) — verified
+    // directly against the SDK rather than assumed.
     expect(data.jsonrpc).toBe("2.0");
     expect(data.id).toBe(4);
+    expect(data.error.code).toBe(-32603);
+  });
+
+  it("tools/call denied by permission surfaces as a JSON-RPC InvalidParams error", async () => {
+    const { POST } = await import("@/app/api/mcp/route");
+    // "user-token" resolves (via the mocks above) to a non-admin user; any
+    // tool name not on canExecuteTool's allowlist is admin-only.
+    const res = await POST(
+      makeRequest(
+        { jsonrpc: "2.0", method: "tools/call", params: { name: "some_admin_only_tool", arguments: {} }, id: 6 },
+        "user-token",
+      ),
+    );
+    const data = await res.json();
+
+    // Confirms runToolCall's "rejected" outcome surfaces as a clean McpError
+    // (InvalidParams) via the SDK's own error handling, not as an uncaught
+    // plain Error that would otherwise be swallowed into a generic -32603.
+    expect(data.jsonrpc).toBe("2.0");
+    expect(data.id).toBe(6);
     expect(data.error.code).toBe(-32602);
+    expect(data.error.message).toMatch(/permission denied/i);
   });
 
   it("an unrecognized method with an id returns a JSON-RPC 'method not found' error", async () => {

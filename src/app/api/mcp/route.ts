@@ -1,5 +1,15 @@
 import { NextResponse } from "next/server";
 import { randomBytes } from "crypto";
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import {
+  ListToolsRequestSchema,
+  CallToolRequestSchema,
+  McpError,
+  ErrorCode,
+  type Tool,
+} from "@modelcontextprotocol/sdk/types.js";
+import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { getConfig, getUserIdByMcpToken } from "@/lib/config";
 import { initializeTools } from "@/lib/tools/init";
 import { getOpenAITools, executeTool, hasTools } from "@/lib/tools/registry";
@@ -11,37 +21,12 @@ import { formatDisplayTitlesAsText } from "@/lib/tools/display-titles-text";
 import { createBasket, resolveBasket } from "@/lib/tools/pending-basket";
 import * as overseerr from "@/lib/services/overseerr";
 import type { DisplayTitle } from "@/types/titles";
-import type OpenAI from "openai";
 
 type McpPermission = "admin" | "user";
 
 interface AuthResult {
   permission: McpPermission;
   userId?: number;
-}
-
-type JsonRpcId = string | number | null;
-
-/** Default protocol version echoed back when the client's `initialize` call omits one. */
-const MCP_PROTOCOL_VERSION = "2025-06-18";
-
-function jsonRpcResult(id: JsonRpcId, result: unknown) {
-  return NextResponse.json({ jsonrpc: "2.0", id, result });
-}
-
-function jsonRpcError(id: JsonRpcId, code: number, message: string) {
-  return NextResponse.json({ jsonrpc: "2.0", id, error: { code, message } }, { status: 400 });
-}
-
-/** Convert internal OpenAI-function-shaped tool defs to the MCP `tools/list` schema. */
-function toMcpTools(tools: OpenAI.ChatCompletionTool[]) {
-  return tools
-    .filter((t) => t.type === "function")
-    .map((t) => ({
-      name: t.function.name,
-      description: t.function.description,
-      inputSchema: t.function.parameters,
-    }));
 }
 
 /**
@@ -310,6 +295,84 @@ function buildToolList(permission: McpPermission, textMode: boolean) {
   return filtered;
 }
 
+/**
+ * Spec-compliant MCP Streamable HTTP handling via the official SDK (#461).
+ * `initialize` / `notifications/initialized` and protocol-version negotiation
+ * are handled automatically by `Server`; only `tools/list` and `tools/call`
+ * are implemented here, reusing `runToolCall()` so permission checks stay in
+ * one place shared with the legacy ad-hoc dispatch below.
+ *
+ * A fresh `Server` + transport is created per request — the SDK's stateless
+ * transports (no `sessionIdGenerator`) cannot be reused across requests.
+ */
+async function handleMcpProtocolRequest(request: Request, auth: AuthResult, token: string): Promise<Response> {
+  const server = new Server(
+    { name: "thinkarr", version: process.env.NEXT_PUBLIC_APP_VERSION ?? "unknown" },
+    { capabilities: { tools: {} } },
+  );
+
+  server.setRequestHandler(ListToolsRequestSchema, async (_req, extra) => {
+    const permission = (extra.authInfo?.extra?.permission as McpPermission | undefined) ?? auth.permission;
+    const allTools = getOpenAITools();
+    const filtered =
+      permission === "admin"
+        ? allTools
+        : allTools.filter((t) => t.type === "function" && canExecuteTool(t.function.name, permission));
+
+    const tools: Tool[] = filtered
+      .filter((t) => t.type === "function")
+      .map((t) => ({
+        name: t.function.name,
+        description: t.function.description,
+        inputSchema: t.function.parameters as Tool["inputSchema"],
+      }));
+
+    return { tools };
+  });
+
+  server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
+    const permission = (extra.authInfo?.extra?.permission as McpPermission | undefined) ?? auth.permission;
+    const userId = (extra.authInfo?.extra?.userId as number | undefined) ?? auth.userId;
+    const { name, arguments: args } = req.params;
+
+    const outcome = await runToolCall({
+      toolName: name,
+      rawArguments: args,
+      auth: { permission, userId },
+      textMode: false,
+    });
+
+    if (!outcome.ok) {
+      if (outcome.kind === "rejected") {
+        // Bad params / unknown tool / permission denied — a protocol-level error,
+        // not something the calling LLM should try to route around silently.
+        throw new McpError(ErrorCode.InvalidParams, outcome.message);
+      }
+      // Tool execution itself failed — per MCP spec this is reported inside the
+      // result with isError, not as a protocol error, so the LLM can see and
+      // react to it instead of just losing the turn.
+      return { content: [{ type: "text", text: outcome.message }], isError: true };
+    }
+
+    return { content: [{ type: "text", text: JSON.stringify(outcome.payload) }] };
+  });
+
+  const transport = new WebStandardStreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+    enableJsonResponse: true,
+  });
+
+  await server.connect(transport);
+
+  const authInfo: AuthInfo = {
+    token,
+    clientId: auth.userId != null ? String(auth.userId) : "admin",
+    scopes: [auth.permission],
+    extra: { permission: auth.permission, userId: auth.userId },
+  };
+
+  return transport.handleRequest(request, { authInfo });
+}
 
 export async function GET(request: Request) {
   const auth = authenticateMcp(request);
@@ -381,79 +444,34 @@ export async function POST(request: Request) {
     }
   }
 
+  let rawBody: string;
   let body: {
     jsonrpc?: string;
-    id?: JsonRpcId;
     method?: string;
-    params?: { name?: string; arguments?: Record<string, unknown> | string };
     tool?: string;
     arguments?: Record<string, unknown> | string;
   };
 
   try {
-    body = await request.json();
+    rawBody = await request.text();
+    body = JSON.parse(rawBody);
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  // Spec-compliant MCP Streamable HTTP / JSON-RPC 2.0 envelope. Discriminated on the
+  // Spec-compliant MCP Streamable HTTP, via the official SDK. Discriminated on the
   // `jsonrpc` field so this doesn't collide with the legacy ad-hoc dispatch below,
   // which existing integrations (OpenClaw text-channel adapter) rely on (#461).
   if (body.jsonrpc === "2.0") {
-    const id = body.id ?? null;
-    const hasId = Object.prototype.hasOwnProperty.call(body, "id");
-
-    switch (body.method) {
-      case "initialize": {
-        const initParams = (body.params as { protocolVersion?: string } | undefined) ?? {};
-        return jsonRpcResult(id, {
-          protocolVersion: initParams.protocolVersion ?? MCP_PROTOCOL_VERSION,
-          capabilities: { tools: {} },
-          serverInfo: { name: "thinkarr", version: process.env.NEXT_PUBLIC_APP_VERSION ?? "unknown" },
-        });
-      }
-
-      case "notifications/initialized":
-        // JSON-RPC notifications receive no response body.
-        return new NextResponse(null, { status: 202 });
-
-      case "tools/list": {
-        const tools = buildToolList(auth.permission, textMode);
-        return jsonRpcResult(id, { tools: toMcpTools(tools) });
-      }
-
-      case "tools/call": {
-        const toolName = body.params?.name ?? "";
-        if (!toolName) {
-          return jsonRpcError(id, -32602, "params.name is required");
-        }
-
-        const outcome = await runToolCall({
-          toolName,
-          rawArguments: body.params?.arguments,
-          auth,
-          textMode,
-        });
-
-        if (!outcome.ok) {
-          if (outcome.kind === "rejected") {
-            return jsonRpcError(id, -32602, outcome.message);
-          }
-          // Tool execution failed — surfaced as a tool result error per MCP spec,
-          // not a JSON-RPC protocol error, so the caller can see and react to it.
-          return jsonRpcResult(id, { content: [{ type: "text", text: outcome.message }], isError: true });
-        }
-
-        return jsonRpcResult(id, { content: [{ type: "text", text: JSON.stringify(outcome.payload) }] });
-      }
-
-      default:
-        if (!hasId) {
-          // Unrecognized notification — no response per JSON-RPC spec.
-          return new NextResponse(null, { status: 202 });
-        }
-        return jsonRpcError(id, -32601, `Method not found: ${body.method}`);
-    }
+    // The body was already consumed via request.text() above to inspect it —
+    // hand the SDK transport a fresh Request with the same content instead of
+    // the original (its body stream can only be read once).
+    const freshRequest = new Request(request.url, {
+      method: "POST",
+      headers: request.headers,
+      body: rawBody,
+    });
+    return handleMcpProtocolRequest(freshRequest, auth, request.headers.get("authorization")!.slice(7));
   }
 
   // Legacy ad-hoc dispatch (no `jsonrpc` envelope) — kept for backward compatibility
