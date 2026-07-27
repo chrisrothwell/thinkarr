@@ -66,12 +66,15 @@ jobs:
 
       - name: Dependency audit
         run: |
-          npm audit --audit-level=high
-          # Write moderate/low findings to step summary (informational only)
-          MODERATE=$(npm audit --json 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('metadata',{}).get('vulnerabilities',{}).get('moderate',0))" 2>/dev/null || echo '?')
-          LOW=$(npm audit --json 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('metadata',{}).get('vulnerabilities',{}).get('low',0))" 2>/dev/null || echo '?')
+          # Blocks on ANY severity in production dependencies (see scripts/check-npm-audit.mjs
+          # and .npmauditignore for the documented-exception mechanism). devDependencies
+          # (eslint, drizzle-kit, etc.) never reach the shipped image, so they're excluded
+          # from the blocking gate — surfaced below as informational only.
+          npm run security:audit
+          DEV_MODERATE=$(npm audit --omit=prod --json 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('metadata',{}).get('vulnerabilities',{}).get('moderate',0))" 2>/dev/null || echo '?')
+          DEV_LOW=$(npm audit --omit=prod --json 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('metadata',{}).get('vulnerabilities',{}).get('low',0))" 2>/dev/null || echo '?')
           echo "### npm audit" >> $GITHUB_STEP_SUMMARY
-          echo "Moderate: $MODERATE · Low: $LOW (informational — not blocking)" >> $GITHUB_STEP_SUMMARY
+          echo "Dev-only moderate: $DEV_MODERATE · low: $DEV_LOW (informational — not blocking, doesn't ship in the image)" >> $GITHUB_STEP_SUMMARY
 
       - name: Lint
         run: |

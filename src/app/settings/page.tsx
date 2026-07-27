@@ -27,6 +27,7 @@ import {
 import { DEFAULT_SYSTEM_PROMPT, DEFAULT_REALTIME_SYSTEM_PROMPT } from "@/lib/llm/default-prompt";
 import { copyToClipboard } from "@/lib/utils";
 import { usePwaInstall } from "@/hooks/use-pwa-install";
+import { selectPlexConnectionUrl } from "@/lib/plex-device-select";
 
 // --- Types ---
 
@@ -60,6 +61,7 @@ interface ArrConfig {
 interface PlexConfig {
   url: string;
   token: string;
+  clientIdentifier?: string;
 }
 
 interface PlexDevice {
@@ -200,7 +202,11 @@ export default function SettingsPage() {
                 realtimePromptMode: ep.realtimeSystemPrompt ? "custom" : "default",
               })),
             );
-            const loadedPlex = { url: d.plex?.url || "", token: d.plex?.token || "" };
+            const loadedPlex = {
+              url: d.plex?.url || "",
+              token: d.plex?.token || "",
+              clientIdentifier: d.plex?.clientIdentifier || "",
+            };
             setPlexConfig(loadedPlex);
             const arrs: Record<string, ArrConfig> = {};
             for (const svc of ARR_SERVICES) {
@@ -293,7 +299,7 @@ export default function SettingsPage() {
         systemPrompt: _pm === "default" ? "" : ep.systemPrompt,
         realtimeSystemPrompt: _rpm === "default" ? "" : ep.realtimeSystemPrompt,
       })),
-      plex: { url: plexConfig.url, token: plexConfig.token },
+      plex: { url: plexConfig.url, token: plexConfig.token, clientIdentifier: plexConfig.clientIdentifier || "" },
       github: githubConfig,
       langfuse: langfuseConfig,
     };
@@ -363,14 +369,14 @@ export default function SettingsPage() {
   }
 
   function selectPlexDevice(device: PlexDevice) {
-    // Prefer a local http connection, fall back to first available
-    const best =
-      device.connections.find((c) => c.local && c.protocol === "http") ||
-      device.connections.find((c) => c.local) ||
-      device.connections[0];
-    const url = best ? `${best.protocol}://${best.address}:${best.port}` : "";
-    setPlexConfig({ url, token: device.accessToken });
+    const selection = selectPlexConnectionUrl(device);
+    if (!selection.ok) {
+      setPlexDiscoverError(selection.error);
+      return;
+    }
+    setPlexConfig({ url: selection.url, token: device.accessToken, clientIdentifier: device.clientIdentifier });
     setPlexDevices([]);
+    setPlexDiscoverError(null);
     setSaved(false);
   }
 

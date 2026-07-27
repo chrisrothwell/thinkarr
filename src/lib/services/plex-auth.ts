@@ -1,5 +1,8 @@
 import { logger } from "@/lib/logger";
 import { validateServiceUrl } from "@/lib/security/url-validation";
+import { getConfig, setConfig } from "@/lib/config";
+import { getDb, schema } from "@/lib/db";
+import { eq } from "drizzle-orm";
 
 // Allow overriding the Plex API base for E2E testing
 const PLEX_API_BASE = process.env.PLEX_API_BASE ?? "https://plex.tv";
@@ -175,6 +178,55 @@ export async function getPlexDevices(authToken: string): Promise<PlexResource[]>
         local: c.local as boolean,
       })),
     }));
+}
+
+/**
+ * Re-derive the configured Plex server's per-server access token by re-running
+ * device discovery — the same request the Settings UI makes when an admin
+ * clicks "Discover Servers". Per-server access tokens (`plex.token`) can go
+ * stale independently of a user's plex.tv account token (`users.plexToken`),
+ * which is long-lived and doesn't require re-authenticating in a browser. This
+ * reproduces that "just click Discover again" fix automatically instead of
+ * requiring the admin to do it by hand (#457).
+ *
+ * Matches the resource by `plex.clientIdentifier` (stable identity for the
+ * server), not URL, so this still works if the server's LAN address changed.
+ * Tries every admin's account token in case the one who originally connected
+ * Plex is no longer an admin or their account token itself is stale.
+ *
+ * Returns the fresh token on success, or null if there's nothing on record to
+ * match against, or no admin's account currently has access to that server.
+ */
+export async function refreshPlexToken(): Promise<string | null> {
+  const clientIdentifier = getConfig("plex.clientIdentifier");
+  if (!clientIdentifier) return null;
+
+  const db = getDb();
+  const admins = db
+    .select({ id: schema.users.id, plexToken: schema.users.plexToken })
+    .from(schema.users)
+    .where(eq(schema.users.isAdmin, true))
+    .all();
+
+  for (const admin of admins) {
+    if (!admin.plexToken) continue;
+    try {
+      const resources = await getPlexDevices(admin.plexToken);
+      const match = resources.find((r) => r.clientIdentifier === clientIdentifier);
+      if (match?.accessToken) {
+        setConfig("plex.token", match.accessToken, true);
+        logger.info("Plex token refreshed via re-discovery", { adminUserId: admin.id, clientIdentifier });
+        return match.accessToken;
+      }
+    } catch (err) {
+      logger.warn("Plex token refresh — discovery failed for admin", {
+        adminUserId: admin.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  return null;
 }
 
 /** Fetch user info from a Plex auth token. */
