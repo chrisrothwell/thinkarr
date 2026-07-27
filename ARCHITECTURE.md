@@ -140,6 +140,7 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
     │   │   ├── registry.ts          # defineTool, getOpenAITools, executeTool + tool logging
     │   │   └── sonarr-tools.ts      # 4 tools
     │   ├── logger.ts                # Winston singleton (Console + DailyRotateFile)
+    │   ├── plex-device-select.ts    # selectPlexConnectionUrl() — pure connection-picking logic for Settings → Discover Servers
     │   ├── pwa.ts                   # PWA singleton (deferred prompt, install trigger)
     │   └── utils.ts                 # cn() class merge utility
     └── types/
@@ -173,6 +174,7 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 | `llm.endpoints` | JSON array | Multi-endpoint LLM configs (`baseUrl`, `apiKey`, `model`, `systemPrompt`, `isDefault`, `supportsVoice`, `supportsRealtime`, `realtimeModel`, `realtimeSystemPrompt`, `ttsVoice`) |
 | `llm.baseUrl` / `llm.apiKey` / `llm.model` | String | Legacy single-endpoint keys (backward compat) |
 | `plex.url` / `plex.token` | String | Plex server connection |
+| `plex.clientIdentifier` | String | Selected server's Plex `clientIdentifier`, used to re-match it during automatic token refresh |
 | `sonarr.url` / `sonarr.apiKey` | String | Sonarr connection |
 | `radarr.url` / `radarr.apiKey` | String | Radarr connection |
 | `overseerr.url` / `overseerr.apiKey` | String | Overseerr connection |
@@ -246,6 +248,12 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 
 External MCP access via bearer token (`mcp.bearerToken`). Optional `X-User-Id` header scopes operations to a user's permission level. Per-user tokens stored as `user.{id}.mcpToken`.
 
+`POST /api/mcp` speaks two request shapes, discriminated by a top-level `jsonrpc: "2.0"` field:
+- **Spec-compliant JSON-RPC 2.0** (real MCP clients — Claude Desktop, Claude Code `mcp add`, etc.): `initialize` → capabilities handshake, `notifications/initialized` → no-op 202, `tools/list` → `{tools: [{name, description, inputSchema}]}`, `tools/call` (`params: {name, arguments}`) → `{content: [{type: "text", text}], isError?}`. Errors before tool execution (bad params, permission denied, unknown tool) return a JSON-RPC `error` object; exceptions during tool execution are returned as a successful result with `isError: true` so the calling LLM can see and react to them.
+- **Legacy ad-hoc dispatch** (no `jsonrpc` field): `{method: "list"|"execute"|"tools/list"|"tools/call", tool, arguments}` → bare `{tools: [...]}` / `{tool, result}`. Kept for the text-channel adapter below, which predates the JSON-RPC handling and reuses these method names without the envelope.
+
+Both paths share one `runToolCall()` helper for permission checks, `confirm_request`, and the text-mode `display_titles` interception, so that logic isn't duplicated.
+
 In `?mode=text` (OpenClaw / external channel adapter): channel identity is resolved from `X-Channel-Type` + `X-Channel-User-Id` headers via `mcp_channel_identities`; `display_titles` results are transformed to markdown; `confirm_request` replaces the direct request tools as the only path to submit Overseerr requests.
 
 ---
@@ -254,6 +262,12 @@ In `?mode=text` (OpenClaw / external channel adapter): channel identity is resol
 
 ### Plex PIN OAuth (no NextAuth)
 Custom flow in `src/lib/services/plex-auth.ts`. POST `/api/auth/plex` returns PIN + URL; backend polls until claimed. First user auto-promoted to admin; subsequent users verified via `checkUserHasLibraryAccess()`. Avoids NextAuth dependency; fits the linuxserver.io container model.
+
+### Automatic Plex token refresh on 401 (#457)
+`plex.token` (the per-server access token used for all `plexFetch`/tool-call requests) can go stale independently of a user's `users.plexToken` (their plex.tv account token, from login), which is long-lived and doesn't need re-authenticating in a browser. `refreshPlexToken()` in `plex-auth.ts` reproduces the "click Discover Servers again" fix automatically: it re-runs `getPlexDevices()` against every admin's account token, matches the resource by `plex.clientIdentifier` (stable across LAN IP changes, unlike matching by URL), and stores the fresh `accessToken` as `plex.token`. Both `plexFetch` (`plex.ts`) and `checkPlex` (`services/status/route.ts`) call this and retry once on a 401 before surfacing a "reconnect in Settings" error. `plex.clientIdentifier` is recorded whenever an admin selects a server from Discover Servers in Settings.
+
+### Discover Servers can return zero connections (#457)
+plex.tv's `/api/v2/resources` can return a server resource with an empty `connection` array even when the server itself is reachable directly — confirmed via beta logs where `plexFetch` calls to the same server's LAN address succeeded throughout. This isn't recoverable client-side: it usually means the server isn't publishing itself on plex.tv (Plex Media Server → Settings → Remote Access), common for LAN-only setups, so plex.tv genuinely has no address on file. `selectPlexConnectionUrl()` (`plex-device-select.ts`) surfaces this as an explicit error pointing at manual URL entry instead of silently leaving the field blank. `GET /api/settings/plex-devices` logs a per-server `connectionCount` summary (no tokens) on every discovery call so this is diagnosable from `/beta-logs` without a live repro.
 
 ### SQLite + Drizzle (no external DB)
 Stored at `/config/thinkarr.db`, auto-migrated on first connection. Zero external dependencies — no separate DB container. Uses better-sqlite3 (synchronous) configured as an external in `next.config.ts` for standalone builds.
