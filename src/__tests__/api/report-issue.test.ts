@@ -172,25 +172,38 @@ describe("POST /api/report-issue — access control", () => {
   });
 
   it("allows admin to report on another user's conversation", async () => {
-    const adminId = seedUser(testDb, { plexId: "admin", plexUsername: "admin", isAdmin: true });
-    const userId = seedUser(testDb, { plexId: "u2", plexUsername: "user2" });
-    mockState.sessionCookie = seedSession(testDb, adminId);
-    const convId = seedConversation(testDb, userId, "User's chat");
-    seedMessage(testDb, convId);
+    process.env.GITHUB_TOKEN = "ghp_test_token";
+    process.env.GITHUB_OWNER = "testowner";
+    process.env.GITHUB_REPO = "testrepo";
+    try {
+      const adminId = seedUser(testDb, { plexId: "admin", plexUsername: "admin", isAdmin: true });
+      const userId = seedUser(testDb, { plexId: "u2", plexUsername: "user2" });
+      mockState.sessionCookie = seedSession(testDb, adminId);
+      const convId = seedConversation(testDb, userId, "User's chat");
+      seedMessage(testDb, convId);
 
-    // No GitHub token — fallback path
-    const res = await POST(makeRequest({ conversationId: convId, description: "something wrong" }));
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.success).toBe(true);
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ html_url: "https://github.com/testowner/testrepo/issues/2", number: 2 }),
+      });
+
+      const res = await POST(makeRequest({ conversationId: convId, description: "something wrong" }));
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.success).toBe(true);
+    } finally {
+      delete process.env.GITHUB_TOKEN;
+      delete process.env.GITHUB_OWNER;
+      delete process.env.GITHUB_REPO;
+    }
   });
 });
 
 // ---------------------------------------------------------------------------
-// Successful report — no GitHub token configured
+// Report fails loudly — no GitHub token configured (#457)
 // ---------------------------------------------------------------------------
 describe("POST /api/report-issue — no GitHub token", () => {
-  it("returns 200 and logs the report when no GitHub token is set", async () => {
+  it("returns a real error instead of success:true when no GitHub token is set", async () => {
     const uid = seedUser(testDb, { plexUsername: "reporter" });
     mockState.sessionCookie = seedSession(testDb, uid);
     const convId = seedConversation(testDb, uid, "My conversation");
@@ -198,10 +211,10 @@ describe("POST /api/report-issue — no GitHub token", () => {
     seedMessage(testDb, convId, { role: "assistant", content: "Hi there!" });
 
     const res = await POST(makeRequest({ conversationId: convId, description: "AI gave wrong answer" }));
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(503);
     const body = await res.json();
-    expect(body.success).toBe(true);
-    expect(body.data.message).toMatch(/logged/i);
+    expect(body.success).toBe(false);
+    expect(body.error).toMatch(/not configured/i);
     // No fetch calls should have been made
     expect(mockFetch).not.toHaveBeenCalled();
   });
