@@ -87,6 +87,7 @@ export async function GET() {
     plex: {
       url: getConfig("plex.url") || "",
       token: getConfig("plex.token") ? "••••••••" : "",
+      clientIdentifier: getConfig("plex.clientIdentifier") || "",
     },
     sonarr: {
       url: getConfig("sonarr.url") || "",
@@ -243,7 +244,7 @@ export async function PATCH(request: Request) {
 
   // Handle arr services
   const sections: Record<string, { keys: Record<string, boolean> }> = {
-    plex: { keys: { url: false, token: true } },
+    plex: { keys: { url: false, token: true, clientIdentifier: false } },
     sonarr: { keys: { url: false, apiKey: true } },
     radarr: { keys: { url: false, apiKey: true } },
     overseerr: { keys: { url: false, apiKey: true } },
