@@ -272,6 +272,9 @@ plex.tv's `/api/v2/resources` can return a server resource with an empty `connec
 ### SQLite + Drizzle (no external DB)
 Stored at `/config/thinkarr.db`, auto-migrated on first connection. Zero external dependencies — no separate DB container. Uses better-sqlite3 (synchronous) configured as an external in `next.config.ts` for standalone builds.
 
+### Schema Integrity Check Is Only Cached On Success
+`ensureSchemaIntegrity()` (`src/lib/db/index.ts`) compares every table in `schema.ts` against the live SQLite file after `migrate()` runs, and throws if a NOT NULL column (or, degenerate case, a whole missing table) can't be safely auto-repaired — this is meant to fail loudly rather than let the app silently serve broken queries. `getDb()`'s module-level `_db` handle is only assigned *after* this check succeeds; a failed check is retried (and re-thrown) on every subsequent call within the same process instead of being cached. This matters because a live beta instance hit exactly this: `mcp_channel_identities`/`mcp_registration_tokens`/`mcp_pending_baskets` never got created despite `__drizzle_migrations` recording the migration as applied, and with the old caching order the failure logged once at boot and then went silent forever — the text-channel adapter kept 500ing on every request with no further signal. Fixed by an operator running the migration SQL directly against the live DB and restarting; regression coverage in `src/__tests__/db/get-db-cache.test.ts` and the "entire table missing" case in `src/__tests__/db/migrations.test.ts`.
+
 ### In-Process MCP Tool Registry
 Tools defined with Zod schemas, converted to JSON Schema → OpenAI function format at runtime. Single source of truth: same registry serves both the in-process chat engine and the external `/api/mcp` endpoint. Auto-initialized based on which services are configured.
 

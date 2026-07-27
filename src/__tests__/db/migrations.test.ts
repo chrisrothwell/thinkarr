@@ -202,6 +202,20 @@ describe("ensureSchemaIntegrity — generic drift correction", () => {
 
     expect(() => ensureSchemaIntegrity(sqlite)).toThrow(/NOT NULL/);
   });
+
+  it("throws when an entire table is missing, not just a column (beta incident, 2026-07-27)", () => {
+    // mcp_channel_identities never got created on a live beta database even
+    // though __drizzle_migrations recorded 0002_mcp_channel_integration as
+    // applied. PRAGMA table_info() on a nonexistent table returns zero rows
+    // (not an error), so every expected column reads as "missing" — this must
+    // still throw exactly like a partial-column drift would, rather than being
+    // mistaken for "table has no columns defined" and skipped.
+    sqlite.exec("DROP TABLE mcp_channel_identities");
+
+    expect(() => ensureSchemaIntegrity(sqlite)).toThrow(
+      /"mcp_channel_identities"\..*is NOT NULL/,
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
