@@ -92,6 +92,9 @@ async function checkPlex(): Promise<ServiceStatus> {
       headers: { ...(token ? { "X-Plex-Token": token } : {}), Accept: "application/json" },
       signal: AbortSignal.timeout(5000),
     });
+    if (res.status === 401) {
+      return { name: "Plex", status: "red", message: "Token expired or revoked — reconnect in Settings" };
+    }
     if (!res.ok) {
       return { name: "Plex", status: "amber", message: `HTTP ${res.status}` };
     }

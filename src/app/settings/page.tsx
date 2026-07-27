@@ -27,6 +27,7 @@ import {
 import { DEFAULT_SYSTEM_PROMPT, DEFAULT_REALTIME_SYSTEM_PROMPT } from "@/lib/llm/default-prompt";
 import { copyToClipboard } from "@/lib/utils";
 import { usePwaInstall } from "@/hooks/use-pwa-install";
+import { selectPlexConnectionUrl } from "@/lib/plex-device-select";
 
 // --- Types ---
 
@@ -363,14 +364,14 @@ export default function SettingsPage() {
   }
 
   function selectPlexDevice(device: PlexDevice) {
-    // Prefer a local http connection, fall back to first available
-    const best =
-      device.connections.find((c) => c.local && c.protocol === "http") ||
-      device.connections.find((c) => c.local) ||
-      device.connections[0];
-    const url = best ? `${best.protocol}://${best.address}:${best.port}` : "";
-    setPlexConfig({ url, token: device.accessToken });
+    const selection = selectPlexConnectionUrl(device);
+    if (!selection.ok) {
+      setPlexDiscoverError(selection.error);
+      return;
+    }
+    setPlexConfig({ url: selection.url, token: device.accessToken });
     setPlexDevices([]);
+    setPlexDiscoverError(null);
     setSaved(false);
   }
 

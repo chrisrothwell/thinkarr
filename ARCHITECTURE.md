@@ -140,6 +140,7 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
     │   │   ├── registry.ts          # defineTool, getOpenAITools, executeTool + tool logging
     │   │   └── sonarr-tools.ts      # 4 tools
     │   ├── logger.ts                # Winston singleton (Console + DailyRotateFile)
+    │   ├── plex-device-select.ts    # selectPlexConnectionUrl() — pure connection-picking logic for Settings → Discover Servers
     │   ├── pwa.ts                   # PWA singleton (deferred prompt, install trigger)
     │   └── utils.ts                 # cn() class merge utility
     └── types/
@@ -245,6 +246,12 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 | Text-channel only | `confirm_request` — submits an Overseerr request after explicit user confirmation; only available in `?mode=text` |
 
 External MCP access via bearer token (`mcp.bearerToken`). Optional `X-User-Id` header scopes operations to a user's permission level. Per-user tokens stored as `user.{id}.mcpToken`.
+
+`POST /api/mcp` speaks two request shapes, discriminated by a top-level `jsonrpc: "2.0"` field:
+- **Spec-compliant JSON-RPC 2.0** (real MCP clients — Claude Desktop, Claude Code `mcp add`, etc.): `initialize` → capabilities handshake, `notifications/initialized` → no-op 202, `tools/list` → `{tools: [{name, description, inputSchema}]}`, `tools/call` (`params: {name, arguments}`) → `{content: [{type: "text", text}], isError?}`. Errors before tool execution (bad params, permission denied, unknown tool) return a JSON-RPC `error` object; exceptions during tool execution are returned as a successful result with `isError: true` so the calling LLM can see and react to them.
+- **Legacy ad-hoc dispatch** (no `jsonrpc` field): `{method: "list"|"execute"|"tools/list"|"tools/call", tool, arguments}` → bare `{tools: [...]}` / `{tool, result}`. Kept for the text-channel adapter below, which predates the JSON-RPC handling and reuses these method names without the envelope.
+
+Both paths share one `runToolCall()` helper for permission checks, `confirm_request`, and the text-mode `display_titles` interception, so that logic isn't duplicated.
 
 In `?mode=text` (OpenClaw / external channel adapter): channel identity is resolved from `X-Channel-Type` + `X-Channel-User-Id` headers via `mcp_channel_identities`; `display_titles` results are transformed to markdown; `confirm_request` replaces the direct request tools as the only path to submit Overseerr requests.
 

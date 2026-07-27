@@ -19,6 +19,14 @@ async function plexFetch(path: string) {
     },
     signal: AbortSignal.timeout(15000),
   });
+  if (res.status === 401) {
+    // Plex tokens don't have a refresh mechanism reachable server-side — renewal
+    // requires the admin to redo the OAuth PIN flow in Settings, so we can't
+    // silently retry here. Surface a message that says so instead of a bare
+    // "HTTP 401" that gives the caller (LLM or human) no next step.
+    logger.warn("Plex API error — token expired or revoked", { url: fullUrl });
+    throw new Error("Plex token expired or revoked — reconnect Plex in Settings");
+  }
   if (!res.ok) {
     logger.warn("Plex API error", { url: fullUrl, status: res.status });
     throw new Error(`Plex API error: HTTP ${res.status}`);
