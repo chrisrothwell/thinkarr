@@ -162,8 +162,8 @@ export function registerOverseerrTools() {
     llmSummary: (result: unknown) => {
       const r = result as { results: (OverseerrRequest & { seasons?: overseerr.OverseerrSeasonStatus[]; seasonCount?: number })[]; hasMore: boolean };
       return {
-        results: r.results.map(({ mediaType, title, year, status, mediaStatus, requestedBy, overseerrId, seasonsRequested, thumbPath, seasons }) => ({
-          mediaType, title, year, status, mediaStatus, requestedBy, overseerrId, seasonsRequested,
+        results: r.results.map(({ id, mediaType, title, year, status, mediaStatus, requestedBy, overseerrId, seasonsRequested, thumbPath, seasons }) => ({
+          id, mediaType, title, year, status, mediaStatus, requestedBy, overseerrId, seasonsRequested,
           ...(thumbPath ? { thumbPath } : {}),
           ...(seasons && seasons.length > 0
             ? { seasons: seasons.map((s) => `S${s.seasonNumber}:${s.status.toLowerCase().replace(/ /g, "_")}`).join(" ") }
@@ -172,6 +172,19 @@ export function registerOverseerrTools() {
         hasMore: r.hasMore,
       };
     },
+  });
+
+  defineTool({
+    name: "overseerr_confirm_request",
+    description: "Approve or decline a pending media request in Overseerr's request queue. Use this when an admin asks to approve, confirm, or decline a specific request (e.g. 'approve the Breaking Bad request', 'decline request 42'). Requires the numeric request id — the `id` field from overseerr_list_requests, NOT the overseerrId/tmdbId used by other tools. Admin-only: Overseerr requires request-management permission to approve or decline requests submitted by other users.",
+    schema: z.object({
+      requestId: z.number().int().describe("The Overseerr request id to act on — the `id` field from overseerr_list_requests."),
+      action: z.enum(["approve", "decline"]).describe("Whether to approve or decline the request."),
+    }),
+    handler: async (args) =>
+      args.action === "approve"
+        ? overseerr.approveRequest(args.requestId)
+        : overseerr.declineRequest(args.requestId),
   });
 
   defineTool({

@@ -537,6 +537,24 @@ export async function similar(
   return { results, hasMore };
 }
 
+export async function approveRequest(requestId: number): Promise<{ success: boolean; message: string }> {
+  try {
+    await overseerrFetch(`/request/${requestId}/approve`, { method: "PUT" });
+    return { success: true, message: "Request approved" };
+  } catch (e: unknown) {
+    return { success: false, message: e instanceof Error ? e.message : "Failed to approve request" };
+  }
+}
+
+export async function declineRequest(requestId: number): Promise<{ success: boolean; message: string }> {
+  try {
+    await overseerrFetch(`/request/${requestId}/decline`, { method: "PUT" });
+    return { success: true, message: "Request declined" };
+  } catch (e: unknown) {
+    return { success: false, message: e instanceof Error ? e.message : "Failed to decline request" };
+  }
+}
+
 export async function createIssue(
   seerrMediaId: number,
   issueType: IssueType,

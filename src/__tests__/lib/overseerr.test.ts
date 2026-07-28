@@ -961,6 +961,74 @@ describe("createIssue — reports a playback issue to Seerr", () => {
   });
 });
 
+describe("approveRequest / declineRequest — Overseerr request queue actions", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("PUTs to /request/{id}/approve", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ id: 706, status: 2 }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { approveRequest } = await import("@/lib/services/overseerr");
+    const result = await approveRequest(706);
+
+    expect(result.success).toBe(true);
+    const [url, opts] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain("/request/706/approve");
+    expect((opts as RequestInit).method).toBe("PUT");
+  });
+
+  it("PUTs to /request/{id}/decline", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ id: 706, status: 3 }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { declineRequest } = await import("@/lib/services/overseerr");
+    const result = await declineRequest(706);
+
+    expect(result.success).toBe(true);
+    const [url, opts] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain("/request/706/decline");
+    expect((opts as RequestInit).method).toBe("PUT");
+  });
+
+  it("returns success=false with error message when approve fails", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      json: async () => ({ message: "Forbidden" }),
+    }));
+
+    const { approveRequest } = await import("@/lib/services/overseerr");
+    const result = await approveRequest(706);
+
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("403");
+  });
+
+  it("returns success=false with error message when decline fails", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: false,
+      status: 404,
+      json: async () => ({ message: "Request not found" }),
+    }));
+
+    const { declineRequest } = await import("@/lib/services/overseerr");
+    const result = await declineRequest(999);
+
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("404");
+  });
+});
+
 describe("getDetails — exposes seerrMediaId from mediaInfo", () => {
   beforeEach(() => {
     vi.resetModules();
