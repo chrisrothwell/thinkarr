@@ -181,7 +181,14 @@ export function getDb() {
     const sqlite = new Database(DB_PATH);
     sqlite.pragma("journal_mode = WAL");
     sqlite.pragma("foreign_keys = ON");
-    _db = drizzle(sqlite, { schema });
+    // Kept local (not assigned to the module-level `_db` cache) until every
+    // init step below — in particular ensureSchemaIntegrity() — succeeds.
+    // Caching early meant a thrown integrity failure still left a usable
+    // handle in `_db`, so the very next call skipped `if (!_db)` entirely and
+    // silently returned the broken connection instead of retrying/re-throwing
+    // (issue: mcp_channel_identities missing on beta went from one log line
+    // at boot to permanently-broken-and-silent for every request after it).
+    const db = drizzle(sqlite, { schema });
 
     // ── 1. File metadata ─────────────────────────────────────────────────────
     // Logged first so it appears in output even if a later step crashes.
@@ -248,6 +255,7 @@ export function getDb() {
 
     // ── 4. Schema integrity check ────────────────────────────────────────────
     // Logs one line per table (OK / repaired / throws on NOT NULL drift).
+    // Must run — and succeed — before `_db` is cached below.
     ensureSchemaIntegrity(sqlite);
     logger.info("Database ready");
 
@@ -257,25 +265,29 @@ export function getDb() {
     // Rule: supportsRealtime = (realtimeModel !== "").
     // This is a data-level migration — ensureSchemaIntegrity only handles
     // column-level drift and cannot reach inside JSON config blobs.
-    migrateLlmEndpoints(_db);
+    migrateLlmEndpoints(db);
 
     // ── 6. Auto-generate internal API key ────────────────────────────────────
     // Generated once on first boot; the operator copies it from
     // Settings → Logs → Internal API Key and gives it to Claude for
     // the /beta-logs diagnostic command.
-    const existingApiKey = _db
+    const existingApiKey = db
       .select({ value: schema.appConfig.value })
       .from(schema.appConfig)
       .where(eq(schema.appConfig.key, "internal_api_key"))
       .get();
     if (!existingApiKey) {
       const newKey = randomBytes(32).toString("hex");
-      _db
+      db
         .insert(schema.appConfig)
         .values({ key: "internal_api_key", value: newKey, encrypted: true, updatedAt: new Date() })
         .run();
       logger.info("Generated internal API key for diagnostic endpoint");
     }
+
+    // Only cache once every step above has succeeded — see comment at the top
+    // of this function for why this can't happen any earlier.
+    _db = db;
   }
   return _db;
 }

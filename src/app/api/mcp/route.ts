@@ -305,7 +305,7 @@ function buildToolList(permission: McpPermission, textMode: boolean) {
  * A fresh `Server` + transport is created per request — the SDK's stateless
  * transports (no `sessionIdGenerator`) cannot be reused across requests.
  */
-async function handleMcpProtocolRequest(request: Request, auth: AuthResult, token: string): Promise<Response> {
+async function handleMcpProtocolRequest(request: Request, auth: AuthResult, token: string, textMode: boolean): Promise<Response> {
   const server = new Server(
     { name: "thinkarr", version: process.env.NEXT_PUBLIC_APP_VERSION ?? "unknown" },
     { capabilities: { tools: {} } },
@@ -313,13 +313,13 @@ async function handleMcpProtocolRequest(request: Request, auth: AuthResult, toke
 
   server.setRequestHandler(ListToolsRequestSchema, async (_req, extra) => {
     const permission = (extra.authInfo?.extra?.permission as McpPermission | undefined) ?? auth.permission;
-    const allTools = getOpenAITools();
-    const filtered =
-      permission === "admin"
-        ? allTools
-        : allTools.filter((t) => t.type === "function" && canExecuteTool(t.function.name, permission));
 
-    const tools: Tool[] = filtered
+    // Reuse buildToolList so confirm_request is included in ?mode=text here
+    // exactly as it is for the legacy ad-hoc dispatch below — this was
+    // previously reimplemented inline without the textMode branch, so
+    // spec-compliant JSON-RPC clients (unlike the legacy-envelope OpenClaw
+    // adapter) never saw confirm_request even when connecting with ?mode=text.
+    const tools: Tool[] = buildToolList(permission, textMode)
       .filter((t) => t.type === "function")
       .map((t) => ({
         name: t.function.name,
@@ -339,7 +339,7 @@ async function handleMcpProtocolRequest(request: Request, auth: AuthResult, toke
       toolName: name,
       rawArguments: args,
       auth: { permission, userId },
-      textMode: false,
+      textMode,
     });
 
     if (!outcome.ok) {
@@ -471,7 +471,7 @@ export async function POST(request: Request) {
       headers: request.headers,
       body: rawBody,
     });
-    return handleMcpProtocolRequest(freshRequest, auth, request.headers.get("authorization")!.slice(7));
+    return handleMcpProtocolRequest(freshRequest, auth, request.headers.get("authorization")!.slice(7), textMode);
   }
 
   // Legacy ad-hoc dispatch (no `jsonrpc` envelope) — kept for backward compatibility
