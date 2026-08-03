@@ -20,12 +20,12 @@
     "security:all": "npm run security:audit && npm run security:scan"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "better-sqlite3": "^12.10.0",
     "clsx": "^2.1.1",
     "drizzle-orm": "^0.45.2",
     "langfuse": "^3.38.20",
-    "lucide-react": "^1.27.0",
+    "lucide-react": "^1.28.0",
     "next": "16.2.12",
     "openai": "^6.49.0",
     "react": "19.2.8",
@@ -52,7 +52,7 @@
     "eslint-config-next": "16.2.12",
     "tailwindcss": "^4",
     "typescript": "^6.0.3",
-    "vite": "^8.0.14",
+    "vite": "^8.2.0",
     "vite-tsconfig-paths": "^6.1.1",
     "vitest": "^4.1.0"
   },
