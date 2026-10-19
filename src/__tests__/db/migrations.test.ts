@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
+import { readMigrationFiles } from "drizzle-orm/migrator";
 import { eq } from "drizzle-orm";
 import * as schema from "@/lib/db/schema";
 import { ensureSchemaIntegrity } from "@/lib/db";
@@ -161,6 +162,29 @@ describe("migrations — idempotency", () => {
   it("can be applied twice without error", () => {
     const db = drizzle(sqlite, { schema });
     expect(() => migrate(db, { migrationsFolder: MIGRATIONS_DIR })).not.toThrow();
+  });
+
+  it("upgrades the existing channel schema without changing Plex users or personal token configuration", () => {
+    const old = new Database(":memory:");
+    old.pragma("foreign_keys = ON");
+    try {
+      old.exec("CREATE TABLE __drizzle_migrations (id integer PRIMARY KEY AUTOINCREMENT, hash text NOT NULL, created_at numeric)");
+      for (const migration of readMigrationFiles({ migrationsFolder: MIGRATIONS_DIR }).slice(0, 3)) {
+        for (const statement of migration.sql) old.exec(statement);
+        old.prepare("INSERT INTO __drizzle_migrations(hash, created_at) VALUES (?, ?)").run(migration.hash, migration.folderMillis);
+      }
+      old.prepare("INSERT INTO users(plex_id, plex_username, created_at) VALUES ('existing-plex', 'existing-user', 0)").run();
+      old.prepare("INSERT INTO app_config(key, value, updated_at) VALUES ('user.1.mcpToken', 'existing-personal-token', 0)").run();
+      const db = drizzle(old, { schema });
+      migrate(db, { migrationsFolder: MIGRATIONS_DIR });
+      expect(db.select().from(schema.users).all()).toHaveLength(1);
+      expect(db.select().from(schema.appConfig).get()?.value).toBe("existing-personal-token");
+      expect(db.select().from(schema.mcpServicePrincipals).all()).toEqual([]);
+      expect(db.select().from(schema.mcpServiceCredentials).all()).toEqual([]);
+      expect(db.select().from(schema.mcpServiceKeys).all()).toEqual([]);
+      expect(db.select().from(schema.mcpServiceAudit).all()).toEqual([]);
+      expect(() => migrate(db, { migrationsFolder: MIGRATIONS_DIR })).not.toThrow();
+    } finally { old.close(); }
   });
 });
 

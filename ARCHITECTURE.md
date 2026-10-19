@@ -25,7 +25,8 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 ├── drizzle/
 │   ├── 0000_short_gressill.sql      # Initial migration (5 tables)
 │   ├── 0001_add_message_duration.sql
-│   └── 0002_mcp_channel_integration.sql  # mcp_channel_identities, mcp_registration_tokens, mcp_pending_baskets
+│   ├── 0002_mcp_channel_integration.sql  # mcp_channel_identities, mcp_registration_tokens, mcp_pending_baskets
+│   └── 0003_mcp_service_principals.sql  # Service identities, hashed credentials, verification keys, audit
 ├── public/
 │   ├── manifest.json                # PWA web app manifest
 │   └── sw.js                        # Service worker (network-first)
@@ -63,6 +64,14 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
     │   │   │   ├── logs/[filename]/route.ts # GET read/download log file (admin)
     │   │   │   ├── mcp-token/route.ts       # GET/POST global admin MCP token
     │   │   │   ├── mcp-token/user/[userId]/route.ts  # GET/POST per-user MCP token
+    │   │   │   ├── mcp-integrations/
+    │   │   │   │   ├── route.ts                 # GET list / POST create disabled integration (admin)
+    │   │   │   │   └── [id]/
+    │   │   │   │       ├── route.ts             # GET detail / PATCH name, scope, disable
+    │   │   │   │       ├── credentials/route.ts  # POST issue/rotate; secret returned once
+    │   │   │   │       ├── credentials/[credentialId]/route.ts # DELETE revoke credential
+    │   │   │   │       ├── keys/route.ts         # POST register Ed25519 public verification key
+    │   │   │   │       └── keys/[keyId]/route.ts # DELETE revoke key
     │   │   │   ├── plex-connect/route.ts    # POST Plex OAuth from Settings
     │   │   │   ├── plex-devices/route.ts    # GET discover Plex servers via plex.tv
     │   │   │   └── users/route.ts           # GET list / PATCH update user settings
@@ -112,13 +121,17 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
     │   ├── db/
     │   │   ├── index.ts             # DB singleton + auto-migration
     │   │   ├── migrate.ts           # runMigrations standalone utility
-    │   │   └── schema.ts            # 8 tables
+    │   │   └── schema.ts            # 12 tables
     │   ├── llm/
     │   │   ├── client.ts            # OpenAI client factory (per-endpoint)
     │   │   ├── default-prompt.ts    # DEFAULT_SYSTEM_PROMPT + DEFAULT_REALTIME_SYSTEM_PROMPT
     │   │   ├── langfuse.ts          # Langfuse client singleton, startTrace, scoreTrace, flush
     │   │   ├── orchestrator.ts      # Chat streaming engine + auto-title + orphan repair
     │   │   └── system-prompt.ts     # buildSystemPrompt() + buildRealtimeSystemPrompt()
+    │   ├── mcp/
+    │   │   ├── auth-context.ts      # Discriminated personal/service server-owned caller context
+    │   │   ├── integration-api.ts   # Admin-session authorization, rate limit and no-store responses
+    │   │   └── service-principals.ts # Disabled principal/credential/key lifecycle and metadata-only audit
     │   ├── security/
     │   │   ├── api-rate-limit.ts    # Per-user in-memory rate limiter (60 req/min)
     │   │   └── url-validation.ts    # Service URL allowlist/blocklist validation
@@ -164,6 +177,10 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 | `mcp_channel_identities` | `(channelType, channelUserId)` (composite PK), `userId` (FK) — maps external channel user (WhatsApp/Telegram/etc.) to a Thinkarr user |
 | `mcp_registration_tokens` | `token` (PK), `channelType`, `channelUserId`, `expiresAt` — short-lived (15 min) self-registration link tokens |
 | `mcp_pending_baskets` | `token` (PK), `itemsJson`, `userId`, `expiresAt` — one-time-use (10 min) confirm_request validation state |
+| `mcp_service_principals` | `id` (UUID PK), `name`, `enabled` (default false), `allowedOperations` (JSON), creator user reference, timestamps — no Plex/user role |
+| `mcp_service_credentials` | `id`, `principalId` (FK), unique SHA-256 `tokenHash`, safe `prefix`, creator, creation/expiry/revocation/last-use timestamps |
+| `mcp_service_keys` | `id`, `principalId` (FK), `issuer`, `keyId`, Ed25519 `publicKeyPem`, creation/revocation; unique principal/issuer/key ID |
+| `mcp_service_audit` | `id`, `principalId` (FK), nullable human `actorUserId`, action, opaque target ID, creation time — no secrets or raw arguments |
 
 ---
 
@@ -221,6 +238,14 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 | POST | `/api/settings/mcp-token` | Regenerate global admin MCP token |
 | GET | `/api/settings/mcp-token/user/[userId]` | Get per-user MCP token (admin; user can self-access) |
 | POST | `/api/settings/mcp-token/user/[userId]` | Regenerate per-user MCP token |
+| GET | `/api/settings/mcp-integrations` | List integrations, curated operation names and delegated-access availability (admin session) |
+| POST | `/api/settings/mcp-integrations` | Create a disabled service principal (admin session) |
+| GET | `/api/settings/mcp-integrations/[id]` | Get safe principal/credential/public-key metadata (admin session) |
+| PATCH | `/api/settings/mcp-integrations/[id]` | Update name/operation allowlist or disable; enabling is rejected in this build |
+| POST | `/api/settings/mcp-integrations/[id]/credentials` | Issue or rotate a credential; return secret only here with no-store |
+| DELETE | `/api/settings/mcp-integrations/[id]/credentials/[credentialId]` | Revoke an individual credential (admin session) |
+| POST | `/api/settings/mcp-integrations/[id]/keys` | Register an Ed25519 public verification key; private keys are rejected |
+| DELETE | `/api/settings/mcp-integrations/[id]/keys/[keyId]` | Revoke a verification key (admin session) |
 | POST | `/api/settings/plex-connect` | Plex OAuth from Settings |
 | GET | `/api/settings/plex-devices` | Discover Plex servers via plex.tv (admin) |
 | GET | `/api/settings/users` | List users with settings (admin) |
@@ -246,10 +271,12 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 | Built-in | `display_titles` — renders TitleCarousel in chat (always registered) |
 | Text-channel only | `confirm_request` — submits an Overseerr request after explicit user confirmation; only available in `?mode=text` |
 
-External MCP access via bearer token (`mcp.bearerToken`). Optional `X-User-Id` header scopes operations to a user's permission level. Per-user tokens stored as `user.{id}.mcpToken`.
+Personal MCP access uses the existing global (`mcp.bearerToken`) or per-user (`user.{id}.mcpToken`) bearer. The global token's optional `X-User-Id` scope must be a valid positive integer naming an existing user; explicit malformed/nonexistent scopes fail authentication. Reserved `thk_svc_` credentials are recognized in a separate branch before either personal token path, including when copied into the global-token setting.
+
+Service credentials always receive HTTP 403 before tool initialization, unsigned channel resolution, body parsing or SDK dispatch in this build. This applies to GET, legacy/JSON-RPC POST, initialization, listing/calling and text/non-text modes, even if the stored principal flag is manually changed. No configuration or management API enables delegated media access. Revoked/expired/unknown service credentials fail authentication without administrator fallback. The registry independently refuses service-context calls before name normalization or hidden-tool suggestions.
 
 `POST /api/mcp` speaks two request shapes, discriminated by a top-level `jsonrpc: "2.0"` field:
-- **Spec-compliant JSON-RPC 2.0** (real MCP clients — Claude Desktop, Claude Code `mcp add`, etc.): handled by the official `@modelcontextprotocol/sdk`, not a hand-rolled envelope. `handleMcpProtocolRequest()` in `route.ts` builds a fresh low-level `Server` + `WebStandardStreamableHTTPServerTransport` per request (stateless — SDK 1.26+ transports can't be reused across requests), which handles `initialize`/`notifications/initialized` and protocol-version negotiation automatically. Only `ListToolsRequestSchema` and `CallToolRequestSchema` handlers are implemented ourselves, reusing `runToolCall()` for permission checks. `tools/call` rejections (bad params, permission denied, unknown tool) throw `McpError(ErrorCode.InvalidParams, ...)`, a genuine protocol-level error; exceptions during tool execution are returned as a successful result with `isError: true` per spec, so the calling LLM can see and react to them. The bearer auth result is threaded into the SDK as `AuthInfo.extra.{permission,userId}`, accessible in each handler via `extra.authInfo`.
+- **Spec-compliant JSON-RPC 2.0** (real MCP clients — Claude Desktop, Claude Code `mcp add`, etc.): handled by the official `@modelcontextprotocol/sdk`, not a hand-rolled envelope. `handleMcpProtocolRequest()` in `route.ts` builds a fresh low-level `Server` + `WebStandardStreamableHTTPServerTransport` per request (stateless — SDK 1.26+ transports can't be reused across requests), which handles `initialize`/`notifications/initialized` and protocol-version negotiation automatically. Only `ListToolsRequestSchema` and `CallToolRequestSchema` handlers are implemented ourselves, reusing `runToolCall()` for permission checks. `tools/call` rejections (bad params, permission denied, unknown tool) throw `McpError(ErrorCode.InvalidParams, ...)`, a genuine protocol-level error; exceptions during tool execution are returned as a successful result with `isError: true` per spec, so the calling LLM can see and react to them. Handlers use the per-request server-authenticated personal context captured by the stateless server. Permission/user metadata is also supplied in `AuthInfo.extra`.
 - **Legacy ad-hoc dispatch** (no `jsonrpc` field): `{method: "list"|"execute"|"tools/list"|"tools/call", tool, arguments}` → bare `{tools: [...]}` / `{tool, result}`. Still hand-rolled — kept for the text-channel adapter below, which predates the JSON-RPC handling and reuses these method names without the envelope.
 
 Both paths share one `runToolCall()` helper for permission checks, `confirm_request`, and the text-mode `display_titles` interception, so that logic isn't duplicated.
@@ -276,7 +303,14 @@ Stored at `/config/thinkarr.db`, auto-migrated on first connection. Zero externa
 `ensureSchemaIntegrity()` (`src/lib/db/index.ts`) compares every table in `schema.ts` against the live SQLite file after `migrate()` runs, and throws if a NOT NULL column (or, degenerate case, a whole missing table) can't be safely auto-repaired — this is meant to fail loudly rather than let the app silently serve broken queries. `getDb()`'s module-level `_db` handle is only assigned *after* this check succeeds; a failed check is retried (and re-thrown) on every subsequent call within the same process instead of being cached. This matters because a live beta instance hit exactly this: `mcp_channel_identities`/`mcp_registration_tokens`/`mcp_pending_baskets` never got created despite `__drizzle_migrations` recording the migration as applied, and with the old caching order the failure logged once at boot and then went silent forever — the text-channel adapter kept 500ing on every request with no further signal. Fixed by an operator running the migration SQL directly against the live DB and restarting; regression coverage in `src/__tests__/db/get-db-cache.test.ts` and the "entire table missing" case in `src/__tests__/db/migrations.test.ts`.
 
 ### In-Process MCP Tool Registry
-Tools defined with Zod schemas, converted to JSON Schema → OpenAI function format at runtime. Single source of truth: same registry serves both the in-process chat engine and the external `/api/mcp` endpoint. Auto-initialized based on which services are configured.
+Tools defined with Zod schemas, converted to JSON Schema → OpenAI function format at runtime. Single source of truth: same registry serves both the in-process chat engine and the external `/api/mcp` endpoint. Auto-initialized based on which services are configured. `executeTool` accepts an optional server-owned authentication context passed separately to handlers; existing in-process callers remain compatible. External personal MCP calls pass their authenticated permission/user identity; model arguments cannot replace it. Service contexts are rejected until delegated execution is implemented.
+
+### Administrator-Managed Disabled MCP Integrations
+Service principals are separate from Plex-authenticated users. An administrator web session is required for every management API; bearer credentials never authorize management. Principals start disabled, operation lists contain only explicit curated media/link names, and activation requests return 409. The APIs prepare identity/credential metadata only; assertion verification, trusted linking, facade execution and integration settings UI are not implemented here.
+
+High-entropy bearer secrets are returned once, stored only as indexed SHA-256 digests and never included in list/detail/audit/log output. Credentials have a 90-day default lifetime (1–365 days configurable), individual revocation, and explicit rotation. Immediate replacement is the default; optional overlap is bounded to 60 minutes and cannot extend the old expiry. At most two active credentials can coexist during overlap. Verification keys are independently registered Ed25519 public keys; key IDs cannot be reused and at most four non-revoked keys can coexist. Registration never accepts a private key or fetches a remote key URL.
+
+Lifecycle changes and credential replacement occur in SQLite transactions with metadata-only audit entries identifying the administrator. Service-denial audit entries identify the service principal/credential and leave the human actor null; the integration creator is not a beneficiary. Management responses use `Cache-Control: no-store` and existing per-user API rate limits. These records use dedicated tables, not new `app_config` keys.
 
 ### Commit-Phase Callback Refs
 Chat and realtime event callbacks read current conversation/options/connection values from refs synchronized in `useLayoutEffect`, after React commits and before browser events. Rendering does not mutate these refs, so an abandoned concurrent render cannot publish uncommitted callback state. Conversation-list effects update state from fetch promise callbacks; a missing channel-link token derives the expired view directly rather than scheduling a synchronous effect update.
