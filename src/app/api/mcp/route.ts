@@ -21,31 +21,34 @@ import { formatDisplayTitlesAsText } from "@/lib/tools/display-titles-text";
 import { createBasket, resolveBasket } from "@/lib/tools/pending-basket";
 import * as overseerr from "@/lib/services/overseerr";
 import type { DisplayTitle } from "@/types/titles";
+import type { McpExecutionContext, PersonalMcpContext, ServiceMcpContext } from "@/lib/mcp/auth-context";
+import { authenticateServiceMcpToken, isServiceMcpToken, recordServiceMcpDenial } from "@/lib/mcp/service-principals";
 
 type McpPermission = "admin" | "user";
 
-interface AuthResult {
-  permission: McpPermission;
-  userId?: number;
-}
+type AuthResult = PersonalMcpContext;
 
 /**
  * Authenticate an MCP request via Bearer token.
  * Returns the permission level, or null if unauthorized.
  */
-function authenticateMcp(request: Request): AuthResult | null {
+function authenticateMcp(request: Request): McpExecutionContext | null {
   const authHeader = request.headers.get("authorization");
   if (!authHeader?.startsWith("Bearer ")) return null;
 
   const token = authHeader.slice(7);
+  // Reserved service tokens never enter the generic administrator/user path,
+  // including when revoked, disabled or copied into the old token config.
+  if (isServiceMcpToken(token)) return authenticateServiceMcpToken(token);
   const storedToken = getConfig("mcp.bearerToken");
 
   // Check global admin token (backward compat)
   if (storedToken && token === storedToken) {
     // Admin token — can optionally scope to a user via X-User-Id
     const userIdHeader = request.headers.get("x-user-id");
-    if (userIdHeader) {
-      const parsedUserId = parseInt(userIdHeader, 10);
+    if (userIdHeader !== null) {
+      if (!/^[1-9]\d{0,9}$/.test(userIdHeader)) return null;
+      const parsedUserId = Number(userIdHeader);
       if (!Number.isSafeInteger(parsedUserId) || parsedUserId <= 0 || parsedUserId > 2_147_483_647) {
         return null;
       }
@@ -56,10 +59,11 @@ function authenticateMcp(request: Request): AuthResult | null {
         .where(eq(schema.users.id, parsedUserId))
         .get();
       if (user) {
-        return { permission: user.isAdmin ? "admin" : "user", userId: user.id };
+        return { kind: "personal", permission: user.isAdmin ? "admin" : "user", userId: user.id };
       }
+      return null;
     }
-    return { permission: "admin" };
+    return { kind: "personal", permission: "admin" };
   }
 
   // Check per-user tokens — token automatically scopes to that user's permission level
@@ -68,11 +72,18 @@ function authenticateMcp(request: Request): AuthResult | null {
     const db = getDb();
     const user = db.select().from(schema.users).where(eq(schema.users.id, userId)).get();
     if (user) {
-      return { permission: user.isAdmin ? "admin" : "user", userId: user.id };
+      return { kind: "personal", permission: user.isAdmin ? "admin" : "user", userId: user.id };
     }
   }
 
   return null;
+}
+
+function serviceAccessUnavailable(auth: ServiceMcpContext) {
+  recordServiceMcpDenial(auth);
+  // Checked before tool initialization, channel-header delegation, body parsing
+  // and SDK dispatch, so every transport/mode enforces the same disabled gate.
+  return NextResponse.json({ error: "Delegated MCP access is not enabled in this build." }, { status: 403 });
 }
 
 /**
@@ -106,13 +117,13 @@ function resolveChannelIdentity(
     db.insert(schema.mcpRegistrationTokens)
       .values({ token, channelType, channelUserId, expiresAt })
       .run();
-    logger.info("MCP_CHANNEL_UNREGISTERED", { channelType, registrationToken: token });
+    logger.info("MCP_CHANNEL_UNREGISTERED", { channelType });
     return "unregistered";
   }
 
   const user = db.select().from(schema.users).where(eq(schema.users.id, identity.userId)).get();
   if (!user) return "unregistered";
-  return { permission: user.isAdmin ? "admin" : "user", userId: user.id };
+  return { kind: "personal", permission: user.isAdmin ? "admin" : "user", userId: user.id };
 }
 
 /**
@@ -259,7 +270,7 @@ async function runToolCall(opts: {
   logger.info("MCP_TOOL_EXEC", { tool: toolName, permission: auth.permission, userId: auth.userId });
 
   try {
-    const resultStr = await executeTool(toolName, argsString);
+    const resultStr = await executeTool(toolName, argsString, auth);
     const result = JSON.parse(resultStr);
 
     // In text mode, intercept display_titles and convert to markdown + pending basket
@@ -311,8 +322,8 @@ async function handleMcpProtocolRequest(request: Request, auth: AuthResult, toke
     { capabilities: { tools: {} } },
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async (_req, extra) => {
-    const permission = (extra.authInfo?.extra?.permission as McpPermission | undefined) ?? auth.permission;
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    const permission = auth.permission;
 
     // Reuse buildToolList so confirm_request is included in ?mode=text here
     // exactly as it is for the legacy ad-hoc dispatch below — this was
@@ -330,15 +341,13 @@ async function handleMcpProtocolRequest(request: Request, auth: AuthResult, toke
     return { tools };
   });
 
-  server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
-    const permission = (extra.authInfo?.extra?.permission as McpPermission | undefined) ?? auth.permission;
-    const userId = (extra.authInfo?.extra?.userId as number | undefined) ?? auth.userId;
+  server.setRequestHandler(CallToolRequestSchema, async (req) => {
     const { name, arguments: args } = req.params;
 
     const outcome = await runToolCall({
       toolName: name,
       rawArguments: args,
-      auth: { permission, userId },
+      auth,
       textMode,
     });
 
@@ -383,6 +392,7 @@ export async function GET(request: Request) {
       { status: 401 },
     );
   }
+  if (auth.kind === "service") return serviceAccessUnavailable(auth);
 
   initializeTools();
 
@@ -406,6 +416,7 @@ export async function POST(request: Request) {
       { status: 401 },
     );
   }
+  if (baseAuth.kind === "service") return serviceAccessUnavailable(baseAuth);
 
   initializeTools();
 

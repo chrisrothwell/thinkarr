@@ -9,10 +9,38 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { z } from "zod";
+import type { ServiceMcpContext } from "@/lib/mcp/auth-context";
 
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
+
+describe("executeTool — server-owned authentication context", () => {
+  beforeEach(() => vi.resetModules());
+
+  it("passes authenticated context separately from arguments", async () => {
+    const { defineTool, executeTool } = await import("@/lib/tools/registry");
+    const handler = vi.fn(async () => ({ ok: true }));
+    defineTool({ name: "fixture_context", description: "Fixture", schema: z.object({ query: z.string() }), handler });
+    const context = { kind: "personal" as const, permission: "user" as const, userId: 7 };
+    await executeTool("fixture_context", JSON.stringify({ query: "test", userId: 99 }), context);
+    expect(handler).toHaveBeenCalledWith({ query: "test" }, context);
+  });
+
+  it("rejects service execution before tool normalization, suggestions or handler invocation", async () => {
+    const { defineTool, executeTool } = await import("@/lib/tools/registry");
+    const handler = vi.fn(async () => ({ secret: "not-returned" }));
+    defineTool({ name: "hidden_admin_tool", description: "Fixture", schema: z.object({}), handler });
+    const context: ServiceMcpContext = { kind: "service", principalId: "service", credentialId: "credential", enabled: true, allowedOperations: ["hidden_admin_tool"] };
+    for (const name of ["hidden_admin_tool", "HiddenAdminTool", "unknown-name"]) {
+      const result = await executeTool(name, "{}", context);
+      expect(result).toContain("not enabled");
+      expect(result).not.toContain("hidden_admin_tool");
+      expect(result).not.toContain("secret");
+    }
+    expect(handler).not.toHaveBeenCalled();
+  });
+});
 
 describe("executeTool — unknown tool name suggestions", () => {
   beforeEach(() => {
