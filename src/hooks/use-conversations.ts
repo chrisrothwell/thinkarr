@@ -7,19 +7,13 @@ export function useConversations(viewAll = false) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const fetchConversations = useCallback(async () => {
-    try {
-      const url = viewAll ? "/api/conversations?all=true" : "/api/conversations";
-      const res = await fetch(url);
-      const data = await res.json();
-      if (data.success) {
-        setConversations(data.data);
-      }
-    } catch {
+  const fetchConversations = useCallback(() => {
+    const url = viewAll ? "/api/conversations?all=true" : "/api/conversations";
+    return fetch(url).then((res) => res.json()).then((data) => {
+      if (data.success) setConversations(data.data);
+    }).catch(() => {
       // Silently fail — conversations will be empty
-    } finally {
-      setLoading(false);
-    }
+    }).finally(() => setLoading(false));
   }, [viewAll]);
 
   useEffect(() => {
