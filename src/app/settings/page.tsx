@@ -28,6 +28,7 @@ import { DEFAULT_SYSTEM_PROMPT, DEFAULT_REALTIME_SYSTEM_PROMPT } from "@/lib/llm
 import { copyToClipboard } from "@/lib/utils";
 import { usePwaInstall } from "@/hooks/use-pwa-install";
 import { selectPlexConnectionUrl } from "@/lib/plex-device-select";
+import { McpIntegrations } from "@/components/settings/mcp-integrations";
 
 // --- Types ---
 
@@ -1307,6 +1308,7 @@ export default function SettingsPage() {
                 )}
               </CardContent>
             </Card>
+            {currentUser?.isAdmin && <McpIntegrations />}
           </TabsContent>
 
           {/* ===== TAB 4: User Settings ===== */}

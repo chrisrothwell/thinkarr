@@ -68,7 +68,9 @@ export function getIntegration(id: string) {
     revokedAt: c.revokedAt, lastUsedAt: c.lastUsedAt,
   }).from(c).where(eq(c.principalId, id)).all();
   const keys = db.select().from(schema.mcpServiceKeys).where(eq(schema.mcpServiceKeys.principalId, id)).all();
-  return { ...principal, credentials, keys };
+  const audit = db.select().from(schema.mcpServiceAudit).where(eq(schema.mcpServiceAudit.principalId, id))
+    .orderBy(desc(schema.mcpServiceAudit.createdAt)).limit(20).all();
+  return { ...principal, credentials, keys, audit };
 }
 
 export function createIntegration(input: z.input<typeof createIntegrationSchema>, actorUserId: number) {

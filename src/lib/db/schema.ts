@@ -117,6 +117,23 @@ export const mcpServiceAudit = sqliteTable("mcp_service_audit", {
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(() => new Date()),
 }, (t) => [index("mcp_service_audit_principal_created_idx").on(t.principalId, t.createdAt)]);
 
+export const mcpDelegationNonces = sqliteTable("mcp_delegation_nonces", {
+  principalId: text("principal_id").notNull().references(() => mcpServicePrincipals.id, { onDelete: "cascade" }),
+  issuer: text("issuer").notNull(),
+  nonce: text("nonce").notNull(),
+  expiresAt: integer("expires_at").notNull(),
+}, (t) => [
+  primaryKey({ columns: [t.principalId, t.issuer, t.nonce] }),
+  index("mcp_delegation_nonces_expiry_idx").on(t.expiresAt),
+]);
+
+export const mcpDelegationEvents = sqliteTable("mcp_delegation_events", {
+  eventHash: text("event_hash").primaryKey(),
+  principalId: text("principal_id").notNull().references(() => mcpServicePrincipals.id, { onDelete: "cascade" }),
+  createdAt: integer("created_at").notNull(),
+  expiresAt: integer("expires_at").notNull(),
+}, (t) => [index("mcp_delegation_events_expiry_idx").on(t.expiresAt)]);
+
 export const messages = sqliteTable("messages", {
   id: text("id").primaryKey(),
   conversationId: text("conversation_id")
