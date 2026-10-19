@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useLayoutEffect } from "react";
 import type { Message } from "@/types";
 import type { ToolCallDisplay } from "@/types/chat";
 import { generateId } from "@/lib/utils";
@@ -21,12 +21,14 @@ export function useChat(conversationId: string | null, options?: UseChatOptions)
   const streamingRef = useRef(false);
   // Tracks the current conversationId so async callbacks can detect stale fetches.
   const conversationIdRef = useRef(conversationId);
-  conversationIdRef.current = conversationId;
   // Keep options in a ref so sendMessage can read the latest callbacks without
   // including the options object itself in the useCallback dependency array
   // (which would cause a new function on every render).
   const optionsRef = useRef(options);
-  optionsRef.current = options;
+  useLayoutEffect(() => {
+    conversationIdRef.current = conversationId;
+    optionsRef.current = options;
+  }, [conversationId, options]);
 
   const loadMessages = useCallback(async (convId: string) => {
     if (streamingRef.current) return;

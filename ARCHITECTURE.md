@@ -4,7 +4,7 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 
 ## Tech Stack
 
-- **Framework**: Next.js 16 (App Router, `output: "standalone"`)
+- **Framework**: Next.js 16.4 (App Router, `output: "standalone"`), React 19.3
 - **Language**: TypeScript throughout
 - **Database**: SQLite via better-sqlite3 + Drizzle ORM, stored at `/config/thinkarr.db`
 - **LLM**: OpenAI-compatible API via `openai` SDK (multi-endpoint support)
@@ -311,6 +311,12 @@ Service principals are separate from Plex-authenticated users. An administrator 
 High-entropy bearer secrets are returned once, stored only as indexed SHA-256 digests and never included in list/detail/audit/log output. Credentials have a 90-day default lifetime (1–365 days configurable), individual revocation, and explicit rotation. Immediate replacement is the default; optional overlap is bounded to 60 minutes and cannot extend the old expiry. At most two active credentials can coexist during overlap. Verification keys are independently registered Ed25519 public keys; key IDs cannot be reused and at most four non-revoked keys can coexist. Registration never accepts a private key or fetches a remote key URL.
 
 Lifecycle changes and credential replacement occur in SQLite transactions with metadata-only audit entries identifying the administrator. Service-denial audit entries identify the service principal/credential and leave the human actor null; the integration creator is not a beneficiary. Management responses use `Cache-Control: no-store` and existing per-user API rate limits. These records use dedicated tables, not new `app_config` keys.
+
+### Commit-Phase Callback Refs
+Chat and realtime event callbacks read current conversation/options/connection values from refs synchronized in `useLayoutEffect`, after React commits and before browser events. Rendering does not mutate these refs, so an abandoned concurrent render cannot publish uncommitted callback state. Conversation-list effects update state from fetch promise callbacks; a missing channel-link token derives the expired view directly rather than scheduling a synchronous effect update.
+
+### Dependency Audit Scope
+The lockfile is the deployment dependency contract. The CI production audit blocks on every severity and updates must use fixed compatible dependency versions without bypassing the gate. Development-only findings are reported separately. CI uses Node 22 and the Docker image uses Node 26; runtime dependencies must support both.
 
 ### Orphaned Tool Call Repair
 If the server crashes between saving an assistant message with `tool_calls` and saving the tool results, the LLM rejects the conversation on next load. `loadHistory()` in the orchestrator detects orphaned `tool_call_ids` and injects synthetic error tool messages so the conversation is always recoverable.
