@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, primaryKey } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, primaryKey, index, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const appConfig = sqliteTable("app_config", {
   key: text("key").primaryKey(),
@@ -71,6 +71,51 @@ export const mcpPendingBaskets = sqliteTable("mcp_pending_baskets", {
   userId: integer("user_id").notNull(),
   expiresAt: integer("expires_at").notNull(),
 });
+
+// Machine callers deliberately do not have Plex identities or user roles.
+export const mcpServicePrincipals = sqliteTable("mcp_service_principals", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(false),
+  allowedOperations: text("allowed_operations").notNull(),
+  createdByUserId: integer("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(() => new Date()),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().$defaultFn(() => new Date()),
+});
+
+export const mcpServiceCredentials = sqliteTable("mcp_service_credentials", {
+  id: text("id").primaryKey(),
+  principalId: text("principal_id").notNull().references(() => mcpServicePrincipals.id, { onDelete: "cascade" }),
+  tokenHash: text("token_hash").notNull(),
+  prefix: text("prefix").notNull(),
+  createdByUserId: integer("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(() => new Date()),
+  expiresAt: integer("expires_at", { mode: "timestamp" }).notNull(),
+  revokedAt: integer("revoked_at", { mode: "timestamp" }),
+  lastUsedAt: integer("last_used_at", { mode: "timestamp" }),
+}, (t) => [
+  uniqueIndex("mcp_service_credentials_token_hash_unique").on(t.tokenHash),
+  index("mcp_service_credentials_principal_idx").on(t.principalId),
+]);
+
+export const mcpServiceKeys = sqliteTable("mcp_service_keys", {
+  id: text("id").primaryKey(),
+  principalId: text("principal_id").notNull().references(() => mcpServicePrincipals.id, { onDelete: "cascade" }),
+  issuer: text("issuer").notNull(),
+  keyId: text("key_id").notNull(),
+  publicKeyPem: text("public_key_pem").notNull(),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(() => new Date()),
+  revokedAt: integer("revoked_at", { mode: "timestamp" }),
+}, (t) => [uniqueIndex("mcp_service_keys_issuer_key_unique").on(t.principalId, t.issuer, t.keyId)]);
+
+export const mcpServiceAudit = sqliteTable("mcp_service_audit", {
+  id: text("id").primaryKey(),
+  principalId: text("principal_id").notNull().references(() => mcpServicePrincipals.id, { onDelete: "restrict" }),
+  actorUserId: integer("actor_user_id").references(() => users.id, { onDelete: "set null" }),
+  action: text("action").notNull(),
+  targetId: text("target_id"),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(() => new Date()),
+}, (t) => [index("mcp_service_audit_principal_created_idx").on(t.principalId, t.createdAt)]);
 
 export const messages = sqliteTable("messages", {
   id: text("id").primaryKey(),

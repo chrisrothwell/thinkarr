@@ -1,9 +1,10 @@
 import { z } from "zod";
 import { logger } from "@/lib/logger";
 import type OpenAI from "openai";
+import type { McpExecutionContext } from "@/lib/mcp/auth-context";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type ToolHandler = (args: any) => Promise<unknown>;
+type ToolHandler = (args: any, context?: McpExecutionContext) => Promise<unknown>;
 
 export interface ToolDefinition {
   name: string;
@@ -39,7 +40,7 @@ export function defineTool<T extends z.ZodType>(def: {
   name: string;
   description: string;
   schema: T;
-  handler: (args: z.infer<T>) => Promise<unknown>;
+  handler: (args: z.infer<T>, context?: McpExecutionContext) => Promise<unknown>;
   llmSummary?: (result: unknown) => unknown;
 }): void {
   tools.set(def.name, def as ToolDefinition);
@@ -120,7 +121,13 @@ function resolveToolName(name: string): [string, ToolDefinition] | undefined {
 export async function executeTool(
   name: string,
   argsString: string,
+  context?: McpExecutionContext,
 ): Promise<string> {
+  // A second boundary for internal callers: service credentials cannot reach
+  // raw tools or name-normalization/suggestion paths before delegation exists.
+  if (context?.kind === "service") {
+    return JSON.stringify({ error: "Delegated MCP tool execution is not enabled in this build." });
+  }
   const resolved = resolveToolName(name);
   if (!resolved) {
     // Suggest the closest registered name so the LLM can self-correct on the next round.
@@ -155,7 +162,7 @@ export async function executeTool(
     }
 
     const parsed = tool.schema.parse(args);
-    const result = await tool.handler(parsed);
+    const result = await tool.handler(parsed, context);
     return JSON.stringify(result);
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : "Tool execution failed";
