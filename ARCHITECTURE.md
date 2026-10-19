@@ -4,7 +4,7 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 
 ## Tech Stack
 
-- **Framework**: Next.js 16 (App Router, `output: "standalone"`)
+- **Framework**: Next.js 16.4 (App Router, `output: "standalone"`), React 19.3
 - **Language**: TypeScript throughout
 - **Database**: SQLite via better-sqlite3 + Drizzle ORM, stored at `/config/thinkarr.db`
 - **LLM**: OpenAI-compatible API via `openai` SDK (multi-endpoint support)
@@ -277,6 +277,12 @@ Stored at `/config/thinkarr.db`, auto-migrated on first connection. Zero externa
 
 ### In-Process MCP Tool Registry
 Tools defined with Zod schemas, converted to JSON Schema → OpenAI function format at runtime. Single source of truth: same registry serves both the in-process chat engine and the external `/api/mcp` endpoint. Auto-initialized based on which services are configured.
+
+### Commit-Phase Callback Refs
+Chat and realtime event callbacks read current conversation/options/connection values from refs synchronized in `useLayoutEffect`, after React commits and before browser events. Rendering does not mutate these refs, so an abandoned concurrent render cannot publish uncommitted callback state. Conversation-list effects update state from fetch promise callbacks; a missing channel-link token derives the expired view directly rather than scheduling a synchronous effect update.
+
+### Dependency Audit Scope
+The lockfile is the deployment dependency contract. The CI production audit blocks on every severity and updates must use fixed compatible dependency versions without bypassing the gate. Development-only findings are reported separately. CI uses Node 22 and the Docker image uses Node 26; runtime dependencies must support both.
 
 ### Orphaned Tool Call Repair
 If the server crashes between saving an assistant message with `tool_calls` and saving the tool results, the LLM rejects the conversation on next load. `loadHistory()` in the orchestrator detects orphaned `tool_call_ids` and injects synthetic error tool messages so the conversation is always recoverable.
