@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useLayoutEffect } from "react";
 import { clientLog } from "@/lib/client-logger";
 
 interface SessionData {
@@ -44,15 +44,17 @@ export function useRealtimeChat(modelId: string, options: UseRealtimeChatOptions
   // Stable refs so event-handler closures always read the latest values
   // without needing them as effect / callback dependencies.
   const connectedRef = useRef(false);
-  connectedRef.current = connected;
   const onTurnCompleteRef = useRef(options.onTurnComplete);
-  onTurnCompleteRef.current = options.onTurnComplete;
   const conversationIdRef = useRef(options.conversationId);
-  conversationIdRef.current = options.conversationId;
   const onMessagesUpdatedRef = useRef(options.onMessagesUpdated);
-  onMessagesUpdatedRef.current = options.onMessagesUpdated;
   const transcriptionLanguageRef = useRef(options.transcriptionLanguage ?? "auto");
-  transcriptionLanguageRef.current = options.transcriptionLanguage ?? "auto";
+  useLayoutEffect(() => {
+    connectedRef.current = connected;
+    onTurnCompleteRef.current = options.onTurnComplete;
+    conversationIdRef.current = options.conversationId;
+    onMessagesUpdatedRef.current = options.onMessagesUpdated;
+    transcriptionLanguageRef.current = options.transcriptionLanguage ?? "auto";
+  }, [connected, options.onTurnComplete, options.conversationId, options.onMessagesUpdated, options.transcriptionLanguage]);
 
   // Set when the user explicitly calls disconnect() so that dc.onclose /
   // pc.onconnectionstatechange know not to show an error message.
