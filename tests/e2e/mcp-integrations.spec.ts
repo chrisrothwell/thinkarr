@@ -60,9 +60,15 @@ test("a real non-admin session has personal MCP settings but no integration UI o
   const sqlite = new Database(path.join(state.configDir, "thinkarr.db"));
   const sessionId = randomUUID();
   const now = Math.floor(Date.now() / 1000);
+  const linkedName = `Assistant link ${randomUUID().slice(0, 8)}`;
   try {
-    const id = sqlite.prepare("INSERT INTO users(plex_id, plex_username, is_admin, created_at) VALUES (?, ?, 0, ?)").run(randomUUID(), "e2e-member", now).lastInsertRowid;
+    const plexId = randomUUID();
+    const id = sqlite.prepare("INSERT INTO users(plex_id, plex_username, is_admin, created_at) VALUES (?, ?, 0, ?)").run(plexId, "e2e-member", now).lastInsertRowid;
     sqlite.prepare("INSERT INTO sessions(id, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)").run(sessionId, id, now + 3600, now);
+    const principalId = randomUUID();
+    sqlite.prepare("INSERT INTO mcp_service_principals(id, name, allowed_operations, created_at, updated_at) VALUES (?, ?, '[]', ?, ?)").run(principalId, linkedName, now, now);
+    sqlite.prepare("INSERT INTO mcp_actor_bindings(id, principal_id, actor_hash, context_hash, channel, context_kind, user_id, plex_id, created_at, updated_at) VALUES (?, ?, ?, ?, 'whatsapp', 'group', ?, ?, ?, ?)")
+      .run(randomUUID(), principalId, "synthetic-actor", "synthetic-context", id, plexId, now * 1000, now * 1000);
   } finally { sqlite.close(); }
   const context = await browser.newContext({ storageState: { cookies: [], origins: [] } });
   try {
@@ -74,5 +80,11 @@ test("a real non-admin session has personal MCP settings but no integration UI o
     await expect(page.getByRole("heading", { name: "Service integrations" })).toHaveCount(0);
     const response = await context.request.get(`${BASE_URL}/api/settings/mcp-integrations`);
     expect(response.status()).toBe(403);
+    await page.getByRole("button", { name: "Users", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Your group assistant links" })).toBeVisible();
+    await page.getByRole("button", { name: `Unlink ${linkedName}`, exact: true }).click();
+    await expect(page.getByRole("button", { name: `Unlink ${linkedName}`, exact: true })).toHaveText("Unlinked");
+    await expect(page.getByRole("button", { name: `Unlink ${linkedName}`, exact: true })).toBeDisabled();
+    expect((await (await context.request.get(`${BASE_URL}/api/account-links`)).json()).data[0].revokedAt).not.toBeNull();
   } finally { await context.close(); }
 });

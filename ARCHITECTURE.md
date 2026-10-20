@@ -27,7 +27,8 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 │   ├── 0001_add_message_duration.sql
 │   ├── 0002_mcp_channel_integration.sql  # mcp_channel_identities, mcp_registration_tokens, mcp_pending_baskets
 │   ├── 0003_mcp_service_principals.sql  # Service identities, hashed credentials, verification keys, audit
-│   └── 0004_mcp_delegation_replay.sql   # Durable HTTP nonce and provider-event replay claims
+│   ├── 0004_mcp_delegation_replay.sql   # Durable HTTP nonce and provider-event replay claims
+│   └── 0005_mcp_trusted_linking.sql     # Scoped hashed link challenges and versioned trusted actor bindings
 ├── public/
 │   ├── manifest.json                # PWA web app manifest
 │   └── sw.js                        # Service worker (network-first)
@@ -39,6 +40,9 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
     │   │   │   ├── plex/route.ts            # POST initiate Plex PIN OAuth
     │   │   │   ├── callback/route.ts        # POST exchange PIN → session
     │   │   │   └── session/route.ts         # GET current user / DELETE logout
+    │   │   ├── account-links/
+    │   │   │   ├── route.ts                 # GET current user's trusted assistant links
+    │   │   │   └── [id]/route.ts            # DELETE unlink own binding
     │   │   ├── chat/route.ts                # POST stream LLM response (SSE)
     │   │   ├── conversations/
     │   │   │   ├── route.ts                 # GET list / POST create
@@ -48,7 +52,10 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
     │   │   │       └── title/route.ts       # PATCH rename
     │   │   ├── mcp/
     │   │   │   ├── route.ts                 # GET list tools / POST execute (bearer auth; ?mode=text for channel adapter)
-    │   │   │   └── link/route.ts            # GET validate registration token / POST complete Plex OAuth → store channel identity
+    │   │   │   ├── link/route.ts            # Legacy unsigned channel registration
+    │   │   │   └── account-links/
+    │   │   │       ├── inspect/route.ts     # POST private challenge inspection; no URL/query secrets
+    │   │   │       └── prepare/route.ts     # POST prepare code for authenticated Plex browser session
     │   │   ├── models/route.ts              # GET available models for current user
     │   │   ├── plex/
     │   │   │   └── avatar/[userId]/route.ts # GET server-side Plex avatar proxy
@@ -71,6 +78,7 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
     │   │   │   │       ├── route.ts             # GET detail / PATCH name, scope, disable
     │   │   │   │       ├── credentials/route.ts  # POST issue/rotate; secret returned once
     │   │   │   │       ├── credentials/[credentialId]/route.ts # DELETE revoke credential
+    │   │   │   │       ├── bindings/[bindingId]/route.ts # DELETE admin revoke participant binding
     │   │   │   │       ├── keys/route.ts         # POST register Ed25519 public verification key
     │   │   │   │       └── keys/[keyId]/route.ts # DELETE revoke key
     │   │   │   ├── plex-connect/route.ts    # POST Plex OAuth from Settings
@@ -106,6 +114,7 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
     │   │   ├── tool-call.tsx        # Tool call display + expandable details
     │   │   └── voice-conversation.tsx  # 4-state voice loop (idle/listen/process/speak)
     │   ├── settings/
+    │   │   ├── account-links.tsx      # Owner-only trusted link view/unlink in Settings → Users
     │   │   └── mcp-integrations.tsx  # Administrator integration scope/credential/key management
     │   └── ui/                      # avatar, badge, button, card, input, label, spinner, tabs, textarea
     ├── hooks/
@@ -119,12 +128,14 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
     │   ├── use-tts.ts               # OpenAI TTS playback hook
     │   └── use-voice-input.ts       # MediaRecorder + transcribe hook
     ├── lib/
-    │   ├── auth/session.ts          # Session create/validate/destroy + cookie management
+    │   ├── auth/
+    │   │   ├── session.ts           # Session create/validate/destroy + cookie management
+    │   │   └── plex-registration.ts # Normal Plex account admission/upsert shared by the login path
     │   ├── config/index.ts          # getConfig/setConfig + rate limit utils
     │   ├── db/
     │   │   ├── index.ts             # DB singleton + auto-migration
     │   │   ├── migrate.ts           # runMigrations standalone utility
-    │   │   └── schema.ts            # 14 tables
+    │   │   └── schema.ts            # 16 tables
     │   ├── llm/
     │   │   ├── client.ts            # OpenAI client factory (per-endpoint)
     │   │   ├── default-prompt.ts    # DEFAULT_SYSTEM_PROMPT + DEFAULT_REALTIME_SYSTEM_PROMPT
@@ -132,6 +143,8 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
     │   │   ├── orchestrator.ts      # Chat streaming engine + auto-title + orphan repair
     │   │   └── system-prompt.ts     # buildSystemPrompt() + buildRealtimeSystemPrompt()
     │   ├── mcp/
+    │   │   ├── account-linking.ts   # Scoped challenge/browser/private-proof binding state and actor resolution
+    │   │   ├── account-link-api.ts  # Browser JSON/session guards, safe errors and no-store/no-referrer output
     │   │   ├── auth-context.ts      # Discriminated personal/service server-owned caller context
     │   │   ├── delegation.ts        # JOSE assertion verification, stable audience and durable replay claims
     │   │   ├── integration-api.ts   # Admin-session authorization, rate limit and no-store responses
@@ -187,6 +200,8 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 | `mcp_service_audit` | `id`, `principalId` (FK), nullable human `actorUserId`, action, opaque target ID, creation time — no secrets or raw arguments |
 | `mcp_delegation_nonces` | `(principalId, issuer, nonce)` composite PK, expiry in Unix seconds including allowed clock skew; FK to service principal |
 | `mcp_delegation_events` | SHA-256 `eventHash` PK over principal/issuer/actor/context/provider event, principal FK, creation/expiry seconds; no raw sender/message/event identifiers |
+| `mcp_actor_bindings` | `id`, principal FK, hashed actor/context scopes (unique), channel/context kind, real user FK, immutable Plex ID snapshot, version, creation/update/revocation milliseconds |
+| `mcp_link_challenges` | Unique token/code digests, original principal/credential/key references, hashed actor/origin scopes, browser user/Plex/session-hash snapshots, preparation/consumption/expiry milliseconds; no cleartext token/code/session ID |
 
 ---
 
@@ -234,6 +249,10 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 | POST | `/api/mcp` | Execute tool (bearer auth; `?mode=text` enables text-channel adapter) |
 | GET | `/api/mcp/link` | Validate a channel registration token |
 | POST | `/api/mcp/link` | Complete channel registration: exchange Plex PIN + registration token → store identity |
+| POST | `/api/mcp/account-links/inspect` | Inspect a private challenge supplied in a JSON body; safe integration/channel/expiry metadata only |
+| POST | `/api/mcp/account-links/prepare` | Prepare/rotate a private verification code for the actual authenticated browser user/session; does not activate a binding |
+| GET | `/api/account-links` | List only the current user's trusted links, including integration enabled/revoked state |
+| DELETE | `/api/account-links/[id]` | Unlink own binding and increment its version; another user's ID returns 404 |
 | GET | `/api/models` | Available models for current user |
 | GET | `/api/services/status` | Service health (LLM, Plex, Sonarr, Radarr, Overseerr) |
 | GET | `/api/settings` | Get config (secrets masked, admin only) |
@@ -247,12 +266,13 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 | POST | `/api/settings/mcp-token/user/[userId]` | Regenerate per-user MCP token |
 | GET | `/api/settings/mcp-integrations` | List integrations, curated operation names, stable delegation audience and delegated-access availability (admin session) |
 | POST | `/api/settings/mcp-integrations` | Create a disabled service principal (admin session) |
-| GET | `/api/settings/mcp-integrations/[id]` | Get safe principal/credential/public-key metadata and latest 20 audit records (admin session) |
+| GET | `/api/settings/mcp-integrations/[id]` | Get safe principal/credential/public-key/participant metadata and latest 20 audit records (admin session) |
 | PATCH | `/api/settings/mcp-integrations/[id]` | Update name/operation allowlist or disable; enabling is rejected in this build |
 | POST | `/api/settings/mcp-integrations/[id]/credentials` | Issue or rotate a credential; return secret only here with no-store |
 | DELETE | `/api/settings/mcp-integrations/[id]/credentials/[credentialId]` | Revoke an individual credential (admin session) |
 | POST | `/api/settings/mcp-integrations/[id]/keys` | Register an Ed25519 public verification key; private keys are rejected |
 | DELETE | `/api/settings/mcp-integrations/[id]/keys/[keyId]` | Revoke a verification key (admin session) |
+| DELETE | `/api/settings/mcp-integrations/[id]/bindings/[bindingId]` | Administrator revokes a participant binding within the specified integration |
 | POST | `/api/settings/plex-connect` | Plex OAuth from Settings |
 | GET | `/api/settings/plex-devices` | Discover Plex servers via plex.tv (admin) |
 | GET | `/api/settings/users` | List users with settings (admin) |
@@ -333,6 +353,17 @@ After asynchronous cryptographic verification, an immediate SQLite transaction r
 Provider-event deduplication is separate from HTTP nonce replay. A valid message-source context can claim an event hash scoped to issuer/principal/channel account/sender/context kind/conversation. The helper rechecks service/key/credential status and assertion expiry, accepts provider events at most 15 minutes old (plus five seconds skew), and rejects a fresh HTTP assertion reusing an already-consumed event. Event claims can join the business transaction so a rollback does not discard an unsubmitted confirmation. Expired replay records are pruned on claim; event time bounds prevent old events becoming usable after retention expiry.
 
 The verifier is a tested foundation, not an activation path. `/api/mcp` and the registry retain their unconditional disabled service gate until trusted account bindings, source-aware tool authorization and the safe media facade are implemented. Personal MCP access does not require these assertions.
+
+### Trusted Account-Link State and Ownership
+Trusted linking uses new tables; legacy `mcp_channel_identities` rows created from unsigned headers are never accepted as trusted bindings. An internal verified-context control creates a five-minute high-entropy challenge bound to principal/issuer/channel account/sender and origin context kind/ID. Actor/context tuples are stored as scoped hashes, and token/code/session credentials are stored only as digests. Creating a new challenge supersedes earlier pending challenges in that exact scope. The original credential/key/principal must remain active during preparation/completion.
+
+Browser inspection uses JSON POST, no-store/no-referrer responses and a separate auth-rate-limit namespace. Preparation requires a real, unexpired Thinkarr browser session, pins its user/Plex ID/session digest, and returns a fresh completion code without activating the link. A retry in the same browser rotates the code without extending challenge expiry; a different user/session cannot replace the pending account. The normal Plex login/registration admission policy is preserved by `plex-registration.ts`; possession of a link token does not bypass it or create a service-derived administrator.
+
+Only a fresh verified direct-message assertion with the matching `link-confirm:<code>` intent and exact original actor namespace can activate the origin binding. Completion rechecks the prepared session/Plex snapshot, atomically claims the provider event, updates the binding and consumes the challenge in the same immediate transaction. It returns only a safe linked outcome. Owner unlink/admin revocation increments the binding version. Explicit re-verification can reactivate the same real user with a newer version; re-linking the same channel identity to a different Plex account is rejected instead of silently overwriting it. Stable provider identity/reassignment detection remains the connector's canonical-identity contract, not something a phone-number hash proves.
+
+`resolveServiceActor` returns server-owned user/Plex/binding/version identifiers from a live binding; it does not inherit the user's administrator role or perform downstream permission/library checks. Settings → Users exposes only the current user's trusted link metadata and unlink action; administrator integration settings can view/revoke participant bindings. Neither response exposes raw sender/group hashes or private challenge material.
+
+These are backend/session-management foundations. Service-token generation of link challenges and completion are internal verified-context controls, not yet exposed through the disabled MCP service transport. The mobile fragment-based private-link page, prefilled channel handoff, connector dispatch and actor-scoped media facade remain enablement dependencies. Supporting Plex accounts without an existing library share must be implemented without granting access to legacy administrator-backed personal tools; the existing web-registration admission gate remains unchanged here. No service can be activated through the management API in this build.
 
 ### Orphaned Tool Call Repair
 If the server crashes between saving an assistant message with `tool_calls` and saving the tool results, the LLM rejects the conversation on next load. `loadHistory()` in the orchestrator detects orphaned `tool_call_ids` and injects synthetic error tool messages so the conversation is always recoverable.

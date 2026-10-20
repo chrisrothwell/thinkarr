@@ -44,6 +44,7 @@ function audit(db: AuditDb, principalId: string, actorUserId: number | null, act
   db.insert(schema.mcpServiceAudit).values({ id: randomUUID(), principalId, actorUserId, action, targetId }).run();
   logger.info("MCP_INTEGRATION_AUDIT", { principalId, actorUserId, action, targetId });
 }
+export { audit as recordServiceAudit };
 
 function principalOrThrow(id: string) {
   const row = getDb().select().from(schema.mcpServicePrincipals).where(eq(schema.mcpServicePrincipals.id, id)).get();
@@ -70,7 +71,10 @@ export function getIntegration(id: string) {
   const keys = db.select().from(schema.mcpServiceKeys).where(eq(schema.mcpServiceKeys.principalId, id)).all();
   const audit = db.select().from(schema.mcpServiceAudit).where(eq(schema.mcpServiceAudit.principalId, id))
     .orderBy(desc(schema.mcpServiceAudit.createdAt)).limit(20).all();
-  return { ...principal, credentials, keys, audit };
+  const b = schema.mcpActorBindings;
+  const bindings = db.select({ id: b.id, userId: b.userId, channel: b.channel, contextKind: b.contextKind, createdAt: b.createdAt, revokedAt: b.revokedAt })
+    .from(b).where(eq(b.principalId, id)).all();
+  return { ...principal, credentials, keys, audit, bindings };
 }
 
 export function createIntegration(input: z.input<typeof createIntegrationSchema>, actorUserId: number) {

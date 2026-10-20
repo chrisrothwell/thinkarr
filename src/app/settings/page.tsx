@@ -29,6 +29,7 @@ import { copyToClipboard } from "@/lib/utils";
 import { usePwaInstall } from "@/hooks/use-pwa-install";
 import { selectPlexConnectionUrl } from "@/lib/plex-device-select";
 import { McpIntegrations } from "@/components/settings/mcp-integrations";
+import { AccountLinks } from "@/components/settings/account-links";
 
 // --- Types ---
 
@@ -1534,6 +1535,7 @@ export default function SettingsPage() {
               </CardContent>
             </Card>
             )} {/* end admin user management */}
+            <AccountLinks />
           </TabsContent>
 
           {/* ===== TAB 5: Logs (admin only) ===== */}
