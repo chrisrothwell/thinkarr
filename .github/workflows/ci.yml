@@ -30,6 +30,8 @@ jobs:
           filters: |
             code:
               - 'src/**'
+              - 'connectors/**'
+              - 'scripts/check-openclaw-sdk.mjs'
               - 'tests/**'
               - 'public/**'
               - 'package.json'
@@ -87,13 +89,19 @@ jobs:
       - name: Type check
         run: npm run typecheck
 
+      - name: OpenClaw SDK contract and plugin build
+        run: |
+          npm run check:openclaw
+          npm run build:openclaw
+          npm audit --prefix connectors/openclaw --omit=dev --audit-level=low
+
       - name: Unit tests
         run: npm test
 
       - name: SAST scan
         run: |
           pip install semgrep --quiet
-          semgrep --config=p/typescript --config=p/nextjs --config=p/owasp-top-ten src/ --error
+          semgrep --config=p/typescript --config=p/nextjs --config=p/owasp-top-ten src/ connectors/ --error
 
       - name: Build
         run: npm run build

@@ -3,6 +3,8 @@
   "version": "1.1.8-beta.6",
   "private": true,
   "scripts": {
+    "build:openclaw": "tsc -p connectors/openclaw/tsconfig.build.json",
+    "check:openclaw": "node scripts/check-openclaw-sdk.mjs",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
@@ -15,7 +17,7 @@
     "test:e2e:docker": "playwright test --config playwright.docker.config.ts",
     "test:e2e:ui": "playwright test --ui",
     "security:audit": "node scripts/check-npm-audit.mjs",
-    "security:scan": "semgrep --config=p/typescript --config=p/nextjs --config=p/owasp-top-ten src/",
+    "security:scan": "semgrep --config=p/typescript --config=p/nextjs --config=p/owasp-top-ten src/ connectors/",
     "security:trivy": "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image thinkarr:latest",
     "security:all": "npm run security:audit && npm run security:scan"
   },
