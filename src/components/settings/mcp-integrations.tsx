@@ -55,7 +55,7 @@ export function McpIntegrations() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const reload = useCallback(async () => setCatalog(await api<Catalog>(base)), []);
+  const reload = useCallback(() => api<Catalog>(base).then(setCatalog), []);
   useEffect(() => { reload().catch(() => setError("Could not load integrations.")); }, [reload]);
 
   async function loadDetail(id: string, updateForm = true) {
