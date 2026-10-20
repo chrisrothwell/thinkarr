@@ -7,8 +7,8 @@ import type { ServiceMcpContext } from "./auth-context";
 import { publicLinkOriginSchema, whatsappBotNumberSchema } from "./link-handoff";
 
 export const SERVICE_TOKEN_PREFIX = "thk_svc_";
-// This build prepares identities only. No API/config switch enables delegation
-// before trusted actor verification, linking and the curated facade exist.
+// The signed linking transport alone does not enable integrations. Activation
+// requires trusted connector private delivery and the actor-scoped media facade.
 export const DELEGATED_MCP_AVAILABLE = false;
 export const SERVICE_OPERATIONS = [
   "media_search", "media_details", "media_select", "media_pending_selection",
