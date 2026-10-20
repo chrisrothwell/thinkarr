@@ -14,6 +14,15 @@ export function proxy(request: NextRequest) {
 
   const { pathname } = request.nextUrl;
 
+  // Only the new fragment-based landing page is public. Tokens never enter its
+  // HTTP URL; all challenge/session validation happens in the POST APIs.
+  if (pathname === "/mcp/connect" || pathname === "/mcp/connect/") {
+    const response = NextResponse.next();
+    response.headers.set("Cache-Control", "no-store");
+    response.headers.set("Referrer-Policy", "no-referrer");
+    return response;
+  }
+
   // Allow public paths
   if (PUBLIC_PATHS.some((p) => pathname.startsWith(p))) {
     return NextResponse.next();

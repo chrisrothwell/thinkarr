@@ -7,7 +7,7 @@ import { getDelegationAudience, verifyDelegatedRequest, type DelegationClaims } 
 import { seedSession, seedUser, type TestDb } from "./db";
 
 export async function delegatedLinkFixture(db: TestDb, adminId: number) {
-  const principal = createIntegration({ name: "Group assistant", allowedOperations: ["account_link_start", "account_link_confirm", "media_search"] }, adminId);
+  const principal = createIntegration({ name: "Group assistant", allowedOperations: ["account_link_start", "account_link_confirm", "media_search"], publicLinkOrigin: "https://thinkarr.invalid", whatsappBotNumber: "15555550100" }, adminId);
   // Test preparation only: production management/transport gates remain disabled.
   db.update(schema.mcpServicePrincipals).set({ enabled: true }).where(eq(schema.mcpServicePrincipals.id, principal.id)).run();
   const credential = issueServiceCredential(principal.id, {}, adminId);

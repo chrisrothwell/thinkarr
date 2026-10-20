@@ -83,5 +83,13 @@ export default defineConfig({
         storageState: ADMIN_AUTH_FILE,
       },
     },
+    {
+      name: "mcp-mobile-link",
+      testMatch: /mcp-mobile-link\.spec\.ts/,
+      use: {
+        ...devices["Pixel 7"],
+        storageState: { cookies: [], origins: [] },
+      },
+    },
   ],
 });

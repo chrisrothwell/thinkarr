@@ -10,6 +10,7 @@ import { copyToClipboard } from "@/lib/utils";
 
 interface Integration {
   id: string; name: string; enabled: boolean; allowedOperations: string[];
+  publicLinkOrigin: string | null; whatsappBotNumber: string | null;
 }
 interface Credential {
   id: string; prefix: string; expiresAt: string; revokedAt: string | null; lastUsedAt: string | null;
@@ -47,6 +48,8 @@ export function McpIntegrations() {
   const [newName, setNewName] = useState("");
   const [name, setName] = useState("");
   const [operations, setOperations] = useState<string[]>([]);
+  const [linkOrigin, setLinkOrigin] = useState("");
+  const [botNumber, setBotNumber] = useState("");
   const [expires, setExpires] = useState(90);
   const [overlap, setOverlap] = useState(0);
   const [issuer, setIssuer] = useState("");
@@ -62,7 +65,10 @@ export function McpIntegrations() {
   async function loadDetail(id: string, updateForm = true) {
     const value = await api<Detail>(`${base}/${id}`);
     setDetail(value);
-    if (updateForm) { setName(value.name); setOperations(value.allowedOperations); }
+    if (updateForm) {
+      setName(value.name); setOperations(value.allowedOperations);
+      setLinkOrigin(value.publicLinkOrigin ?? ""); setBotNumber(value.whatsappBotNumber ?? "");
+    }
   }
   async function run(action: () => Promise<void>) {
     setBusy(true); setError(null);
@@ -81,7 +87,10 @@ export function McpIntegrations() {
     event.preventDefault();
     if (!detail) return;
     void run(async () => {
-      await api(`${base}/${detail.id}`, "PATCH", { name, allowedOperations: operations });
+      await api(`${base}/${detail.id}`, "PATCH", {
+        name, allowedOperations: operations,
+        publicLinkOrigin: linkOrigin.trim() || null, whatsappBotNumber: botNumber.trim() || null,
+      });
       await reload(); await loadDetail(detail.id);
     });
   }
@@ -143,6 +152,11 @@ export function McpIntegrations() {
           <form onSubmit={save} className="space-y-3">
             <Label htmlFor="integration-name">Integration name</Label>
             <Input id="integration-name" required maxLength={100} value={name} onChange={(event) => setName(event.target.value)} />
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1"><Label htmlFor="integration-link-origin">Public linking origin</Label><Input id="integration-link-origin" type="url" maxLength={2048} value={linkOrigin} placeholder="https://thinkarr.example.com" onChange={(event) => setLinkOrigin(event.target.value)} /></div>
+              <div className="space-y-1"><Label htmlFor="integration-bot-number">WhatsApp bot number</Label><Input id="integration-bot-number" type="tel" maxLength={16} value={botNumber} placeholder="+15555550100" onChange={(event) => setBotNumber(event.target.value)} /></div>
+            </div>
+            <p className="text-xs text-muted-foreground">Use the Thinkarr HTTPS origin reachable from participants&apos; phones and the bot&apos;s international number. Changing either invalidates pending linking challenges.</p>
             <fieldset className="space-y-2">
               <legend className="text-sm font-medium">Operation allowlist</legend>
               <div className="grid gap-2 sm:grid-cols-2">

@@ -28,7 +28,8 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 │   ├── 0002_mcp_channel_integration.sql  # mcp_channel_identities, mcp_registration_tokens, mcp_pending_baskets
 │   ├── 0003_mcp_service_principals.sql  # Service identities, hashed credentials, verification keys, audit
 │   ├── 0004_mcp_delegation_replay.sql   # Durable HTTP nonce and provider-event replay claims
-│   └── 0005_mcp_trusted_linking.sql     # Scoped hashed link challenges and versioned trusted actor bindings
+│   ├── 0005_mcp_trusted_linking.sql     # Scoped hashed link challenges and versioned trusted actor bindings
+│   └── 0006_mcp_mobile_handoff.sql      # Public origin/bot configuration and pending handoff fingerprint
 ├── public/
 │   ├── manifest.json                # PWA web app manifest
 │   └── sw.js                        # Service worker (network-first)
@@ -93,7 +94,8 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
     │   ├── chat/page.tsx            # Chat page (sidebar, model picker, messages, input)
     │   ├── login/page.tsx           # Plex OAuth login
     │   ├── mcp/
-    │   │   └── link/page.tsx        # Channel identity registration (Plex OAuth for external channels)
+    │   │   ├── link/page.tsx        # Legacy channel identity registration
+    │   │   └── connect/page.tsx     # Public fragment-only mobile Plex/private-message handoff
     │   ├── settings/page.tsx        # 5-tab settings (General, LLM, Plex & Arrs, MCP, Users, Logs)
     │   ├── setup/page.tsx           # Welcome splash (first-time setup)
     │   ├── globals.css              # Dark theme CSS variables + Tailwind 4
@@ -148,6 +150,7 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
     │   │   ├── auth-context.ts      # Discriminated personal/service server-owned caller context
     │   │   ├── delegation.ts        # JOSE assertion verification, stable audience and durable replay claims
     │   │   ├── integration-api.ts   # Admin-session authorization, rate limit and no-store responses
+    │   │   ├── link-handoff.ts      # Validated public origin/bot destination, fragment token and prefilled URI helpers
     │   │   └── service-principals.ts # Disabled principal/credential/key lifecycle and metadata-only audit
     │   ├── security/
     │   │   ├── api-rate-limit.ts    # Per-user in-memory rate limiter (60 req/min)
@@ -194,14 +197,14 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 | `mcp_channel_identities` | `(channelType, channelUserId)` (composite PK), `userId` (FK) — maps external channel user (WhatsApp/Telegram/etc.) to a Thinkarr user |
 | `mcp_registration_tokens` | `token` (PK), `channelType`, `channelUserId`, `expiresAt` — short-lived (15 min) self-registration link tokens |
 | `mcp_pending_baskets` | `token` (PK), `itemsJson`, `userId`, `expiresAt` — one-time-use (10 min) confirm_request validation state |
-| `mcp_service_principals` | `id` (UUID PK), `name`, `enabled` (default false), `allowedOperations` (JSON), creator user reference, timestamps — no Plex/user role |
+| `mcp_service_principals` | `id` (UUID PK), `name`, `enabled` (default false), `allowedOperations` (JSON), nullable administrator-configured `publicLinkOrigin` / `whatsappBotNumber`, creator user reference, timestamps — no Plex/user role |
 | `mcp_service_credentials` | `id`, `principalId` (FK), unique SHA-256 `tokenHash`, safe `prefix`, creator, creation/expiry/revocation/last-use timestamps |
 | `mcp_service_keys` | `id`, `principalId` (FK), `issuer`, `keyId`, Ed25519 `publicKeyPem`, creation/revocation; unique principal/issuer/key ID |
 | `mcp_service_audit` | `id`, `principalId` (FK), nullable human `actorUserId`, action, opaque target ID, creation time — no secrets or raw arguments |
 | `mcp_delegation_nonces` | `(principalId, issuer, nonce)` composite PK, expiry in Unix seconds including allowed clock skew; FK to service principal |
 | `mcp_delegation_events` | SHA-256 `eventHash` PK over principal/issuer/actor/context/provider event, principal FK, creation/expiry seconds; no raw sender/message/event identifiers |
 | `mcp_actor_bindings` | `id`, principal FK, hashed actor/context scopes (unique), channel/context kind, real user FK, immutable Plex ID snapshot, version, creation/update/revocation milliseconds |
-| `mcp_link_challenges` | Unique token/code digests, original principal/credential/key references, hashed actor/origin scopes, browser user/Plex/session-hash snapshots, preparation/consumption/expiry milliseconds; no cleartext token/code/session ID |
+| `mcp_link_challenges` | Unique token/code digests, original principal/credential/key references, hashed actor/origin scopes, handoff-configuration fingerprint, browser user/Plex/session-hash snapshots, preparation/consumption/expiry milliseconds; no cleartext token/code/session ID |
 
 ---
 
@@ -249,8 +252,8 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 | POST | `/api/mcp` | Execute tool (bearer auth; `?mode=text` enables text-channel adapter) |
 | GET | `/api/mcp/link` | Validate a channel registration token |
 | POST | `/api/mcp/link` | Complete channel registration: exchange Plex PIN + registration token → store identity |
-| POST | `/api/mcp/account-links/inspect` | Inspect a private challenge supplied in a JSON body; safe integration/channel/expiry metadata only |
-| POST | `/api/mcp/account-links/prepare` | Prepare/rotate a private verification code for the actual authenticated browser user/session; does not activate a binding |
+| POST | `/api/mcp/account-links/inspect` | Inspect a JSON-body challenge from its configured browser origin; safe integration/channel/expiry metadata only |
+| POST | `/api/mcp/account-links/prepare` | Prepare a prefilled private handoff URL for the actual browser user/session; optional expected-user comparison rejects account switches but never selects a beneficiary; does not activate a binding |
 | GET | `/api/account-links` | List only the current user's trusted links, including integration enabled/revoked state |
 | DELETE | `/api/account-links/[id]` | Unlink own binding and increment its version; another user's ID returns 404 |
 | GET | `/api/models` | Available models for current user |
@@ -363,7 +366,16 @@ Only a fresh verified direct-message assertion with the matching `link-confirm:<
 
 `resolveServiceActor` returns server-owned user/Plex/binding/version identifiers from a live binding; it does not inherit the user's administrator role or perform downstream permission/library checks. Settings → Users exposes only the current user's trusted link metadata and unlink action; administrator integration settings can view/revoke participant bindings. Neither response exposes raw sender/group hashes or private challenge material.
 
-These are backend/session-management foundations. Service-token generation of link challenges and completion are internal verified-context controls, not yet exposed through the disabled MCP service transport. The mobile fragment-based private-link page, prefilled channel handoff, connector dispatch and actor-scoped media facade remain enablement dependencies. Supporting Plex accounts without an existing library share must be implemented without granting access to legacy administrator-backed personal tools; the existing web-registration admission gate remains unchanged here. No service can be activated through the management API in this build.
+Service-token generation of link challenges and completion remain internal verified-context controls, not yet exposed through the disabled MCP service transport. The mobile landing/handoff page is implemented, but connector dispatch, canonical provider-identity proof and the actor-scoped media facade remain enablement dependencies. Supporting Plex accounts without an existing library share must be implemented without granting access to legacy administrator-backed personal tools; the existing web-registration admission gate remains unchanged here. No service can be activated through the management API in this build.
+
+### Fragment-Only Mobile Linking and Configured Private Handoff
+Settings → MCP integration details include a public linking origin and international WhatsApp bot number. Origins must be HTTPS without userinfo/path/query/fragment; explicit HTTP loopback is supported for development. Numbers normalize an optional leading plus to digits. The browser/request/model never chooses a destination. New link challenges include a digest of the registered origin/number, and changing either through management atomically consumes pending challenges. Fingerprint verification also rejects direct storage drift and pre-handoff-migration drafts; completed actor bindings are unaffected.
+
+The internal initiation result includes `/mcp/connect#token=<secret>` on the configured origin for trusted private delivery only. The exact new landing route is public with no-store/no-referrer headers; sibling and legacy paths retain their existing protection. The fragment is not sent over HTTP, and client initialization captures it in a component ref and strips it from browser history before POST inspection. It is never placed in query parameters, local/session storage, rendered UI or a callback URL. Development effect replay is cancelled before duplicate initial network requests, and a new fragment in an existing tab resets the old invocation state.
+
+The mobile page uses normal Plex PIN sign-in, opening its popup during the user gesture and offering a standard link if the popup is blocked. It polls without overlapping requests until completion or challenge expiry, displays the actual signed-in Plex username and offers account switching. Finish in WhatsApp sends only the challenge in the JSON body, plus a displayed-user comparison header; the API still derives the user/session exclusively from the cookie and refuses a changed account. Browser API origins must match registered configuration. Preparation builds the URI inside the binding-preparation transaction and the public response contains only the handoff URL/expiry, not a separate raw-code field.
+
+The destination is strictly `https://wa.me/<configured-number>?text=Link+account+<code>`. The user must tap Send in WhatsApp; browser navigation/preparation does not claim successful linking. The page deduplicates in-flight preparation and reuses its prepared URI for a retry, so a double click cannot rotate away the draft it just opened. Expiry, changed configuration and changed sign-in refuse handoff with a short recovery message. Real WhatsApp delivery/completion still requires the trusted connector; browser tests intercept both Plex's page and the WhatsApp destination and make no external messages or media requests.
 
 ### Orphaned Tool Call Repair
 If the server crashes between saving an assistant message with `tool_calls` and saving the tool results, the LLM rejects the conversation on next load. `loadHistory()` in the orchestrator detects orphaned `tool_call_ids` and injects synthetic error tool messages so the conversation is always recoverable.

@@ -3,9 +3,11 @@ import { and, eq, gt, isNull } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { consumeDelegatedEvent, requireCurrentDelegation, type VerifiedServiceMcpContext } from "./delegation";
 import { recordServiceAudit } from "./service-principals";
+import { linkHandoffConfig, privateAccountLinkUrl, whatsappVerificationUrl } from "./link-handoff";
 
 export const LINK_CHALLENGE_TTL_MS = 5 * 60_000;
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+const configHash = (config: ReturnType<typeof linkHandoffConfig>) => hash(JSON.stringify([config.publicLinkOrigin, config.whatsappBotNumber]));
 type LinkStore = Pick<ReturnType<typeof getDb>, "select" | "insert" | "update" | "delete">;
 type Challenge = typeof schema.mcpLinkChallenges.$inferSelect;
 export class AccountLinkError extends Error {
@@ -25,6 +27,9 @@ function assertChallengeTrust(db: LinkStore, row: Challenge) {
   const credential = db.select().from(schema.mcpServiceCredentials).where(and(eq(schema.mcpServiceCredentials.id, row.credentialId), eq(schema.mcpServiceCredentials.principalId, row.principalId))).get();
   const key = db.select().from(schema.mcpServiceKeys).where(and(eq(schema.mcpServiceKeys.id, row.verificationKeyId), eq(schema.mcpServiceKeys.principalId, row.principalId))).get();
   if (!p?.enabled || !credential || credential.revokedAt || credential.expiresAt <= new Date() || !key || key.revokedAt || row.consumedAt || row.expiresAt <= new Date()) throw invalid();
+  try {
+    if (row.channel !== "whatsapp" || row.handoffConfigHash !== configHash(linkHandoffConfig(p))) throw invalid();
+  } catch { throw invalid(); }
   return p;
 }
 
@@ -48,6 +53,12 @@ export function initiateAccountLink(context: VerifiedServiceMcpContext) {
       if (!user || user.plexId !== existing.plexId) throw new AccountLinkError("The existing binding needs administrator recovery", 409);
       return { linked: true as const };
     }
+    const principal = tx.select().from(schema.mcpServicePrincipals).where(eq(schema.mcpServicePrincipals.id, context.principalId)).get()!;
+    let handoff: ReturnType<typeof linkHandoffConfig>;
+    try {
+      if (c.channel !== "whatsapp") throw new Error();
+      handoff = linkHandoffConfig(principal);
+    } catch { throw new AccountLinkError("Configure the public linking origin and WhatsApp bot number before linking", 409); }
     // New challenges replace pending challenges in this exact scope, not other
     // senders/groups. The old browser/code must not remain usable.
     tx.update(schema.mcpLinkChallenges).set({ consumedAt: new Date() }).where(and(
@@ -57,30 +68,34 @@ export function initiateAccountLink(context: VerifiedServiceMcpContext) {
     tx.insert(schema.mcpLinkChallenges).values({
       id, principalId: context.principalId, credentialId: context.credentialId, verificationKeyId: context.verificationKeyId,
       tokenHash: hash(token), actorHash: actor, contextHash: origin, channel: c.channel, contextKind: c.kind, expiresAt,
+      handoffConfigHash: configHash(handoff),
     }).run();
     recordServiceAudit(tx, context.principalId, null, "link_challenge_created", id);
-    return { linked: false as const, id, token, expiresAt };
+    return { linked: false as const, id, token, expiresAt, privateLinkUrl: privateAccountLinkUrl(handoff.publicLinkOrigin, token) };
   }, { behavior: "immediate" });
 }
 
 /** Browser-only lookup; never accepts identity fields or logs a token. */
-export function inspectAccountLink(token: string) {
+export function inspectAccountLink(token: string, browserOrigin?: string) {
   if (!/^[a-f0-9]{64}$/.test(token)) throw invalid();
   const db = getDb();
   const row = db.select().from(schema.mcpLinkChallenges).where(eq(schema.mcpLinkChallenges.tokenHash, hash(token))).get();
   if (!row) throw invalid();
   const principal = assertChallengeTrust(db, row);
+  if (browserOrigin !== undefined && browserOrigin !== linkHandoffConfig(principal).publicLinkOrigin) {
+    throw new AccountLinkError("Open this private link using its original Thinkarr address", 403);
+  }
   return { integrationName: principal.name, channel: row.channel, contextKind: row.contextKind, expiresAt: row.expiresAt };
 }
 
 /** Normal authenticated Plex browser session supplies the account, never the connector. */
-export function prepareAccountLink(token: string, sessionId: string, userId: number) {
-  inspectAccountLink(token);
+export function prepareAccountLink(token: string, sessionId: string, userId: number, browserOrigin?: string) {
+  inspectAccountLink(token, browserOrigin);
   const code = randomBytes(32).toString("hex");
   return getDb().transaction((tx) => {
     const row = tx.select().from(schema.mcpLinkChallenges).where(eq(schema.mcpLinkChallenges.tokenHash, hash(token))).get();
     if (!row) throw invalid();
-    assertChallengeTrust(tx, row);
+    const principal = assertChallengeTrust(tx, row);
     const session = tx.select().from(schema.sessions).where(and(eq(schema.sessions.id, sessionId), eq(schema.sessions.userId, userId), gt(schema.sessions.expiresAt, new Date()))).get();
     const user = tx.select().from(schema.users).where(eq(schema.users.id, userId)).get();
     if (!session || !user?.plexId) throw new AccountLinkError("Sign in with Plex before linking", 403);
@@ -93,7 +108,7 @@ export function prepareAccountLink(token: string, sessionId: string, userId: num
       browserUserId: userId, browserPlexId: user.plexId, browserSessionHash: hash(sessionId), completionCodeHash: hash(code), browserPreparedAt: new Date(),
     }).where(eq(schema.mcpLinkChallenges.id, row.id)).run();
     recordServiceAudit(tx, row.principalId, userId, "link_browser_prepared", row.id);
-    return { completionCode: code, expiresAt: row.expiresAt };
+    return { completionCode: code, expiresAt: row.expiresAt, handoffUrl: whatsappVerificationUrl(linkHandoffConfig(principal).whatsappBotNumber, code) };
   }, { behavior: "immediate" });
 }
 

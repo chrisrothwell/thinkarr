@@ -4,6 +4,7 @@ import { z } from "zod";
 import { getDb, schema } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import type { ServiceMcpContext } from "./auth-context";
+import { publicLinkOriginSchema, whatsappBotNumberSchema } from "./link-handoff";
 
 export const SERVICE_TOKEN_PREFIX = "thk_svc_";
 // This build prepares identities only. No API/config switch enables delegation
@@ -18,11 +19,15 @@ const operations = z.array(z.enum(SERVICE_OPERATIONS)).max(SERVICE_OPERATIONS.le
 export const createIntegrationSchema = z.object({
   name: z.string().trim().min(1).max(100),
   allowedOperations: operations.default(["media_search", "media_details"]),
+  publicLinkOrigin: publicLinkOriginSchema.nullable().optional(),
+  whatsappBotNumber: whatsappBotNumberSchema.nullable().optional(),
 }).strict();
 export const updateIntegrationSchema = z.object({
   name: z.string().trim().min(1).max(100).optional(),
   allowedOperations: operations.optional(),
   enabled: z.boolean().optional(),
+  publicLinkOrigin: publicLinkOriginSchema.nullable().optional(),
+  whatsappBotNumber: whatsappBotNumberSchema.nullable().optional(),
 }).strict().refine((value) => Object.keys(value).length > 0, "No changes supplied");
 export const issueCredentialSchema = z.object({
   expiresInDays: z.number().int().min(1).max(365).default(90),
@@ -83,6 +88,7 @@ export function createIntegration(input: z.input<typeof createIntegrationSchema>
   const row = db.transaction((tx) => {
     const created = tx.insert(schema.mcpServicePrincipals).values({
       id: randomUUID(), name: value.name, allowedOperations: JSON.stringify(value.allowedOperations), createdByUserId: actorUserId,
+      publicLinkOrigin: value.publicLinkOrigin, whatsappBotNumber: value.whatsappBotNumber,
     }).returning().get();
     audit(tx, created.id, actorUserId, "principal_created");
     return created;
@@ -96,13 +102,22 @@ export function updateIntegration(id: string, input: z.input<typeof updateIntegr
   principalOrThrow(id);
   const db = getDb();
   db.transaction((tx) => {
+    const principal = tx.select().from(schema.mcpServicePrincipals).where(eq(schema.mcpServicePrincipals.id, id)).get()!;
     tx.update(schema.mcpServicePrincipals).set({
       ...(value.name !== undefined ? { name: value.name } : {}),
       ...(value.allowedOperations !== undefined ? { allowedOperations: JSON.stringify(value.allowedOperations) } : {}),
       ...(value.enabled !== undefined ? { enabled: false } : {}), updatedAt: new Date(),
+      ...(value.publicLinkOrigin !== undefined ? { publicLinkOrigin: value.publicLinkOrigin } : {}),
+      ...(value.whatsappBotNumber !== undefined ? { whatsappBotNumber: value.whatsappBotNumber } : {}),
     }).where(eq(schema.mcpServicePrincipals.id, id)).run();
+    if ((value.publicLinkOrigin !== undefined && value.publicLinkOrigin !== principal.publicLinkOrigin)
+      || (value.whatsappBotNumber !== undefined && value.whatsappBotNumber !== principal.whatsappBotNumber)) {
+      tx.update(schema.mcpLinkChallenges).set({ consumedAt: new Date() }).where(and(
+        eq(schema.mcpLinkChallenges.principalId, id), isNull(schema.mcpLinkChallenges.consumedAt),
+      )).run();
+    }
     audit(tx, id, actorUserId, value.enabled === false ? "principal_disabled" : "principal_updated");
-  });
+  }, { behavior: "immediate" });
   return getIntegration(id);
 }
 

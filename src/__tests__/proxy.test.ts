@@ -25,6 +25,15 @@ function makeRequest(path: string, opts: { cookie?: string; header?: Record<stri
 }
 
 describe("proxy middleware", () => {
+  it.each(["/mcp/connect", "/mcp/connect/"])("allows only the exact private-link landing page %s with privacy headers", (path) => {
+    const res = proxy(makeRequest(path));
+    expect(res.status).not.toBe(307);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("referrer-policy")).toBe("no-referrer");
+  });
+  it.each(["/mcp/connect/admin", "/mcp/connection", "/mcp/link"])("does not make sibling/prefix paths public: %s", (path) => {
+    expect(proxy(makeRequest(path)).status).toBe(307);
+  });
   it("allows /api/health without a session cookie", () => {
     const res = proxy(makeRequest("/api/health"));
     // NextResponse.next() has no Location header and no redirect status

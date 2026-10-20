@@ -23,7 +23,7 @@ import { completeAccountLink, initiateAccountLink } from "@/lib/mcp/account-link
 import { _resetRateLimits } from "@/lib/auth/rate-limit";
 
 function request(body: unknown) {
-  return new Request("http://localhost/api/mcp/account-links/inspect", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  return new Request("https://thinkarr.invalid/api/mcp/account-links/inspect", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 }
 function login(id: number, sessionId: string) {
   const user = db.select().from(schema.users).where(eq(schema.users.id, id)).get()!;
@@ -56,12 +56,20 @@ describe("browser account-link and ownership APIs", () => {
     if (challenge.linked) throw new Error();
     expect((await preparePOST(request({ token: challenge.token }))).status).toBe(403);
     login(f.userA, f.sessionA);
+    const wrongOrigin = request({ token: challenge.token }); wrongOrigin.headers.set("Origin", "https://another.invalid");
+    expect((await preparePOST(wrongOrigin)).status).toBe(403);
+    const wrongAccount = request({ token: challenge.token }); wrongAccount.headers.set("Thinkarr-Link-Expected-User", String(f.userB));
+    expect((await preparePOST(wrongAccount)).status).toBe(409);
+    expect(db.select().from(schema.mcpLinkChallenges).get()!.completionCodeHash).toBeNull();
     const plainText = request({ token: challenge.token }); plainText.headers.set("Content-Type", "text/plain");
     expect((await preparePOST(plainText)).status).toBe(400);
     expect((await preparePOST(request({ token: challenge.token, userId: f.userB }))).status).toBe(400);
     const response = await preparePOST(request({ token: challenge.token }));
     expect(response.status).toBe(200);
-    const code = (await response.json()).data.completionCode as string;
+    const prepared = (await response.json()).data;
+    expect(prepared).not.toHaveProperty("completionCode");
+    const code = new URL(prepared.handoffUrl).searchParams.get("text")!.replace("Link account ", "");
+    expect(new URL(prepared.handoffUrl).pathname).toBe("/15555550100");
     expect(code).toMatch(/^[a-f0-9]{64}$/);
     expect(db.select().from(schema.mcpActorBindings).all()).toHaveLength(0);
     completeAccountLink(await f.privateContext(code), code);
@@ -76,7 +84,8 @@ describe("browser account-link and ownership APIs", () => {
     const challenge = initiateAccountLink(await f.context());
     if (challenge.linked) throw new Error();
     login(f.userA, f.sessionA);
-    const code = (await (await preparePOST(request({ token: challenge.token }))).json()).data.completionCode as string;
+    const handoff = (await (await preparePOST(request({ token: challenge.token }))).json()).data.handoffUrl as string;
+    const code = new URL(handoff).searchParams.get("text")!.replace("Link account ", "");
     completeAccountLink(await f.privateContext(code), code);
     const id = db.select().from(schema.mcpActorBindings).get()!.id;
     login(f.userB, f.sessionB);

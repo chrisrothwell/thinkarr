@@ -12,9 +12,14 @@ test("administrator manages scoped integrations, one-time secrets and public ver
   await expect(page.getByText("Integrations can be prepared, but delegated tool access is not enabled in this build.")).toBeVisible();
   const integrationName = `E2E integration ${randomUUID().slice(0, 8)}`;
   await page.getByLabel("New integration name").fill(integrationName);
+  const detailLoaded = page.waitForResponse((response) => response.request().method() === "GET"
+    && /^\/api\/settings\/mcp-integrations\/[^/]+$/.test(new URL(response.url()).pathname));
   await page.getByRole("button", { name: "Create integration" }).click();
+  expect((await detailLoaded).ok()).toBe(true);
   await expect(page.getByLabel("Integration name", { exact: true })).toHaveValue(integrationName);
   await page.getByLabel("media_select", { exact: true }).check();
+  await page.getByLabel("Public linking origin", { exact: true }).fill("https://thinkarr.example.com");
+  await page.getByLabel("WhatsApp bot number", { exact: true }).fill("+15555550100");
   await page.getByRole("button", { name: "Save integration", exact: true }).click();
   await expect(page.getByRole("button", { name: "Save integration", exact: true })).toBeEnabled();
 
@@ -30,6 +35,8 @@ test("administrator manages scoped integrations, one-time secrets and public ver
   await page.getByRole("button", { name: "MCP", exact: true }).click();
   await page.getByRole("button", { name: integrationName, exact: true }).click();
   await expect(page.getByLabel("media_select", { exact: true })).toBeChecked();
+  await expect(page.getByLabel("Public linking origin", { exact: true })).toHaveValue("https://thinkarr.example.com");
+  await expect(page.getByLabel("WhatsApp bot number", { exact: true })).toHaveValue("15555550100");
   await expect(secret).toHaveCount(0);
   expect(await page.locator("input, textarea").evaluateAll((nodes, token) => nodes.some((node) => (node as HTMLInputElement).value === token), firstToken)).toBe(false);
   await page.getByRole("button", { name: /^Rotate credential/ }).click();
