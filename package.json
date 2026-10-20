@@ -26,9 +26,9 @@
     "drizzle-orm": "^0.45.4",
     "jose": "^6.2.12",
     "langfuse": "^3.39.2",
-    "lucide-react": "^1.47.0",
+    "lucide-react": "^1.58.0",
     "next": "16.4.2",
-    "openai": "^7.34.0",
+    "openai": "^7.36.0",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "react-markdown": "^10.1.0",
@@ -40,7 +40,7 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@playwright/test": "^1.63.0",
+    "@playwright/test": "^1.64.1",
     "@tailwindcss/postcss": "^4",
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^26.6.5",
