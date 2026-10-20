@@ -13,7 +13,8 @@ export async function delegatedLinkFixture(db: TestDb, adminId: number) {
   const credential = issueServiceCredential(principal.id, {}, adminId);
   const pair = generateKeyPairSync("ed25519");
   const key = registerServiceKey(principal.id, { issuer: "connector:test", keyId: "key-1", publicKeyPem: pair.publicKey.export({ type: "spki", format: "pem" }).toString() }, adminId);
-  const privateKey = await importPKCS8(pair.privateKey.export({ type: "pkcs8", format: "pem" }).toString(), "EdDSA");
+  const privateKeyPem = pair.privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+  const privateKey = await importPKCS8(privateKeyPem, "EdDSA");
   const userA = seedUser(db, { plexId: "plex-A", plexUsername: "same-display-name" });
   const userB = seedUser(db, { plexId: "plex-B", plexUsername: "same-display-name" });
   const sessionA = seedSession(db, userA);
@@ -41,5 +42,5 @@ export async function delegatedLinkFixture(db: TestDb, adminId: number) {
   async function privateContext(code: string, patch: Partial<DelegationClaims> = {}) {
     return context({ kind: "direct", conversation: "private-A", source: "message", intent: `link-confirm:${code}`, eventId: randomUUID(), eventTime: Date.now(), ...patch });
   }
-  return { principal, credential, key, userA, userB, sessionA, sessionB, context, privateContext, signedRequest };
+  return { principal, credential, key, privateKeyPem, userA, userB, sessionA, sessionB, context, privateContext, signedRequest };
 }
