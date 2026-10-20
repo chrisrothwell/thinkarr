@@ -12,7 +12,8 @@ function McpLinkContent() {
   const searchParams = useSearchParams();
   const token = searchParams.get("token") ?? "";
 
-  const [state, setState] = useState<PageState>("loading");
+  const [linkState, setState] = useState<PageState>("loading");
+  const state = token ? linkState : "expired";
   const [channelType, setChannelType] = useState("");
   const [error, setError] = useState("");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -27,7 +28,7 @@ function McpLinkContent() {
   useEffect(() => { return cleanup; }, [cleanup]);
 
   useEffect(() => {
-    if (!token) { setState("expired"); return; }
+    if (!token) return;
     fetch(`/api/mcp/link?token=${encodeURIComponent(token)}`)
       .then((r) => r.json())
       .then((d) => {
