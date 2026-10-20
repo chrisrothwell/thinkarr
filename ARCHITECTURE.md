@@ -26,7 +26,8 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 │   ├── 0000_short_gressill.sql      # Initial migration (5 tables)
 │   ├── 0001_add_message_duration.sql
 │   ├── 0002_mcp_channel_integration.sql  # mcp_channel_identities, mcp_registration_tokens, mcp_pending_baskets
-│   └── 0003_mcp_service_principals.sql  # Service identities, hashed credentials, verification keys, audit
+│   ├── 0003_mcp_service_principals.sql  # Service identities, hashed credentials, verification keys, audit
+│   └── 0004_mcp_delegation_replay.sql   # Durable HTTP nonce and provider-event replay claims
 ├── public/
 │   ├── manifest.json                # PWA web app manifest
 │   └── sw.js                        # Service worker (network-first)
@@ -104,6 +105,8 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
     │   │   ├── title-carousel.tsx   # Single card or snap-scroll carousel
     │   │   ├── tool-call.tsx        # Tool call display + expandable details
     │   │   └── voice-conversation.tsx  # 4-state voice loop (idle/listen/process/speak)
+    │   ├── settings/
+    │   │   └── mcp-integrations.tsx  # Administrator integration scope/credential/key management
     │   └── ui/                      # avatar, badge, button, card, input, label, spinner, tabs, textarea
     ├── hooks/
     │   ├── use-audio-level.ts       # Web Audio bars for visualizer
@@ -121,7 +124,7 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
     │   ├── db/
     │   │   ├── index.ts             # DB singleton + auto-migration
     │   │   ├── migrate.ts           # runMigrations standalone utility
-    │   │   └── schema.ts            # 12 tables
+    │   │   └── schema.ts            # 14 tables
     │   ├── llm/
     │   │   ├── client.ts            # OpenAI client factory (per-endpoint)
     │   │   ├── default-prompt.ts    # DEFAULT_SYSTEM_PROMPT + DEFAULT_REALTIME_SYSTEM_PROMPT
@@ -130,6 +133,7 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
     │   │   └── system-prompt.ts     # buildSystemPrompt() + buildRealtimeSystemPrompt()
     │   ├── mcp/
     │   │   ├── auth-context.ts      # Discriminated personal/service server-owned caller context
+    │   │   ├── delegation.ts        # JOSE assertion verification, stable audience and durable replay claims
     │   │   ├── integration-api.ts   # Admin-session authorization, rate limit and no-store responses
     │   │   └── service-principals.ts # Disabled principal/credential/key lifecycle and metadata-only audit
     │   ├── security/
@@ -181,6 +185,8 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 | `mcp_service_credentials` | `id`, `principalId` (FK), unique SHA-256 `tokenHash`, safe `prefix`, creator, creation/expiry/revocation/last-use timestamps |
 | `mcp_service_keys` | `id`, `principalId` (FK), `issuer`, `keyId`, Ed25519 `publicKeyPem`, creation/revocation; unique principal/issuer/key ID |
 | `mcp_service_audit` | `id`, `principalId` (FK), nullable human `actorUserId`, action, opaque target ID, creation time — no secrets or raw arguments |
+| `mcp_delegation_nonces` | `(principalId, issuer, nonce)` composite PK, expiry in Unix seconds including allowed clock skew; FK to service principal |
+| `mcp_delegation_events` | SHA-256 `eventHash` PK over principal/issuer/actor/context/provider event, principal FK, creation/expiry seconds; no raw sender/message/event identifiers |
 
 ---
 
@@ -196,6 +202,7 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 | `radarr.url` / `radarr.apiKey` | String | Radarr connection |
 | `overseerr.url` / `overseerr.apiKey` | String | Overseerr connection |
 | `mcp.bearerToken` | String | Global admin bearer token for external MCP access |
+| `mcp.delegationAudience` | String | Stable public instance UUID for delegated JWT audience; created conflict-safely on first administrator metadata read or verification |
 | `langfuse.secretKey` / `langfuse.publicKey` | String (encrypted) | Langfuse credentials (env vars take precedence) |
 | `langfuse.baseUrl` | String | Langfuse host (default: `https://cloud.langfuse.com`) |
 | `user.{id}.defaultModel` | String | Per-user default model |
@@ -238,9 +245,9 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 | POST | `/api/settings/mcp-token` | Regenerate global admin MCP token |
 | GET | `/api/settings/mcp-token/user/[userId]` | Get per-user MCP token (admin; user can self-access) |
 | POST | `/api/settings/mcp-token/user/[userId]` | Regenerate per-user MCP token |
-| GET | `/api/settings/mcp-integrations` | List integrations, curated operation names and delegated-access availability (admin session) |
+| GET | `/api/settings/mcp-integrations` | List integrations, curated operation names, stable delegation audience and delegated-access availability (admin session) |
 | POST | `/api/settings/mcp-integrations` | Create a disabled service principal (admin session) |
-| GET | `/api/settings/mcp-integrations/[id]` | Get safe principal/credential/public-key metadata (admin session) |
+| GET | `/api/settings/mcp-integrations/[id]` | Get safe principal/credential/public-key metadata and latest 20 audit records (admin session) |
 | PATCH | `/api/settings/mcp-integrations/[id]` | Update name/operation allowlist or disable; enabling is rejected in this build |
 | POST | `/api/settings/mcp-integrations/[id]/credentials` | Issue or rotate a credential; return secret only here with no-store |
 | DELETE | `/api/settings/mcp-integrations/[id]/credentials/[credentialId]` | Revoke an individual credential (admin session) |
@@ -306,7 +313,7 @@ Stored at `/config/thinkarr.db`, auto-migrated on first connection. Zero externa
 Tools defined with Zod schemas, converted to JSON Schema → OpenAI function format at runtime. Single source of truth: same registry serves both the in-process chat engine and the external `/api/mcp` endpoint. Auto-initialized based on which services are configured. `executeTool` accepts an optional server-owned authentication context passed separately to handlers; existing in-process callers remain compatible. External personal MCP calls pass their authenticated permission/user identity; model arguments cannot replace it. Service contexts are rejected until delegated execution is implemented.
 
 ### Administrator-Managed Disabled MCP Integrations
-Service principals are separate from Plex-authenticated users. An administrator web session is required for every management API; bearer credentials never authorize management. Principals start disabled, operation lists contain only explicit curated media/link names, and activation requests return 409. The APIs prepare identity/credential metadata only; assertion verification, trusted linking, facade execution and integration settings UI are not implemented here.
+Service principals are separate from Plex-authenticated users. An administrator web session is required for every management API; bearer credentials never authorize management. Principals start disabled, operation lists contain only explicit curated media/link names, and activation requests return 409. Settings → MCP includes an administrator-only Service integrations panel for name/scope, credential issuance/rotation/revocation, issuer/public-key registration/revocation, audience copy and recent activity. A newly issued secret lives only in component memory and disappears on dismissal, tab exit or reload; retrieval contains safe metadata only. Trusted linking and facade execution are not implemented, so the panel explicitly shows that delegated tool access is unavailable.
 
 High-entropy bearer secrets are returned once, stored only as indexed SHA-256 digests and never included in list/detail/audit/log output. Credentials have a 90-day default lifetime (1–365 days configurable), individual revocation, and explicit rotation. Immediate replacement is the default; optional overlap is bounded to 60 minutes and cannot extend the old expiry. At most two active credentials can coexist during overlap. Verification keys are independently registered Ed25519 public keys; key IDs cannot be reused and at most four non-revoked keys can coexist. Registration never accepts a private key or fetches a remote key URL.
 
@@ -317,6 +324,15 @@ Chat and realtime event callbacks read current conversation/options/connection v
 
 ### Dependency Audit Scope
 The lockfile is the deployment dependency contract. The CI production audit blocks on every severity and updates must use fixed compatible dependency versions without bypassing the gate. Development-only findings are reported separately. CI uses Node 22 and the Docker image uses Node 26; runtime dependencies must support both.
+
+### Delegation Verification and Two Independent Replay Boundaries
+`src/lib/mcp/delegation.ts` uses the maintained `jose` library to verify the compact Ed25519 JWS profile. It pins algorithm/type, registered principal/issuer/key ID, stable instance audience, strict versioned source/identity/intent claims and a maximum 60-second assertion lifetime with five seconds of clock tolerance. HTTP method, exact encoded path/query and SHA-256 of the original body bytes must match. It does not accept inline or remote verification keys, user-selected beneficiary fields or proxy-derived audiences.
+
+After asynchronous cryptographic verification, an immediate SQLite transaction rechecks current principal/credential/key state and current operation policy before consuming the HTTP nonce. Nonce rows survive process restarts and retain replay protection through the full allowed clock-skew interval. The returned frozen service context carries verified opaque actor/conversation claims; it does not resolve a Plex/Thinkarr user or independently authorize a tool.
+
+Provider-event deduplication is separate from HTTP nonce replay. A valid message-source context can claim an event hash scoped to issuer/principal/channel account/sender/context kind/conversation. The helper rechecks service/key/credential status and assertion expiry, accepts provider events at most 15 minutes old (plus five seconds skew), and rejects a fresh HTTP assertion reusing an already-consumed event. Event claims can join the business transaction so a rollback does not discard an unsubmitted confirmation. Expired replay records are pruned on claim; event time bounds prevent old events becoming usable after retention expiry.
+
+The verifier is a tested foundation, not an activation path. `/api/mcp` and the registry retain their unconditional disabled service gate until trusted account bindings, source-aware tool authorization and the safe media facade are implemented. Personal MCP access does not require these assertions.
 
 ### Orphaned Tool Call Repair
 If the server crashes between saving an assistant message with `tool_calls` and saving the tool results, the LLM rejects the conversation on next load. `loadHistory()` in the orchestrator detects orphaned `tool_call_ids` and injects synthetic error tool messages so the conversation is always recoverable.

@@ -75,5 +75,13 @@ export default defineConfig({
         storageState: ADMIN_AUTH_FILE,
       },
     },
+    {
+      name: "mcp-integrations",
+      testMatch: /mcp-integrations\.spec\.ts/,
+      use: {
+        ...devices["Desktop Chrome"],
+        storageState: ADMIN_AUTH_FILE,
+      },
+    },
   ],
 });

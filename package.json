@@ -24,6 +24,7 @@
     "better-sqlite3": "^13.0.3",
     "clsx": "^2.1.1",
     "drizzle-orm": "^0.45.2",
+    "jose": "^6.2.12",
     "langfuse": "^3.39.2",
     "lucide-react": "^1.47.0",
     "next": "16.4.2",
