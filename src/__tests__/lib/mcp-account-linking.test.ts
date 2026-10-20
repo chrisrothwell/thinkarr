@@ -11,7 +11,7 @@ let sqlite: Database.Database;
 let adminId: number;
 vi.mock("@/lib/db", () => ({ getDb: () => db, schema }));
 import { completeAccountLink, initiateAccountLink, inspectAccountLink, LINK_CHALLENGE_TTL_MS, listAccountBindings, prepareAccountLink, resolveServiceActor, revokeAccountBinding } from "@/lib/mcp/account-linking";
-import { revokeServiceCredential, revokeServiceKey } from "@/lib/mcp/service-principals";
+import { revokeServiceCredential, revokeServiceKey, updateIntegration } from "@/lib/mcp/service-principals";
 
 beforeEach(() => {
   ({ db, sqlite } = createTestDb());
@@ -31,6 +31,28 @@ async function pending() {
 }
 
 describe("trusted actor linking", () => {
+  it("builds a configured fragment-only private address and invalidates pending links when handoff settings change", async () => {
+    const f = await pending();
+    const url = new URL(f.challenge.privateLinkUrl);
+    expect(url.origin).toBe("https://thinkarr.invalid");
+    expect(url.search).toBe("");
+    expect(url.hash).toBe(`#token=${f.challenge.token}`);
+    updateIntegration(f.principal.id, { publicLinkOrigin: "https://thinkarr.invalid/", whatsappBotNumber: "+15555550100" }, adminId);
+    expect(() => inspectAccountLink(f.challenge.token)).not.toThrow();
+    updateIntegration(f.principal.id, { whatsappBotNumber: "15555550101" }, adminId);
+    updateIntegration(f.principal.id, { whatsappBotNumber: "15555550100" }, adminId);
+    expect(() => inspectAccountLink(f.challenge.token)).toThrow();
+    expect(() => prepareAccountLink(f.challenge.token, f.sessionA, f.userA)).toThrow();
+  });
+
+  it("does not accept caller-host destinations, missing configuration or a changed configuration fingerprint", async () => {
+    const f = await pending();
+    expect(() => inspectAccountLink(f.challenge.token, "https://caller-controlled.invalid")).toThrow(/original Thinkarr address/);
+    db.update(schema.mcpServicePrincipals).set({ whatsappBotNumber: "15555550101" }).where(eq(schema.mcpServicePrincipals.id, f.principal.id)).run();
+    expect(() => inspectAccountLink(f.challenge.token)).toThrow();
+    db.update(schema.mcpServicePrincipals).set({ publicLinkOrigin: null }).where(eq(schema.mcpServicePrincipals.id, f.principal.id)).run();
+    expect(() => initiateAccountLink(f.origin)).toThrow(/Configure/);
+  });
   it("keeps challenge/code secrets and raw channel identity out of storage/logs and waits for private sender proof", async () => {
     const f = await pending();
     expect(inspectAccountLink(f.challenge.token)).toMatchObject({ integrationName: "Group assistant", channel: "whatsapp", contextKind: "group" });

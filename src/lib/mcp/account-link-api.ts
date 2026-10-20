@@ -7,6 +7,9 @@ import { AccountLinkError } from "./account-linking";
 
 const headers = { "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" };
 const tokenSchema = z.object({ token: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+export function accountLinkBrowserOrigin(request: Request): string {
+  return request.headers.get("origin") ?? new URL(request.url).origin;
+}
 export async function accountLinkToken(request: Request): Promise<string> {
   if (request.headers.get("content-type")?.split(";")[0].trim().toLowerCase() !== "application/json") {
     throw new AccountLinkError("Account-link requests require JSON", 400);
