@@ -47,7 +47,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/uuid": "^11.0.0",
-    "@vitest/coverage-v8": "^4.1.10",
+    "@vitest/coverage-v8": "^5.0.5",
     "drizzle-kit": "^0.31.10",
     "eslint": "^10",
     "eslint-config-next": "16.4.2",
@@ -55,7 +55,7 @@
     "typescript": "^6.0.3",
     "vite": "^8.3.4",
     "vite-tsconfig-paths": "^6.1.1",
-    "vitest": "^4.1.0"
+    "vitest": "^5.0.5"
   },
   "overrides": {
     "flatted": ">=3.4.2",
