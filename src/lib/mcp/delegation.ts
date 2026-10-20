@@ -90,6 +90,14 @@ function requireActive(db: ReadStore, caller: ServiceMcpContext, keyId: string, 
   return { ...row, allowedOperations };
 }
 
+/** Recheck a retained verified context inside the caller's final transaction. */
+export function requireCurrentDelegation(context: VerifiedServiceMcpContext, transaction?: ReadStore) {
+  if (context[verified] !== true || context.delegation.exp + DELEGATION_CLOCK_SKEW_SECONDS <= Math.floor(Date.now() / 1000)) {
+    throw new DelegationError("INVALID_ASSERTION");
+  }
+  return requireActive(transaction ?? getDb(), context, context.verificationKeyId, new Date());
+}
+
 /** Verify authenticated metadata and durably consume this HTTP request's nonce.
  * This does not resolve a human binding or authorize a media operation.
  */

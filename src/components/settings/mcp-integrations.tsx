@@ -20,6 +20,7 @@ interface VerificationKey {
 interface Detail extends Integration {
   credentials: Credential[]; keys: VerificationKey[];
   audit: { id: string; action: string; createdAt: string; actorUserId: number | null }[];
+  bindings: { id: string; userId: number; channel: string; contextKind: string; revokedAt: string | null }[];
 }
 interface Catalog {
   integrations: Integration[]; availableOperations: string[];
@@ -205,8 +206,19 @@ export function McpIntegrations() {
           </form>
 
           <div className="space-y-2">
+            <h4 className="font-medium">Linked participants</h4>
+            {detail.bindings.length === 0 && <p className="text-xs text-muted-foreground">No verified participant links yet.</p>}
+            {detail.bindings.map((binding) => <div key={binding.id} className="flex items-center justify-between gap-2 rounded border p-2 text-sm">
+              <span>User {binding.userId} · {binding.channel} {binding.contextKind} · {binding.revokedAt ? "Revoked" : "Linked"}</span>
+              <Button variant="ghost" size="sm" disabled={busy || !!binding.revokedAt} aria-label={`Revoke participant link ${binding.id}`} onClick={() => void run(async () => {
+                await api(`${base}/${detail.id}/bindings/${binding.id}`, "DELETE"); await loadDetail(detail.id, false);
+              })}>Revoke link</Button>
+            </div>)}
+          </div>
+
+          <div className="space-y-2">
             <h4 className="font-medium">Recent integration activity</h4>
-            <ul className="space-y-1 text-xs text-muted-foreground">{detail.audit.map((event) => <li key={event.id}>{date(event.createdAt)} — {event.action} — {event.actorUserId === null ? "service caller" : `administrator ${event.actorUserId}`}</li>)}</ul>
+            <ul className="space-y-1 text-xs text-muted-foreground">{detail.audit.map((event) => <li key={event.id}>{date(event.createdAt)} — {event.action} — {event.actorUserId === null ? "service caller" : `Thinkarr user ${event.actorUserId}`}</li>)}</ul>
           </div>
         </div>}
       </CardContent>

@@ -134,6 +134,49 @@ export const mcpDelegationEvents = sqliteTable("mcp_delegation_events", {
   expiresAt: integer("expires_at").notNull(),
 }, (t) => [index("mcp_delegation_events_expiry_idx").on(t.expiresAt)]);
 
+// Trusted bindings are separate from legacy unsigned-header identities.
+export const mcpActorBindings = sqliteTable("mcp_actor_bindings", {
+  id: text("id").primaryKey(),
+  principalId: text("principal_id").notNull().references(() => mcpServicePrincipals.id, { onDelete: "cascade" }),
+  actorHash: text("actor_hash").notNull(),
+  contextHash: text("context_hash").notNull(),
+  channel: text("channel").notNull(),
+  contextKind: text("context_kind", { enum: ["direct", "group"] }).notNull(),
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  plexId: text("plex_id").notNull(),
+  version: integer("version").notNull().default(1),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().$defaultFn(() => new Date()),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull().$defaultFn(() => new Date()),
+  revokedAt: integer("revoked_at", { mode: "timestamp_ms" }),
+}, (t) => [
+  uniqueIndex("mcp_actor_bindings_scope_unique").on(t.principalId, t.actorHash, t.contextHash),
+  index("mcp_actor_bindings_user_idx").on(t.userId),
+]);
+
+export const mcpLinkChallenges = sqliteTable("mcp_link_challenges", {
+  id: text("id").primaryKey(),
+  principalId: text("principal_id").notNull().references(() => mcpServicePrincipals.id, { onDelete: "cascade" }),
+  credentialId: text("credential_id").notNull().references(() => mcpServiceCredentials.id, { onDelete: "cascade" }),
+  verificationKeyId: text("verification_key_id").notNull().references(() => mcpServiceKeys.id, { onDelete: "cascade" }),
+  tokenHash: text("token_hash").notNull(),
+  actorHash: text("actor_hash").notNull(),
+  contextHash: text("context_hash").notNull(),
+  channel: text("channel").notNull(),
+  contextKind: text("context_kind", { enum: ["direct", "group"] }).notNull(),
+  browserUserId: integer("browser_user_id").references(() => users.id, { onDelete: "cascade" }),
+  browserPlexId: text("browser_plex_id"),
+  browserSessionHash: text("browser_session_hash"),
+  completionCodeHash: text("completion_code_hash"),
+  browserPreparedAt: integer("browser_prepared_at", { mode: "timestamp_ms" }),
+  consumedAt: integer("consumed_at", { mode: "timestamp_ms" }),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().$defaultFn(() => new Date()),
+  expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+}, (t) => [
+  uniqueIndex("mcp_link_challenges_token_unique").on(t.tokenHash),
+  uniqueIndex("mcp_link_challenges_code_unique").on(t.completionCodeHash),
+  index("mcp_link_challenges_scope_idx").on(t.principalId, t.actorHash, t.contextHash),
+]);
+
 export const messages = sqliteTable("messages", {
   id: text("id").primaryKey(),
   conversationId: text("conversation_id")
