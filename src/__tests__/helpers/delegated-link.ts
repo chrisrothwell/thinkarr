@@ -18,20 +18,28 @@ export async function delegatedLinkFixture(db: TestDb, adminId: number) {
   const userB = seedUser(db, { plexId: "plex-B", plexUsername: "same-display-name" });
   const sessionA = seedSession(db, userA);
   const sessionB = seedSession(db, userB);
-  async function context(patch: Partial<DelegationClaims> = {}) {
+  async function signedRequest(envelope: unknown, patch: Partial<DelegationClaims> = {}, target = "/api/mcp") {
     const now = Math.floor(Date.now() / 1000);
-    const body = new TextEncoder().encode("{}");
+    const raw = typeof envelope === "string" ? envelope : JSON.stringify(envelope);
+    const body = new TextEncoder().encode(raw);
     const claims: DelegationClaims = {
       v: 1, iss: key.issuer, aud: getDelegationAudience(), service: principal.id,
       channel: "whatsapp", account: "account-A", sender: "sender-A", kind: "group", conversation: "group-A",
-      source: "tool", iat: now, exp: now + 60, jti: randomUUID(), method: "POST", target: "/api/mcp",
+      source: "tool", iat: now, exp: now + 60, jti: randomUUID(), method: "POST", target,
       bodyHash: createHash("sha256").update(body).digest("hex"), ...patch,
     };
     const token = await new SignJWT(claims).setProtectedHeader({ alg: "EdDSA", typ: "thinkarr-delegation+jwt", kid: key.keyId }).sign(privateKey);
-    return verifyDelegatedRequest(new Request("https://thinkarr.invalid/api/mcp", { method: "POST", headers: { "Thinkarr-Delegation": token } }), body, authenticateServiceMcpToken(credential.token)!);
+    return new Request(`https://thinkarr.invalid${target}`, {
+      method: "POST", body: raw,
+      headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", Authorization: `Bearer ${credential.token}`, "Thinkarr-Delegation": token },
+    });
+  }
+  async function context(patch: Partial<DelegationClaims> = {}) {
+    const request = await signedRequest("{}", patch);
+    return verifyDelegatedRequest(request, new TextEncoder().encode("{}"), authenticateServiceMcpToken(credential.token)!);
   }
   async function privateContext(code: string, patch: Partial<DelegationClaims> = {}) {
     return context({ kind: "direct", conversation: "private-A", source: "message", intent: `link-confirm:${code}`, eventId: randomUUID(), eventTime: Date.now(), ...patch });
   }
-  return { principal, credential, key, userA, userB, sessionA, sessionB, context, privateContext };
+  return { principal, credential, key, userA, userB, sessionA, sessionB, context, privateContext, signedRequest };
 }

@@ -23,6 +23,7 @@ import * as overseerr from "@/lib/services/overseerr";
 import type { DisplayTitle } from "@/types/titles";
 import type { McpExecutionContext, PersonalMcpContext, ServiceMcpContext } from "@/lib/mcp/auth-context";
 import { authenticateServiceMcpToken, isServiceMcpToken, recordServiceMcpDenial } from "@/lib/mcp/service-principals";
+import { handleServiceLinkPost } from "@/lib/mcp/link-dispatch";
 
 type McpPermission = "admin" | "user";
 
@@ -416,7 +417,10 @@ export async function POST(request: Request) {
       { status: 401 },
     );
   }
-  if (baseAuth.kind === "service") return serviceAccessUnavailable(baseAuth);
+  if (baseAuth.kind === "service") {
+    if (!baseAuth.enabled) return serviceAccessUnavailable(baseAuth);
+    return handleServiceLinkPost(request, baseAuth);
+  }
 
   initializeTools();
 
