@@ -12,6 +12,7 @@ vi.mock("@/lib/db", () => ({ getDb: () => db, schema }));
 import { setConfig } from "@/lib/config";
 import { completeAccountLink, initiateAccountLink, prepareAccountLink, resolveServiceActor, revokeAccountBinding } from "@/lib/mcp/account-linking";
 import { createDelegatedMediaAccess, type RequestEligibilitySelection } from "@/lib/mcp/media-access";
+import type { LibraryDetailsInput, LibrarySearchInput } from "@/lib/mcp/media-library";
 import { revokeServiceCredential, revokeServiceKey } from "@/lib/mcp/service-principals";
 import { logger } from "@/lib/logger";
 
@@ -27,6 +28,7 @@ afterEach(() => { sqlite.close(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.
 
 async function fixture() {
   const f = await delegatedLinkFixture(db, adminId);
+  db.update(schema.mcpServicePrincipals).set({ allowedOperations: JSON.stringify(["account_link_start", "account_link_confirm", "media_search", "media_details"]) }).where(eq(schema.mcpServicePrincipals.id, f.principal.id)).run();
   db.update(schema.users).set({ plexId: "101", plexToken: "account-A" }).where(eq(schema.users.id, f.userA)).run();
   db.update(schema.users).set({ plexId: "202", plexToken: "account-B" }).where(eq(schema.users.id, f.userB)).run();
   async function bind(which: "A" | "B" = "A", conversation = "group-A") {
@@ -52,6 +54,14 @@ async function fixture() {
     sections: { MediaContainer: { Directory: [{ key: "11", type: "movie", title: "actor-only-library" }, { key: "12", type: "show" }, { key: "13", type: "artist" }] } },
     accountId: 101,
     machineId: "configured-server",
+    items: [{ ratingKey: "42", librarySectionID: "11", type: "movie", title: "Actor-visible movie", year: 2024,
+      summary: "A catalog synopsis.", rating: 8.1, Genre: [{ tag: "Drama", private: "SECRET" }],
+      Role: [{ tag: "An Actor", thumb: "https://secret.invalid/token", email: "SECRET" }],
+      viewedLeafCount: 9, lastViewedAt: 123, viewCount: 4, addedAt: 123, userRating: 2,
+      Media: [{ Part: [{ file: "/SECRET.mkv", key: "/secret?X-Plex-Token=SECRET" }] }],
+      requestedBy: { email: "SECRET", displayName: "SECRET" }, requests: [{ requestedBy: { id: 999 } }],
+      thumb: "/SECRET?X-Plex-Token=SECRET", account: { token: "SECRET" },
+    }] as Record<string, unknown>[],
     afterResponse: undefined as ((url: URL) => void) | undefined,
     transform: undefined as ((url: URL, value: unknown) => unknown) | undefined,
   };
@@ -69,6 +79,15 @@ async function fixture() {
       expect(headers.get("X-Plex-Token")).toBe("restricted-server-A");
       if (url.pathname === "/identity") value = { MediaContainer: { machineIdentifier: state.machineId } };
       else if (url.pathname === "/library/sections") value = state.sections;
+      else if (/^\/library\/sections\/\d+\/all$/.test(url.pathname)) {
+        const sectionId = url.pathname.split("/")[3];
+        const entries = state.items.filter((item) => item.librarySectionID === sectionId && String(item.title).includes(url.searchParams.get("title") ?? ""));
+        value = { MediaContainer: { size: Math.min(entries.length, 21), totalSize: entries.length, librarySectionID: sectionId, Metadata: entries.slice(0, 21) } };
+      }
+      else if (/^\/library\/metadata\/\d+$/.test(url.pathname)) {
+        const entries = state.items.filter((item) => item.ratingKey === url.pathname.split("/").at(-1));
+        value = { MediaContainer: { size: entries.length, Metadata: entries } };
+      }
       else throw new Error("Unexpected Plex path");
     } else if (url.origin === "http://seerr.internal:5055") {
       expect(headers.get("X-Api-Key")).toBe("directory-key");
@@ -92,6 +111,152 @@ async function fixture() {
 }
 
 describe("delegated media downstream identity/preflight", () => {
+  it("projects actor library search and details to exact group-safe catalog facts, stripping nested private fields", async () => {
+    const h = await fixture();
+    vi.mocked(logger.info).mockClear();
+    const expected = { itemId: "42", mediaType: "movie", title: "Actor-visible movie", year: 2024,
+      synopsis: "A catalog synopsis.", rating: 8.1, genres: ["Drama"], cast: ["An Actor"], availability: "available" };
+    expect(await h.access().searchLibrary({ query: "Actor" })).toEqual({ items: [expected], truncated: false });
+    const details = await createDelegatedMediaAccess(h.context, "media_details").libraryDetails({ itemId: "42" });
+    expect(details).toEqual(expected);
+    expect(JSON.stringify(details)).not.toMatch(/SECRET|viewed|request|thumb|token|account|added|userRating/i);
+    expect(logger.info).not.toHaveBeenCalled(); expect(logger.warn).not.toHaveBeenCalled(); expect(logger.error).not.toHaveBeenCalled();
+    expect(h.fetchRequest.mock.calls.every(([url]) => !String(url).includes("seerr"))).toBe(true);
+  });
+
+  it("limits search by media type and escapes query data without accepting paths or HTTP parameters", async () => {
+    const h = await fixture(); const query = "x&X-Plex-Token=bad#/../?";
+    expect(await h.access().searchLibrary({ query, mediaType: "tv" })).toEqual({ items: [], truncated: false });
+    const calls = h.fetchRequest.mock.calls.map(([url]) => new URL(String(url)));
+    const last = calls.at(-1)!;
+    expect(last.pathname).toBe("/library/sections/12/all");
+    expect(last.searchParams.get("title")).toBe(query); expect(last.searchParams.get("type")).toBe("2");
+    expect(last.searchParams.get("X-Plex-Token")).toBeNull();
+    expect(last.searchParams.get("X-Plex-Container-Start")).toBe("0");
+    expect(last.searchParams.get("X-Plex-Container-Size")).toBe("21");
+  });
+
+  it.each([{ query: "" }, { query: "x".repeat(161) }, { query: "x", userId: 1 }, { query: "x", librarySectionId: "99" }, { query: "x", mediaType: "episode" }])("rejects search identity/section overrides and invalid query %j", async (input) => {
+    const h = await fixture();
+    await expect(h.access().searchLibrary(input as LibrarySearchInput)).rejects.toMatchObject({ code: "INVALID_QUERY" });
+    expect(h.fetchRequest).not.toHaveBeenCalled();
+  });
+
+  it.each(["../42", "42?X-Plex-Token=bad", "https://secret.invalid", "0", "42/children"])("rejects nonnumeric detail handle %s before HTTP", async (itemId) => {
+    const h = await fixture();
+    await expect(createDelegatedMediaAccess(h.context, "media_details").libraryDetails({ itemId })).rejects.toMatchObject({ code: "INVALID_QUERY" });
+    expect(h.fetchRequest).not.toHaveBeenCalled();
+  });
+
+  it("denies detail beneficiary arguments and mismatched operation capabilities", async () => {
+    const h = await fixture();
+    await expect(createDelegatedMediaAccess(h.context, "media_details").libraryDetails({ itemId: "42", userId: 1 } as LibraryDetailsInput)).rejects.toMatchObject({ code: "INVALID_QUERY" });
+    await expect(h.access().libraryDetails({ itemId: "42" })).rejects.toMatchObject({ code: "ACTOR_UNAVAILABLE" });
+    await expect(createDelegatedMediaAccess(h.context, "media_details").searchLibrary({ query: "Actor" })).rejects.toMatchObject({ code: "ACTOR_UNAVAILABLE" });
+    expect(h.fetchRequest).not.toHaveBeenCalled();
+  });
+
+  it("returns empty actor search without shares and refuses details before server access", async () => {
+    const h = await fixture(); h.state.resources = [];
+    expect(await h.access().searchLibrary({ query: "Actor" })).toEqual({ items: [], truncated: false });
+    await expect(createDelegatedMediaAccess(h.context, "media_details").libraryDetails({ itemId: "42" })).rejects.toMatchObject({ code: "ITEM_UNAVAILABLE" });
+    expect(h.fetchRequest.mock.calls.every(([url]) => new URL(String(url)).origin === "https://plex.invalid")).toBe(true);
+  });
+
+  it("requires independently actor-filtered listing membership even if guessed direct metadata returns a restricted item", async () => {
+    const h = await fixture();
+    h.state.transform = (url, value) => url.pathname.endsWith("/all") ? { MediaContainer: { size: 0 } } : value;
+    await expect(createDelegatedMediaAccess(h.context, "media_details").libraryDetails({ itemId: "42" })).rejects.toMatchObject({ code: "ITEM_UNAVAILABLE" });
+    expect(h.fetchRequest.mock.calls.map(([url]) => new URL(String(url)).pathname).slice(-2)).toEqual(["/library/metadata/42", "/library/sections/11/all"]);
+  });
+
+  it.each(["hidden-section", "wrong-id", "wrong-type", "missing-section"])("denies direct details with %s without disclosing catalog facts", async (mode) => {
+    const h = await fixture();
+    h.state.transform = (url, value) => url.pathname !== "/library/metadata/42" ? value : { MediaContainer: { size: 1, Metadata: [{ ...h.state.items[0],
+      ratingKey: mode === "wrong-id" ? "99" : "42", type: mode === "wrong-type" ? "show" : "movie",
+      librarySectionID: mode === "hidden-section" ? "99" : mode === "missing-section" ? undefined : "11",
+    }] } };
+    await expect(createDelegatedMediaAccess(h.context, "media_details").libraryDetails({ itemId: "42" })).rejects.toMatchObject({ code: "ITEM_UNAVAILABLE" });
+    expect(h.fetchRequest).toHaveBeenCalledTimes(5);
+  });
+
+  it("supports section IDs at the container boundary without demanding redundant per-item fields", async () => {
+    const h = await fixture();
+    h.state.transform = (url, value) => {
+      if (!url.pathname.includes("/metadata/") && !url.pathname.endsWith("/all")) return value;
+      return { MediaContainer: { size: 1, librarySectionID: "11", Metadata: [{ ...h.state.items[0], librarySectionID: undefined }] } };
+    };
+    expect((await createDelegatedMediaAccess(h.context, "media_details").libraryDetails({ itemId: "42" })).itemId).toBe("42");
+  });
+
+  it("bounds search output and reports truncation without loading later pages", async () => {
+    const h = await fixture();
+    h.state.items = Array.from({ length: 50 }, (_, i) => ({ ...h.state.items[0], ratingKey: String(i + 1), title: `Actor ${i}` }));
+    const result = await h.access().searchLibrary({ query: "Actor", mediaType: "movie" });
+    expect(result.items).toHaveLength(20); expect(result.truncated).toBe(true);
+    expect(h.fetchRequest).toHaveBeenCalledTimes(5);
+  });
+
+  it.each(["section", "type", "size", "duplicate", "oversized", "nested", "rating", "offset"])("rejects malformed or out-of-bound catalog %s", async (mode) => {
+    const h = await fixture();
+    h.state.transform = (url, value) => {
+      if (!url.pathname.endsWith("/all")) return value;
+      const entry = { ...h.state.items[0], librarySectionID: mode === "section" ? "99" : "11", type: mode === "type" ? "episode" : "movie",
+        Role: mode === "nested" ? [{ tag: { email: "SECRET" } }] : [], rating: mode === "rating" ? 999 : 8 };
+      const entries = mode === "oversized" ? Array.from({ length: 22 }, () => entry) : mode === "duplicate" ? [entry, entry] : [entry];
+      return { MediaContainer: { size: mode === "size" ? 99 : entries.length, offset: mode === "offset" ? 1 : 0, Metadata: entries } };
+    };
+    await expect(h.access().searchLibrary({ query: "Actor", mediaType: "movie" })).rejects.toMatchObject({ code: "INVALID_DOWNSTREAM_RESPONSE" });
+  });
+
+  it("rechecks actor revocation after final catalog body and on retained capabilities", async () => {
+    const h = await fixture(); const access = createDelegatedMediaAccess(h.context, "media_details");
+    h.state.afterResponse = (url) => { if (url.pathname.endsWith("/all")) revokeAccountBinding(resolveServiceActor(h.context).bindingId, h.f.userA); };
+    await expect(access.libraryDetails({ itemId: "42" })).rejects.toMatchObject({ code: "ACTOR_UNAVAILABLE" });
+    await expect(access.libraryDetails({ itemId: "42" })).rejects.toMatchObject({ code: "ACTOR_UNAVAILABLE" });
+    expect(h.fetchRequest).toHaveBeenCalledTimes(6);
+  });
+
+  it("sanitizes detail upstream failures without a broader catalog or administrator fallback", async () => {
+    const h = await fixture(); const original = h.fetchRequest.getMockImplementation()!;
+    h.fetchRequest.mockImplementation((url, init) => String(url).includes("/metadata/")
+      ? Promise.reject(new Error("SECRET account-A file /secret.mkv")) : original(url, init));
+    const result = createDelegatedMediaAccess(h.context, "media_details").libraryDetails({ itemId: "42" });
+    await expect(result).rejects.toThrow("Delegated media access could not be verified.");
+    expect(h.fetchRequest).toHaveBeenCalledTimes(5);
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it("isolates concurrent catalog reads and rejects another participant's guessed item handle", async () => {
+    const h = await fixture(); const contextB = await h.bind("B");
+    const movieB = { ratingKey: "84", librarySectionID: "22", type: "movie", title: "Actor B movie" };
+    h.state.items.push(movieB);
+    const original = h.fetchRequest.getMockImplementation()!;
+    h.fetchRequest.mockImplementation(async (input, init) => {
+      const url = new URL(String(input)); const token = new Headers(init?.headers).get("X-Plex-Token");
+      await Promise.resolve();
+      if (token === "account-B" && url.pathname === "/api/v2/user") return Response.json({ id: 202 });
+      if (token === "account-B" && url.pathname === "/api/v2/resources") return Response.json([{ clientIdentifier: "configured-server", provides: "server", accessToken: "restricted-server-B" }]);
+      if (token === "restricted-server-B") {
+        if (url.pathname === "/identity") return Response.json({ MediaContainer: { machineIdentifier: "configured-server" } });
+        if (url.pathname === "/library/sections") return Response.json({ MediaContainer: { Directory: [{ key: "22", type: "movie" }] } });
+        if (url.pathname === "/library/sections/22/all" || url.pathname === "/library/metadata/84") return Response.json({ MediaContainer: { size: 1, Metadata: [movieB] } });
+        if (url.pathname === "/library/metadata/42") return Response.json({ MediaContainer: { size: 1, Metadata: [h.state.items[0]] } });
+        throw new Error("Unexpected actor B endpoint");
+      }
+      return original(input, init);
+    });
+    const [a, b, aDetail, bDetail] = await Promise.all([
+      h.access().searchLibrary({ query: "Actor" }), createDelegatedMediaAccess(contextB, "media_search").searchLibrary({ query: "Actor" }),
+      createDelegatedMediaAccess(h.context, "media_details").libraryDetails({ itemId: "42" }),
+      createDelegatedMediaAccess(contextB, "media_details").libraryDetails({ itemId: "84" }),
+    ]);
+    expect(a.items.map((item) => item.itemId)).toEqual(["42"]); expect(b.items.map((item) => item.itemId)).toEqual(["84"]);
+    expect(aDetail.title).toBe("Actor-visible movie"); expect(bDetail.title).toBe("Actor B movie");
+    await expect(createDelegatedMediaAccess(h.context, "media_details").libraryDetails({ itemId: "84" })).rejects.toMatchObject({ code: "ITEM_UNAVAILABLE" });
+    await expect(createDelegatedMediaAccess(contextB, "media_details").libraryDetails({ itemId: "42" })).rejects.toMatchObject({ code: "ITEM_UNAVAILABLE" });
+  });
+
   it("uses only the actor account and matching resource token for configured-server library visibility", async () => {
     const h = await fixture();
     const result = await h.access().visibleLibrarySections();
