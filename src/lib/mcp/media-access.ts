@@ -9,6 +9,8 @@ import {
   libraryContainer, libraryDetailsInput, librarySearchInput, projectLibraryItem,
   type AvailableLibraryItem, type LibraryDetailsInput, type LibraryMetadata, type LibrarySearchInput, type LibrarySearchResult,
 } from "./media-library";
+import { catalogItem, mediaDetailsArguments, mediaSearchArguments, mediaSelectionArguments, type MediaSelection } from "../../../connectors/delegated-mcp/media-contract";
+import { requirePilotGroup } from "./pilot";
 
 const operations = ["media_search", "media_details", "media_select", "media_pending_selection", "media_confirm_request"] as const;
 type MediaOperation = typeof operations[number];
@@ -50,9 +52,10 @@ function parse<T>(validator: z.ZodType<T>, value: unknown): T {
   return parsed.data;
 }
 
-/** Read-only downstream identity/preflight capability. No raw HTTP primitive,
+/** Actor-scoped downstream capability. No raw HTTP primitive,
  * actor IDs, keys, tokens, downstream bodies or user directory escape the
- * closure. It is not a media-write authorization or an MCP activation path.
+ * closure. Only the confirmed-message path exposes a bounded submission;
+ * the durable prompt claim belongs to media-dispatch, not tool arguments.
  */
 export function createDelegatedMediaAccess(context: VerifiedServiceMcpContext, operation: MediaOperation) {
   let actor: ReturnType<typeof resolveServiceActor>;
@@ -92,11 +95,13 @@ export function createDelegatedMediaAccess(context: VerifiedServiceMcpContext, o
     };
   }
   type Guard = ReturnType<typeof operationGuard>;
-  async function get(url: string, headers: Record<string, string>, guard: Guard, plexAccount = false): Promise<unknown> {
+  async function get(url: string, headers: Record<string, string>, guard: Guard, plexAccount = false, post?: { body: string; beforeAttempt: () => void }): Promise<unknown> {
     try {
       guard.check();
+      post?.beforeAttempt();
+      guard.check();
       const response = await fetch(url, {
-        method: "GET", headers: { Accept: "application/json", ...headers },
+        method: post ? "POST" : "GET", ...(post ? { body: post.body } : {}), headers: { Accept: "application/json", ...headers },
         redirect: "error", credentials: "omit", signal: guard.signal,
       });
       guard.check();
@@ -204,6 +209,53 @@ export function createDelegatedMediaAccess(context: VerifiedServiceMcpContext, o
     return result;
   }
 
+  async function requestUser(input: RequestEligibilitySelection, guard: Guard): Promise<number | Exclude<RequestEligibility, { eligible: true }>> {
+    await verifyPlexAccount(guard);
+    const id = await findSeerrUser(guard);
+    if (id === undefined) return { eligible: false, reason: "seerr_account_required" };
+    const effective = seerr(guard, id);
+    const user = parse(effectiveUser, await effective("/auth/me"));
+    if (user.id !== id || user.plexId !== actor.actorPlexId || user.userType !== 1) return fail("EFFECTIVE_USER_MISMATCH");
+    const permission = input.mediaType === "movie" ? 262144 : 524288;
+    if (!(user.permissions & (2 | 32 | permission))) return { eligible: false, reason: "permission" };
+    const quotas = parse(z.object({ movie: quota, tv: quota }), await effective(`/user/${id}/quota`));
+    const current = quotas[input.mediaType];
+    const units = input.mediaType === "tv" ? input.seasons.length : 1;
+    if (current.limit && (current.remaining === undefined || current.remaining > current.limit)) return fail("INVALID_DOWNSTREAM_RESPONSE");
+    guard.check();
+    if (current.restricted || (current.limit && current.remaining! < units)) return { eligible: false, reason: "quota" };
+    return id;
+  }
+  function pilotOperation() { requirePilotGroup(context); assertCurrent(); }
+  const rawCatalog = z.object({
+    id: positive, title: z.string().min(1).max(300).optional(), name: z.string().min(1).max(300).optional(),
+    releaseDate: z.string().max(40).nullish(), firstAirDate: z.string().max(40).nullish(),
+    overview: z.string().max(30_000).nullish(), voteAverage: z.number().min(0).max(10).nullish(),
+    genres: z.array(z.object({ name: z.string().min(1).max(100) })).max(100).optional(),
+    credits: z.object({ cast: z.array(z.object({ name: z.string().min(1).max(200) })).max(1000).optional() }).optional(),
+    seasons: z.array(z.object({ seasonNumber: z.number().int().min(0).max(1000) })).max(1000).optional(),
+    mediaInfo: z.object({ status: z.number().int().min(1).max(5) }).nullish(),
+  });
+  function catalogFacts(raw: unknown, mediaType: "movie" | "tv") {
+    const item = parse(rawCatalog, raw);
+    const date = mediaType === "movie" ? item.releaseDate : item.firstAirDate;
+    const year = date && /^[0-9]{4}-/.test(date) ? Number(date.slice(0, 4)) : undefined;
+    return parse(catalogItem, {
+      id: item.id, mediaType, title: mediaType === "movie" ? item.title : item.name,
+      ...(year ? { year } : {}), ...(item.overview ? { synopsis: item.overview.slice(0, 1000) } : {}),
+      ...(item.voteAverage !== undefined && item.voteAverage !== null ? { rating: item.voteAverage } : {}),
+      ...(item.genres ? { genres: item.genres.slice(0, 10).map((v) => v.name) } : {}),
+      ...(item.credits?.cast ? { cast: item.credits.cast.slice(0, 8).map((v) => v.name) } : {}),
+      ...(mediaType === "tv" && item.seasons ? { seasons: item.seasons.map((s) => s.seasonNumber).filter((s) => s > 0) } : {}),
+    });
+  }
+  async function catalogDetails(input: { id: number; mediaType: "movie" | "tv" }, guard: Guard) {
+    const raw = await seerr(guard)(`/${input.mediaType}/${input.id}`);
+    const item = catalogFacts(raw, input.mediaType);
+    if (item.id !== input.id) return fail("INVALID_DOWNSTREAM_RESPONSE");
+    return { item, status: parse(rawCatalog, raw).mediaInfo?.status ?? 1 };
+  }
+
   return Object.freeze({
     async visibleLibrarySections(signal?: AbortSignal): Promise<VisibleLibrarySections> {
       const guard = operationGuard(signal);
@@ -260,24 +312,72 @@ export function createDelegatedMediaAccess(context: VerifiedServiceMcpContext, o
       if (!input.success) return fail("INVALID_SELECTION");
       const guard = operationGuard(signal);
       guard.check();
-      await verifyPlexAccount(guard);
-      const id = await findSeerrUser(guard);
-      if (id === undefined) return { eligible: false, reason: "seerr_account_required" };
-      const effective = seerr(guard, id);
-      const user = parse(effectiveUser, await effective("/auth/me"));
-      if (user.id !== id || user.plexId !== actor.actorPlexId || user.userType !== 1) return fail("EFFECTIVE_USER_MISMATCH");
-      // Seerr's own permission bits; Thinkarr users.isAdmin is never consulted.
-      // Approval is deliberately not inferred: the later submission response
-      // under this effective user must determine approved vs pending.
-      const permission = input.data.mediaType === "movie" ? 262144 : 524288;
-      if (!(user.permissions & (2 | 32 | permission))) return { eligible: false, reason: "permission" };
-      const quotas = parse(z.object({ movie: quota, tv: quota }), await effective(`/user/${id}/quota`));
-      const current = quotas[input.data.mediaType];
-      const units = input.data.mediaType === "tv" ? input.data.seasons.length : 1;
-      if (current.limit && (current.remaining === undefined || current.remaining > current.limit)) return fail("INVALID_DOWNSTREAM_RESPONSE");
+      const user = await requestUser(input.data, guard);
       guard.check();
-      if (current.restricted || (current.limit && current.remaining! < units)) return { eligible: false, reason: "quota" };
-      return { eligible: true };
+      return typeof user === "number" ? { eligible: true } : user;
+    },
+    async catalogSearch(input: z.infer<typeof mediaSearchArguments>, signal?: AbortSignal) {
+      pilotOperation();
+      if (operation !== "media_search") return fail("ACTOR_UNAVAILABLE");
+      const args = mediaSearchArguments.safeParse(input);
+      if (!args.success) return fail("INVALID_QUERY");
+      const guard = operationGuard(signal);
+      await verifyPlexAccount(guard);
+      // Same Seerr/TMDB endpoint and query normalization as the web search.
+      // Global library/request state and poster URLs are deliberately omitted.
+      const query = args.data.query.replace(/[()[\]{}!$&'*+,;=?#@/\\]/g, " ").replace(/\s+/g, " ").trim();
+      if (!query) return fail("INVALID_QUERY");
+      const result = parse(z.object({ results: z.array(z.unknown()).max(100) }), await seerr(guard)(`/search?query=${encodeURIComponent(query)}&page=1&language=en`));
+      const items = [];
+      for (const raw of result.results) {
+        const type = parse(z.object({ mediaType: z.string() }), raw).mediaType;
+        if (type === "person") continue;
+        if (type !== "movie" && type !== "tv") return fail("INVALID_DOWNSTREAM_RESPONSE");
+        items.push(catalogFacts(raw, type));
+        if (items.length === 5) break;
+      }
+      guard.check(); pilotOperation();
+      return items;
+    },
+    async catalogDetails(input: z.infer<typeof mediaDetailsArguments>, signal?: AbortSignal) {
+      pilotOperation();
+      if (!["media_details", "media_select"].includes(operation)) return fail("ACTOR_UNAVAILABLE");
+      const args = mediaDetailsArguments.safeParse(input);
+      if (!args.success) return fail("INVALID_QUERY");
+      const guard = operationGuard(signal);
+      await verifyPlexAccount(guard);
+      const result = await catalogDetails(args.data, guard);
+      guard.check(); pilotOperation();
+      return result.item;
+    },
+    async submitConfirmedRequest(selection: MediaSelection, beforeAttempt: () => void, signal?: AbortSignal): Promise<"submitted" | "pending_approval" | "blocked"> {
+      pilotOperation();
+      if (operation !== "media_confirm_request" || context.delegation.source !== "message") return fail("ACTOR_UNAVAILABLE");
+      const args = mediaSelectionArguments.safeParse(selection);
+      if (!args.success) return fail("INVALID_SELECTION");
+      const input = args.data;
+      const guard = operationGuard(signal);
+      const user = await requestUser(input.mediaType === "tv" ? { mediaType: "tv", seasons: input.seasons } : { mediaType: "movie" }, guard);
+      if (typeof user !== "number") return "blocked";
+      const current = await catalogDetails(input, guard);
+      if (input.mediaType === "tv" && !input.seasons.every((s) => current.item.seasons?.includes(s))) return fail("INVALID_SELECTION");
+      // Do not disclose global availability or another person's request. Let
+      // the user check Seerr privately rather than issuing a duplicate write.
+      if (current.status !== 1) return "blocked";
+      const result = parse(z.object({
+        id: positive, status: z.union([z.literal(1), z.literal(2)]), type: z.enum(["movie", "tv"]),
+        requestedBy: z.object({ id: positive }), media: z.object({ tmdbId: positive }),
+        seasons: z.array(z.object({ seasonNumber: positive })).optional(),
+      }), await get(`${serviceBase(settings.seerrUrl)}/api/v1/request`, {
+        "X-Api-Key": settings.seerrKey!, "X-Api-User": String(user), "Content-Type": "application/json",
+      }, guard, false, {
+        body: JSON.stringify({ mediaType: input.mediaType, mediaId: input.id, ...(input.mediaType === "tv" ? { seasons: input.seasons } : {}) }),
+        beforeAttempt: () => { pilotOperation(); beforeAttempt(); },
+      }));
+      if (result.requestedBy.id !== user || result.media.tmdbId !== input.id || result.type !== input.mediaType) return fail("EFFECTIVE_USER_MISMATCH");
+      if (input.mediaType === "tv" && (result.seasons?.length !== input.seasons.length || !input.seasons.every((s) => result.seasons!.some((v) => v.seasonNumber === s)))) return fail("INVALID_DOWNSTREAM_RESPONSE");
+      guard.check(); pilotOperation();
+      return result.status === 1 ? "pending_approval" : "submitted";
     },
   });
 }

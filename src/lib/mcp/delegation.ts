@@ -5,6 +5,7 @@ import { z } from "zod";
 import { getDb, schema } from "@/lib/db";
 import type { ServiceMcpContext } from "./auth-context";
 import { SERVICE_OPERATIONS } from "./service-principals";
+import { pilotConfiguration } from "./pilot";
 
 export const DELEGATION_CLOCK_SKEW_SECONDS = 5;
 export const DELEGATION_MAX_LIFETIME_SECONDS = 60;
@@ -39,7 +40,7 @@ const claimsSchema = z.object({
   }
   if (c.source === "command") {
     valid &&= c.choice === undefined && c.eventId === undefined && c.eventTime === undefined && c.replyTo === undefined && c.requiresQuote === undefined;
-    valid &&= c.intent === "link-start" || /^confirm:[A-Za-z0-9-]+$/.test(c.intent ?? "")
+    valid &&= c.intent === "link-start" || /^present:[a-f0-9-]{36}$/.test(c.intent ?? "") || /^confirm:[A-Za-z0-9-]+$/.test(c.intent ?? "")
       || (c.kind === "direct" && /^link-confirm:[A-Za-z0-9-]+$/.test(c.intent ?? ""));
   }
   if (!valid) ctx.addIssue({ code: "custom", message: "Invalid delegation profile" });
@@ -79,11 +80,12 @@ function requireActive(db: ReadStore, caller: ServiceMcpContext, keyId: string, 
   const k = schema.mcpServiceKeys;
   const row = db.select({
     enabled: p.enabled, allowedOperations: p.allowedOperations, expiresAt: c.expiresAt,
-    revokedAt: c.revokedAt, keyRevokedAt: k.revokedAt, publicKeyPem: k.publicKeyPem,
+    revokedAt: c.revokedAt, keyRevokedAt: k.revokedAt, publicKeyPem: k.publicKeyPem, pilotGroup: p.pilotGroup,
   }).from(p).innerJoin(c, and(eq(c.principalId, p.id), eq(c.id, caller.credentialId)))
     .innerJoin(k, and(eq(k.principalId, p.id), eq(k.id, keyId)))
     .where(eq(p.id, caller.principalId)).get();
   if (!row?.enabled || row.revokedAt || row.keyRevokedAt || row.expiresAt <= now) throw new DelegationError("INACTIVE_SERVICE");
+  if (row.pilotGroup && (pilotConfiguration()?.principalId !== caller.principalId || pilotConfiguration()?.group !== row.pilotGroup)) throw new DelegationError("INACTIVE_SERVICE");
   let allowedOperations: string[];
   try { allowedOperations = z.array(z.enum(SERVICE_OPERATIONS)).parse(JSON.parse(row.allowedOperations)); }
   catch { throw new DelegationError("INACTIVE_SERVICE"); }
@@ -95,7 +97,10 @@ export function requireCurrentDelegation(context: VerifiedServiceMcpContext, tra
   if (context[verified] !== true || context.delegation.exp + DELEGATION_CLOCK_SKEW_SECONDS <= Math.floor(Date.now() / 1000)) {
     throw new DelegationError("INVALID_ASSERTION");
   }
-  return requireActive(transaction ?? getDb(), context, context.verificationKeyId, new Date());
+  const active = requireActive(transaction ?? getDb(), context, context.verificationKeyId, new Date());
+  const c = context.delegation;
+  if (active.pilotGroup && (c.channel !== "whatsapp" || (c.kind === "group" && c.conversation !== active.pilotGroup))) throw new DelegationError("INACTIVE_SERVICE");
+  return active;
 }
 
 /** Verify authenticated metadata and durably consume this HTTP request's nonce.

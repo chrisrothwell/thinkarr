@@ -11,6 +11,7 @@ import type { ServiceMcpContext } from "./auth-context";
 import { DelegationError, requireCurrentDelegation, verifyDelegatedRequest, type VerifiedServiceMcpContext } from "./delegation";
 import { AccountLinkError, completeAccountLink, initiateAccountLink } from "./account-linking";
 import { recordServiceMcpDenial } from "./service-principals";
+import { authorizeMediaCall, callMediaTool, serviceMediaTools } from "./media-dispatch";
 
 const privacyHeaders = { "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" };
 const startArguments = z.object({}).strict();
@@ -39,14 +40,18 @@ export function serviceLinkTools(context: VerifiedServiceMcpContext): Tool[] {
   const current = requireCurrentDelegation(context);
   const c = context.delegation;
   if (c.channel !== "whatsapp") throw new LinkDispatchDenied();
-  return linkTools.filter((tool) => current.allowedOperations.includes(tool.name) && (
+  return [...linkTools.filter((tool) => current.allowedOperations.includes(tool.name) && (
     (tool.name === "account_link_start" && (c.source === "tool" || (c.source === "command" && c.intent === "link-start")))
     || (tool.name === "account_link_confirm" && c.source === "message" && c.kind === "direct" && /^link-confirm:[a-f0-9]{64}$/.test(c.intent ?? ""))
-  ));
+  )), ...serviceMediaTools(context)];
 }
 
 function authorizeCall(context: VerifiedServiceMcpContext, name: string, args: unknown) {
   if (!serviceLinkTools(context).some((tool) => tool.name === name)) throw new LinkDispatchDenied();
+  if (name.startsWith("media_")) {
+    try { authorizeMediaCall(context, name, args ?? {}); return; }
+    catch { throw new LinkDispatchDenied(); }
+  }
   if (name === "account_link_start") {
     if (!startArguments.safeParse(args ?? {}).success) throw new LinkDispatchDenied();
   } else {
@@ -55,8 +60,9 @@ function authorizeCall(context: VerifiedServiceMcpContext, name: string, args: u
   }
 }
 
-function callLinkTool(context: VerifiedServiceMcpContext, name: string, args: unknown): CallToolResult {
+async function callLinkTool(context: VerifiedServiceMcpContext, name: string, args: unknown, signal?: AbortSignal): Promise<CallToolResult> {
   authorizeCall(context, name, args);
+  if (name.startsWith("media_")) return callMediaTool(context, name, args ?? {}, signal);
   if (name === "account_link_confirm") {
     const result = completeAccountLink(context, completeArguments.parse(args).code);
     return { content: [{ type: "text", text: JSON.stringify(result) }] };
@@ -82,8 +88,8 @@ function forbidden(caller: ServiceMcpContext) {
   return NextResponse.json({ error: "Delegated MCP operation is not permitted." }, { status: 403, headers: privacyHeaders });
 }
 
-/** Linking-only standard MCP. Personal/legacy handlers never receive a service
- * context. Management activation and all media operations remain disabled.
+/** Signed standard MCP, linking plus explicitly configured beta media pilot.
+ * Personal/legacy registry handlers never receive a service context.
  */
 export async function handleServiceLinkPost(request: Request, caller: ServiceMcpContext): Promise<Response> {
   let raw: Uint8Array;
@@ -127,13 +133,14 @@ export async function handleServiceLinkPost(request: Request, caller: ServiceMcp
     catch { deniedDuringDispatch = true; throw new McpError(ErrorCode.InvalidParams, "Delegated MCP operation is not permitted."); }
   });
   server.setRequestHandler(CallToolRequestSchema, async (call) => {
-    try { return callLinkTool(context, call.params.name, call.params.arguments); }
+    try { return await callLinkTool(context, call.params.name, call.params.arguments, request.signal); }
     catch (error) {
       if (error instanceof DelegationError || error instanceof LinkDispatchDenied || (error instanceof AccountLinkError && error.status === 403)) {
         deniedDuringDispatch = true;
         throw new McpError(ErrorCode.InvalidParams, "Delegated MCP operation is not permitted.");
       }
       if (error instanceof AccountLinkError) return { content: [{ type: "text", text: JSON.stringify({ error: error.message }) }], isError: true };
+      if (call.params.name.startsWith("media_")) return { content: [{ type: "text", text: JSON.stringify({ status: "failed" }) }], isError: true };
       logger.error("MCP_LINK_TOOL_FAILURE", { principalId: caller.principalId, credentialId: caller.credentialId });
       return { content: [{ type: "text", text: "Account linking could not be completed." }], isError: true };
     }

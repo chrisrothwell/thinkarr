@@ -4,6 +4,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { confirmationIntent, mediaOutcome, mediaToolArguments, presentation, type MediaOutcome, type MediaTool } from "./media-contract.js";
 
 const identity = z.string().min(1).max(512);
 const actorSchema = z.object({
@@ -42,6 +43,7 @@ export type LinkingConnectorHost = {
    * No current-group delivery helper, public fallback or automatic send retry.
    */
   sendPrivate: (delivery: PrivateLinkDelivery) => Promise<PrivateDeliveryReceipt>;
+  sendPrompt?: (delivery: { channel: "whatsapp"; account: string; conversation: string; text: string; signal: AbortSignal; assertCurrent: () => void }) => Promise<{ accepted: true; messageId: string; conversation: string }>;
   fetch?: typeof globalThis.fetch;
 };
 
@@ -53,7 +55,7 @@ function safeUrl(raw: string) {
   return url;
 }
 
-const failed: LinkOutcome = Object.freeze({ status: "failed" });
+const failed = Object.freeze({ status: "failed" as const });
 const linked: LinkOutcome = Object.freeze({ status: "linked" });
 const sent: LinkOutcome = Object.freeze({ status: "private_link_sent" });
 const deliverySchema = z.object({
@@ -85,7 +87,8 @@ export async function createLinkingConnector(config: LinkingConnectorConfig, hos
   const sendPrivate = host.sendPrivate.bind(host);
   const fetchRequest = host.fetch ?? globalThis.fetch;
 
-  async function invoke(invocation: TrustedLinkInvocation, code?: string, event?: z.infer<typeof eventSchema>): Promise<LinkOutcome> {
+  type MediaCall = { name: string; args: unknown; source?: Record<string, unknown> };
+  async function invoke(invocation: TrustedLinkInvocation, code?: string, event?: z.infer<typeof eventSchema>, media?: MediaCall): Promise<LinkOutcome | MediaOutcome> {
     let client: Client | undefined;
     let active = true;
     try {
@@ -95,7 +98,7 @@ export async function createLinkingConnector(config: LinkingConnectorConfig, hos
       }));
       const assertCurrent = invocation.assertCurrent;
       if (typeof assertCurrent !== "function") return failed;
-      const signal = AbortSignal.any([AbortSignal.timeout(15_000), ...(invocation.signal ? [invocation.signal] : [])]);
+      const signal = AbortSignal.any([AbortSignal.timeout(media ? 25_000 : 15_000), ...(invocation.signal ? [invocation.signal] : [])]);
       const guard = () => {
         if (!active) throw new Error("Closed connector invocation");
         signal.throwIfAborted(); assertCurrent();
@@ -103,7 +106,7 @@ export async function createLinkingConnector(config: LinkingConnectorConfig, hos
       guard();
       const proof = event ? Object.freeze(eventSchema.parse(event)) : undefined;
       if (code && (actor.kind !== "direct" || !proof || proof.eventTime > Date.now() + 5000 || proof.eventTime < Date.now() - 900_000)) return failed;
-      const source = code ? { source: "message", intent: `link-confirm:${code}`, ...proof } : { source: "tool" };
+      const source = media?.source ?? (code ? { source: "message", intent: `link-confirm:${code}`, ...proof } : { source: "tool" });
       const transport = new StreamableHTTPClientTransport(endpoint, {
         fetch: async (input, init) => {
           guard();
@@ -138,13 +141,35 @@ export async function createLinkingConnector(config: LinkingConnectorConfig, hos
       await client.connect(transport);
       guard();
       const result = CallToolResultSchema.parse(await client.callTool({
-        name: code ? "account_link_confirm" : "account_link_start", arguments: code ? { code } : {},
-      }, undefined, { signal, timeout: 10_000 }));
+        name: media?.name ?? (code ? "account_link_confirm" : "account_link_start"), arguments: media ? media.args as Record<string, unknown> : code ? { code } : {},
+      }, undefined, { signal, timeout: media ? 20_000 : 10_000 }));
       guard();
       // Allow only the exact wire outcomes. Never forward arbitrary server text,
       // structuredContent, metadata, exceptions or delivery receipts to a model.
       if (result.isError || result.structuredContent !== undefined || result.content.length !== 1 || result.content[0].type !== "text") return failed;
       const value: unknown = JSON.parse(result.content[0].text);
+      if (media) {
+        if (media.name === "media_select" && !media.source && z.object({ status: z.literal("draft") }).strict().safeParse(value).success) {
+          if (!host.sendPrompt || actor.kind !== "group") return failed;
+          const meta = z.object({ "thinkarr/presentation": presentation }).strict().parse(result._meta)["thinkarr/presentation"];
+          guard();
+          const receipt = z.object({ accepted: z.literal(true), messageId: identity, conversation: identity }).strict().parse(await host.sendPrompt({
+            channel: actor.channel, account: actor.account, conversation: actor.conversation, text: meta.text, signal, assertCurrent: guard,
+          }));
+          guard();
+          if (receipt.conversation !== actor.conversation) return failed;
+          const presented = await invoke({ ...invocation, signal, assertCurrent: guard }, undefined, undefined, {
+            name: "media_select", args: { selectionId: meta.selectionId, promptMessageId: receipt.messageId },
+            source: { source: "command", intent: `present:${meta.selectionId}` },
+          });
+          guard();
+          return mediaOutcome.parse(presented);
+        }
+        if (result._meta !== undefined) return failed;
+        const parsed = mediaOutcome.parse(value);
+        if (parsed.status === "ok" && ((media.name === "media_search" && !("items" in parsed)) || (media.name === "media_details" && !("item" in parsed)) || !["media_search", "media_details"].includes(media.name))) return failed;
+        return parsed;
+      }
       if (z.object({ linked: z.literal(true) }).strict().safeParse(value).success) {
         return result._meta === undefined ? linked : failed;
       }
@@ -174,14 +199,28 @@ export async function createLinkingConnector(config: LinkingConnectorConfig, hos
 
   return Object.freeze({
     /** Expose only a zero-argument linking tool; capture invocation in a host factory. */
-    startLink: (invocation: TrustedLinkInvocation) => invoke(invocation),
+    startLink: (invocation: TrustedLinkInvocation) => invoke(invocation) as Promise<LinkOutcome>,
+    async mediaTool(invocation: TrustedLinkInvocation, name: MediaTool, args: unknown): Promise<MediaOutcome> {
+      const parsed = mediaToolArguments[name]?.safeParse(args);
+      if (!parsed?.success) return failed;
+      return mediaOutcome.parse(await invoke(invocation, undefined, undefined, { name, args: parsed.data }));
+    },
+    async confirmMediaMessage(invocation: TrustedLinkMessage & { replyTo?: string }, content: string): Promise<MediaOutcome | undefined> {
+      const intent = confirmationIntent(content, invocation.replyTo);
+      if (!intent) return;
+      try {
+        if (invocation.kind !== "group" || (invocation.replyTo !== undefined && !identity.safeParse(invocation.replyTo).success)) return failed;
+        const proof = eventSchema.parse({ eventId: invocation.eventId, eventTime: invocation.eventTime });
+        return mediaOutcome.parse(await invoke(invocation, undefined, undefined, { name: "media_confirm_request", args: {}, source: { ...intent, ...proof } }));
+      } catch { return failed; }
+    },
     /** Call only from an admitted inbound hook; unrelated content remains unclaimed. */
     async handlePrivateLinkMessage(invocation: TrustedLinkMessage, content: string): Promise<LinkOutcome | undefined> {
       if (typeof content !== "string" || content.length > 100) return undefined;
       const match = /^Link account ([a-f0-9]{64})$/.exec(content.trim());
       if (!match) return undefined;
       if (invocation.kind !== "direct") return failed;
-      return invoke(invocation, match[1], { eventId: invocation.eventId, eventTime: invocation.eventTime });
+      return invoke(invocation, match[1], { eventId: invocation.eventId, eventTime: invocation.eventTime }) as Promise<LinkOutcome>;
     },
   });
 }

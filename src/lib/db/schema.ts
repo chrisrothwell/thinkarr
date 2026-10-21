@@ -1,4 +1,5 @@
 import { sqliteTable, text, integer, primaryKey, index, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { sql } from "drizzle-orm";
 
 export const appConfig = sqliteTable("app_config", {
   key: text("key").primaryKey(),
@@ -80,6 +81,7 @@ export const mcpServicePrincipals = sqliteTable("mcp_service_principals", {
   allowedOperations: text("allowed_operations").notNull(),
   publicLinkOrigin: text("public_link_origin"),
   whatsappBotNumber: text("whatsapp_bot_number"),
+  pilotGroup: text("pilot_group"),
   createdByUserId: integer("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(() => new Date()),
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().$defaultFn(() => new Date()),
@@ -178,6 +180,22 @@ export const mcpLinkChallenges = sqliteTable("mcp_link_challenges", {
   uniqueIndex("mcp_link_challenges_token_unique").on(t.tokenHash),
   uniqueIndex("mcp_link_challenges_code_unique").on(t.completionCodeHash),
   index("mcp_link_challenges_scope_idx").on(t.principalId, t.actorHash, t.contextHash),
+]);
+
+export const mcpMediaSelections = sqliteTable("mcp_media_selections", {
+  id: text("id").primaryKey(),
+  bindingId: text("binding_id").notNull().references(() => mcpActorBindings.id, { onDelete: "cascade" }),
+  bindingVersion: integer("binding_version").notNull(),
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  mediaType: text("media_type").notNull(), mediaId: integer("media_id").notNull(),
+  selectionJson: text("selection_json").notNull(),
+  state: text("state").notNull(), requiresQuote: integer("requires_quote", { mode: "boolean" }).notNull(),
+  promptMessageId: text("prompt_message_id"),
+  createdAt: integer("created_at").notNull(), presentedAt: integer("presented_at"), expiresAt: integer("expires_at").notNull(),
+  outcome: text("outcome"),
+}, (t) => [
+  uniqueIndex("mcp_media_selection_active").on(t.bindingId).where(sql`${t.state} IN ('draft', 'pending')`),
+  index("mcp_media_selection_target").on(t.userId, t.mediaType, t.mediaId),
 ]);
 
 export const messages = sqliteTable("messages", {
