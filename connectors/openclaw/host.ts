@@ -10,16 +10,18 @@ export type ToolContext<C extends object> = {
 };
 export type LinkTool = {
   name: string; label: string; description: string;
-  parameters: { type: "object"; properties: Record<string, never>; additionalProperties: false };
+  parameters: { type: "object"; properties: Record<string, unknown>; additionalProperties: false; required?: string[] };
   execute: (id: string, args: unknown, signal?: AbortSignal) => Promise<{
     content: Array<{ type: "text"; text: string }>; details: { status: string };
   }>;
 };
 export type DispatchEvent = {
   content: string; channel?: string; senderId?: string; messageId?: string; timestamp?: number; isGroup?: boolean;
+  replyToId?: string; replyToIsQuote?: boolean;
 };
 export type DispatchContext = {
   channelId?: string; accountId?: string; conversationId?: string; senderId?: string; messageId?: string;
+  replyToId?: string; replyToIsQuote?: boolean;
 };
 export type DispatchResult = { handled: boolean; text?: string };
 export type Outbound<C extends object> = {

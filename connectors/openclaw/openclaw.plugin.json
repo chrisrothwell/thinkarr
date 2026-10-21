@@ -1,13 +1,14 @@
 {
   "id": "thinkarr",
   "name": "Thinkarr",
-  "description": "Private, sender-verified Plex account linking",
+  "description": "Private Plex linking and a scoped beta media pilot",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "required": ["credentialsFile", "accounts"],
     "properties": {
       "credentialsFile": { "type": "string", "minLength": 1 },
+      "pilotGroup": { "type": "string", "maxLength": 512, "pattern": "^[0-9]+(?:-[0-9]+)?@g\\.us$", "description": "Optional native WhatsApp beta test group; media tools remain absent elsewhere" },
       "accounts": {
         "type": "object",
         "additionalProperties": { "type": "string", "pattern": "^\\+[1-9][0-9]{6,14}$" },

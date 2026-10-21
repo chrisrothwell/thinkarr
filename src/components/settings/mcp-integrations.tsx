@@ -25,7 +25,7 @@ interface Detail extends Integration {
 }
 interface Catalog {
   integrations: Integration[]; availableOperations: string[];
-  delegatedAccessAvailable: boolean; delegationAudience: string;
+  delegatedAccessAvailable: boolean; delegationAudience: string; pilotPrincipalId?: string | null;
 }
 const base = "/api/settings/mcp-integrations";
 const active = (credential: Credential) => !credential.revokedAt && Date.parse(credential.expiresAt) > Date.now();
@@ -122,7 +122,7 @@ export function McpIntegrations() {
         <CardDescription>Manage scoped machine callers separately from personal MCP tokens and Plex accounts.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-5">
-        <p className="text-sm text-muted-foreground">Integrations can be prepared, but delegated tool access is not enabled in this build.</p>
+        <p className="text-sm text-muted-foreground">{catalog?.pilotPrincipalId ? "Beta pilot access is available only for the server-configured integration and test group." : "Integrations can be prepared, but delegated tool access is not enabled in this build."}</p>
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
         {!catalog ? <p role="status">Loading integrations…</p> : <>
           <div className="space-y-1.5">
@@ -149,6 +149,10 @@ export function McpIntegrations() {
 
         {detail && <div className="space-y-6 border-t pt-4">
           <p className="text-sm">Status: <strong>{detail.enabled ? "Enabled" : "Disabled"}</strong></p>
+          <div className="space-y-1.5"><Label htmlFor="integration-id">Integration ID</Label><div className="flex gap-2">
+            <Input id="integration-id" readOnly value={detail.id} className="font-mono text-xs" />
+            <Button type="button" variant="secondary" onClick={() => copy(detail.id)}>Copy ID</Button>
+          </div></div>
           <form onSubmit={save} className="space-y-3">
             <Label htmlFor="integration-name">Integration name</Label>
             <Input id="integration-name" required maxLength={100} value={name} onChange={(event) => setName(event.target.value)} />
@@ -167,7 +171,10 @@ export function McpIntegrations() {
               </div>
             </fieldset>
             <div className="flex gap-2">
-              <Button type="submit" disabled={busy}>Save integration</Button>
+               <Button type="submit" disabled={busy}>Save integration</Button>
+               {catalog?.pilotPrincipalId === detail.id && !detail.enabled && <Button type="button" disabled={busy} onClick={() => void run(async () => {
+                 await api(`${base}/${detail.id}`, "PATCH", { enabled: true }); await reload(); await loadDetail(detail.id, false);
+               })}>Enable beta pilot</Button>}
               <Button type="button" variant="secondary" disabled={busy || !detail.enabled} onClick={() => void run(async () => {
                 await api(`${base}/${detail.id}`, "PATCH", { enabled: false }); await reload(); await loadDetail(detail.id, false);
               })}>Disable integration</Button>

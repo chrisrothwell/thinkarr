@@ -5,10 +5,11 @@ import { getDb, schema } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import type { ServiceMcpContext } from "./auth-context";
 import { publicLinkOriginSchema, whatsappBotNumberSchema } from "./link-handoff";
+import { isPilotIntegration, pilotConfiguration } from "./pilot";
 
 export const SERVICE_TOKEN_PREFIX = "thk_svc_";
-// The signed linking transport alone does not enable integrations. Activation
-// requires trusted connector private delivery and the actor-scoped media facade.
+// General activation is unavailable. A server-configured beta principal/group
+// can be enabled explicitly through the normal management API.
 export const DELEGATED_MCP_AVAILABLE = false;
 export const SERVICE_OPERATIONS = [
   "media_search", "media_details", "media_select", "media_pending_selection",
@@ -98,7 +99,7 @@ export function createIntegration(input: z.input<typeof createIntegrationSchema>
 
 export function updateIntegration(id: string, input: z.input<typeof updateIntegrationSchema>, actorUserId: number) {
   const value = updateIntegrationSchema.parse(input);
-  if (value.enabled) throw new IntegrationError("Delegated MCP access is not available in this build", 409);
+  if (value.enabled && !isPilotIntegration(id)) throw new IntegrationError("Delegated MCP access is not available in this build", 409);
   principalOrThrow(id);
   const db = getDb();
   db.transaction((tx) => {
@@ -106,7 +107,7 @@ export function updateIntegration(id: string, input: z.input<typeof updateIntegr
     tx.update(schema.mcpServicePrincipals).set({
       ...(value.name !== undefined ? { name: value.name } : {}),
       ...(value.allowedOperations !== undefined ? { allowedOperations: JSON.stringify(value.allowedOperations) } : {}),
-      ...(value.enabled !== undefined ? { enabled: false } : {}), updatedAt: new Date(),
+      ...(value.enabled !== undefined ? { enabled: value.enabled, ...(value.enabled ? { pilotGroup: pilotConfiguration()!.group } : {}) } : {}), updatedAt: new Date(),
       ...(value.publicLinkOrigin !== undefined ? { publicLinkOrigin: value.publicLinkOrigin } : {}),
       ...(value.whatsappBotNumber !== undefined ? { whatsappBotNumber: value.whatsappBotNumber } : {}),
     }).where(eq(schema.mcpServicePrincipals.id, id)).run();

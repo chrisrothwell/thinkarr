@@ -1,6 +1,6 @@
 # Delegated MCP linking connector core
 
-`linking.ts` is a harness-neutral trusted connector core, independent of Next.js and Thinkarr's database. It uses the standard MCP SDK and JOSE dependencies already pinned by this repository. The separately packaged [OpenClaw adapter](../openclaw/README.md) wraps this core. Application integration activation remains disabled.
+`linking.ts` is a harness-neutral trusted connector core, independent of Next.js and Thinkarr's database. It uses the standard MCP SDK and JOSE dependencies already pinned by this repository. The separately packaged [OpenClaw adapter](../openclaw/README.md) wraps this core. General integration activation remains disabled; the explicitly configured beta pilot can be enabled through Settings.
 
 ## Host contract
 
@@ -24,3 +24,9 @@ Source inspected at `openclaw/openclaw` tag `v2026.10.4`:
 - `extensions/whatsapp/src/channel-outbound.ts`: the channel's send path has message receipts. Its private target normalization and canonical sender/LID equality must be validated in the host adapter; a receipt-shaped object alone cannot prove private routing.
 
 The OpenClaw adapter checks registration against the published SDK and provides conservative PN-JID/E.164 identity normalization, native-address conversation classification, private outbound fences and receipt validation. Unresolved LID/hosted/device identities fail closed. Tests exercise source-shaped host calls against the actual Thinkarr route and synthetic provider delivery, not a live WhatsApp installation. Live alias/routing/receipt/handset proof and any broader identity support remain launch gates. No plugin installation, live delivery or activation is performed by this module.
+
+## Beta media flow
+
+`media-contract.ts` defines strict public argument/result projections and deterministic confirmation grammar. `mediaTool` accepts only exact search/details/selection names and their bounded arguments. A selection draft is never returned to the model: the optional trusted `sendPrompt` capability delivers its server-owned text to the exact captured group, returns an accepted message ID/destination, and the connector signs a hidden command-source presentation acknowledgement. Only a checked acknowledgement produces `prompt_sent`; failed/uncertain sends are not retried or publicly reconstructed.
+
+`confirmMediaMessage` accepts only admitted inbound message metadata and ordinary text, derives the signed intent/choice from that text and carries verified native quote IDs. It is not a model tool. Unrelated text is unclaimed; `unclaimed` from Thinkarr also leaves the normal router alone. The same isolated-client signing, cancellation, URL pinning, metadata stripping and current-invocation checks apply. Public results are validated through the explicit nested allowlist; unknown upstream data/errors never pass through. The actual request claim and write-attribution enforcement live on Thinkarr, not in client memory.
