@@ -20,6 +20,7 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     // Generated coverage reports
     "coverage/**",
+    "connectors/openclaw/dist/**",
   ]),
 ]);
 

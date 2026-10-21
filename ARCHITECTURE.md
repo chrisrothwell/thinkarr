@@ -22,9 +22,19 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 ├── Dockerfile                       # Multi-stage Alpine/Node build
 ├── entrypoint.sh                    # PUID/PGID user creation + server start
 ├── docker-compose.yml               # Development/example compose
-├── connectors/delegated-mcp/
-│   ├── linking.ts                    # Harness-neutral signed MCP linking client and private receipt boundary
-│   └── README.md                     # Trusted host contract and OpenClaw adapter requirements
+├── connectors/
+│   ├── delegated-mcp/
+│   │   ├── linking.ts                # Harness-neutral signed MCP linking client and private receipt boundary
+│   │   └── README.md                 # Trusted host contract and OpenClaw adapter requirements
+│   └── openclaw/
+│       ├── index.ts                  # Native factory/hook registration, canonical PN identity and private outbound receipt checks
+│       ├── host.ts                   # Narrow structural host types checked against the published pinned SDK
+│       ├── openclaw.plugin.json      # Native plugin manifest and public config schema
+│       ├── package.json             # Separately packed ESM plugin, exact host peer and runtime dependencies
+│       ├── package-lock.json        # Plugin dependency lock/audit boundary
+│       ├── tsconfig.build.json      # Emit adapter and portable core into ignored dist/
+│       └── README.md                # Build/configuration instructions, supported identity scope and live-test prerequisites
+├── scripts/check-openclaw-sdk.mjs    # Integrity-pinned SDK declarations-only compatibility check
 ├── drizzle/
 │   ├── 0000_short_gressill.sql      # Initial migration (5 tables)
 │   ├── 0001_add_message_duration.sql
@@ -373,7 +383,16 @@ The core accepts only exact safe link outcomes. It validates private handoff acc
 
 Private completion recognizes only the exact browser-prefilled `Link account <64 lowercase hex>` message from an admitted direct-chat event with provider ID and original millisecond timestamp. Unrelated content remains unclaimed; matching outcomes are safe statuses for the host's handled response, never raw codes or MCP output. Tests exercise the core through the real Thinkarr route/verifier/link state with synthetic delivery, including interleaved actors/contexts, revocation, stale invocation, sender mismatch, replay and malformed handoffs.
 
-The release-matched OpenClaw tool context lacks an explicit direct/group field; the host adapter must establish it authoritatively rather than infer from session keys. Plugin packaging against the supported SDK, canonical WhatsApp sender/LID/private-target proof, bot/self-event suppression and real delivery-receipt validation remain outstanding. The core is not wired into the application or deployed gateway, and management activation remains disabled.
+The release-matched OpenClaw tool context lacks an explicit direct/group field; the host adapter establishes kind from validated provider-native addresses rather than session keys. The core is not wired into the application or deployed gateway, and management activation remains disabled.
+
+### Version-Pinned OpenClaw Linking Plugin
+`connectors/openclaw` packages a native plugin for OpenClaw `2026.10.4`, with an optional zero-argument `thinkarr_account_link` version-2 tool factory and a `before_dispatch` hook claiming only the exact private verification grammar. Registration is synchronous and version/lifecycle checked. Discovery never reads credentials. Each operation reads an operator-owned, regular, no-symlink, at-most-16-KiB JSON credential file with no group/world access; credential values and errors never enter tool output. Public plugin configuration includes only its absolute path and receiving-account/self-identity map, not participant admission rules. Host channel policy governs human admission; self identities, missing metadata and conflicting route/event facts fail closed.
+
+The canonical sender namespace is the WhatsApp PN JID, normalizing exact E.164/PN-JID host aliases. Validated native `@g.us` addresses identify groups; direct addresses must match the sender. Session keys and latest-sender caches are unused. Unresolved LID, hosted/device-scoped and unknown addresses are rejected rather than guessed; verified provider alias support and reassignment recovery remain launch dependencies.
+
+Private delivery loads the registered WhatsApp outbound adapter, validates its resolved destination against the captured sender, pins the receiving account and checks returned provider message ID/actual destination. It uses the pinned implementation's `onPlatformSendDispatch` fence before each physical send/chunk to recheck live authority and cancellation; it does not rely on the handoff callback that this WhatsApp implementation does not forward. There is no group/current-route helper or automatic retry/public fallback. The inbound hook checks explicit direct kind, matching sender/message metadata, timestamp and private conversation, returns a safe handled outcome, and leaves finance/unrelated messages unclaimed. Plugin disposal, tool invocation guards and bounded operation signals fence retained work.
+
+`npm run check:openclaw` extracts integrity-pinned published SDK/TypeBox declarations into ignored dependency cache and type-checks the structural host surface against the real API without executing or installing OpenClaw. `npm run build:openclaw` emits the adapter and portable core as a separate ESM archive; OpenClaw is an optional exact-version peer. The plugin has its own runtime lock/audit boundary. CI treats connector changes as code and checks SDK compatibility, package compilation and dependency audit. Source-shaped host tests exercise the real Thinkarr route and credential-file permissions with synthetic provider delivery. No live installation/message/deployment is performed; actual host admission/self echoes, PN/LID/routing formats, receipt/fence behavior, transcript privacy and handset handoff still need controlled gateway proof before activation.
 
 ### Trusted Account-Link State and Ownership
 Trusted linking uses new tables; legacy `mcp_channel_identities` rows created from unsigned headers are never accepted as trusted bindings. An internal verified-context control creates a five-minute high-entropy challenge bound to principal/issuer/channel account/sender and origin context kind/ID. Actor/context tuples are stored as scoped hashes, and token/code/session credentials are stored only as digests. Creating a new challenge supersedes earlier pending challenges in that exact scope. The original credential/key/principal must remain active during preparation/completion.

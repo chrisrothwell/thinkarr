@@ -1,0 +1,18 @@
+{
+  "id": "thinkarr",
+  "name": "Thinkarr",
+  "description": "Private, sender-verified Plex account linking",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["credentialsFile", "accounts"],
+    "properties": {
+      "credentialsFile": { "type": "string", "minLength": 1 },
+      "accounts": {
+        "type": "object",
+        "additionalProperties": { "type": "string", "pattern": "^\\+[1-9][0-9]{6,14}$" },
+        "description": "Receiving WhatsApp account ID to bot self E.164 identity; not a participant allowlist"
+      }
+    }
+  }
+}

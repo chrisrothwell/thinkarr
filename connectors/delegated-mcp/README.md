@@ -1,6 +1,6 @@
 # Delegated MCP linking connector core
 
-`linking.ts` is a harness-neutral trusted connector core, independent of Next.js and Thinkarr's database. It uses the standard MCP SDK and JOSE dependencies already pinned by this repository. It is not yet an installable OpenClaw plugin. Application integration activation remains disabled.
+`linking.ts` is a harness-neutral trusted connector core, independent of Next.js and Thinkarr's database. It uses the standard MCP SDK and JOSE dependencies already pinned by this repository. The separately packaged [OpenClaw adapter](../openclaw/README.md) wraps this core. Application integration activation remains disabled.
 
 ## Host contract
 
@@ -23,4 +23,4 @@ Source inspected at `openclaw/openclaw` tag `v2026.10.4`:
 - `src/plugins/runtime/types-channel.ts`: supported outbound adapter loading is `runtime.channel.outbound.loadAdapter`.
 - `extensions/whatsapp/src/channel-outbound.ts`: the channel's send path has message receipts. Its private target normalization and canonical sender/LID equality must be validated in the host adapter; a receipt-shaped object alone cannot prove private routing.
 
-The next adapter slice must package against the actual SDK, establish authoritative direct/group classification for tools, canonical identity and private target resolution, consume/strip metadata, and verify physical-send receipts. Tests here exercise the core against the actual Thinkarr route and synthetic provider delivery, not a live WhatsApp installation. No plugin installation, live delivery or activation is performed by this module.
+The OpenClaw adapter checks registration against the published SDK and provides conservative PN-JID/E.164 identity normalization, native-address conversation classification, private outbound fences and receipt validation. Unresolved LID/hosted/device identities fail closed. Tests exercise source-shaped host calls against the actual Thinkarr route and synthetic provider delivery, not a live WhatsApp installation. Live alias/routing/receipt/handset proof and any broader identity support remain launch gates. No plugin installation, live delivery or activation is performed by this module.
