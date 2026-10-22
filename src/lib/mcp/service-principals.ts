@@ -130,6 +130,11 @@ export function updateIntegration(id: string, input: z.input<typeof updateIntegr
       tx.update(schema.mcpActorBindings).set({ revokedAt: new Date(), updatedAt: new Date(), version: sql`${schema.mcpActorBindings.version} + 1` })
         .where(and(eq(schema.mcpActorBindings.principalId, id), isNull(schema.mcpActorBindings.revokedAt))).run();
     }
+    if (groupChanged || value.enabled === false || (value.publicLinkOrigin !== undefined && value.publicLinkOrigin !== principal.publicLinkOrigin)
+      || (value.whatsappBotNumber !== undefined && value.whatsappBotNumber !== principal.whatsappBotNumber)
+      || (value.allowedOperations !== undefined && JSON.stringify(value.allowedOperations) !== principal.allowedOperations)) {
+      tx.update(schema.mcpSetupGrants).set({ consumedAt: new Date() }).where(and(eq(schema.mcpSetupGrants.principalId, id), isNull(schema.mcpSetupGrants.consumedAt))).run();
+    }
     audit(tx, id, actorUserId, value.enabled === false ? "principal_disabled" : "principal_updated");
   }, { behavior: "immediate" });
   return getIntegration(id);
@@ -161,6 +166,7 @@ export function issueServiceCredential(id: string, input: z.input<typeof issueCr
       id: credentialId, principalId: id, tokenHash: createHash("sha256").update(token).digest("hex"),
       prefix, createdByUserId: actorUserId, expiresAt,
     }).run();
+    tx.update(schema.mcpSetupGrants).set({ consumedAt: new Date() }).where(and(eq(schema.mcpSetupGrants.principalId, id), isNull(schema.mcpSetupGrants.consumedAt))).run();
     audit(tx, id, actorUserId, "credential_issued", credentialId);
   }, { behavior: "immediate" });
   // Only the creation response includes the secret. No getter reconstructs it.

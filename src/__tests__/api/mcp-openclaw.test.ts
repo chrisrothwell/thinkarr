@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type Database from "better-sqlite3";
-import { chmod, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import Ajv from "ajv";
+import { chmod, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as schema from "@/lib/db/schema";
@@ -8,6 +9,7 @@ import { createTestDb, seedUser, type TestDb } from "../helpers/db";
 import { delegatedLinkFixture } from "../helpers/delegated-link";
 import { canonicalPhone, register } from "../../../connectors/openclaw/index";
 import type { DispatchContext, DispatchEvent, DispatchResult, OpenClawHost, Outbound, ToolContext } from "../../../connectors/openclaw/host";
+import manifest from "../../../connectors/openclaw/openclaw.plugin.json";
 
 let db: TestDb;
 let sqlite: Database.Database;
@@ -72,6 +74,32 @@ async function fixture() {
 }
 
 describe("OpenClaw linking adapter", () => {
+  it("declares native secret fields for platform materialization/redaction/audit and accepts only references in source config", async () => {
+    const h = await fixture(); const connection = JSON.parse(await readFile(h.credentialsFile, "utf8"));
+    const validate = new Ajv().compile(manifest.configSchema);
+    const source = { accounts: { "account-A": "+15555550100" }, connection: { ...connection,
+      bearer: { source: "store", provider: "default", id: "THINKARR_SERVICE_TOKEN" },
+      privateKeyPem: { source: "store", provider: "default", id: "THINKARR_PRIVATE_KEY" },
+    } };
+    expect(validate(source)).toBe(true);
+    expect(validate({ ...source, connection })).toBe(false);
+    expect(manifest.configContracts.secretInputs.paths.map((p) => p.path)).toEqual(["connection.bearer", "connection.privateKeyPem"]);
+  });
+  it("uses host-materialized native secrets without any credentials file and never returns them", async () => {
+    const h = await fixture(); const connection = JSON.parse(await readFile(h.credentialsFile, "utf8"));
+    h.api.pluginConfig = { accounts: { "account-A": "+15555550100" }, connection };
+    await rm(h.credentialsFile); register(h.api);
+    const result = await h.create()!.execute("native", {});
+    expect(result.details.status).toBe("private_link_sent");
+    expect(JSON.stringify(result)).not.toContain(connection.bearer); expect(JSON.stringify(result)).not.toContain(connection.privateKeyPem);
+    h.lifecycle.abort(); expect((await h.create()!.execute("disposed", {})).details.status).toBe("failed");
+  });
+  it("fails closed when the host has not materialized a configured secret reference", async () => {
+    const h = await fixture(); const connection = JSON.parse(await readFile(h.credentialsFile, "utf8"));
+    connection.bearer = { source: "store", provider: "default", id: "PROTECTED_TOKEN" };
+    h.api.pluginConfig = { accounts: { "account-A": "+15555550100" }, connection };
+    expect(() => register(h.api)).toThrow("Invalid Thinkarr plugin configuration"); expect(fetch).not.toHaveBeenCalled();
+  });
   it("registers supported factory/hook, sends only to the sender privately and completes the real backend link", async () => {
     const h = await fixture(); register(h.api);
     expect(h.api.registerTool).toHaveBeenCalledWith(expect.objectContaining({ contextVersion: 2 }), { names: ["thinkarr_account_link"], optional: true });

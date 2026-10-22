@@ -182,6 +182,16 @@ export const mcpLinkChallenges = sqliteTable("mcp_link_challenges", {
   index("mcp_link_challenges_scope_idx").on(t.principalId, t.actorHash, t.contextHash),
 ]);
 
+export const mcpSetupGrants = sqliteTable("mcp_setup_grants", {
+  id: text("id").primaryKey(),
+  principalId: text("principal_id").notNull().references(() => mcpServicePrincipals.id, { onDelete: "cascade" }),
+  createdByUserId: integer("created_by_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  tokenHash: text("token_hash").notNull().unique(),
+  configHash: text("config_hash").notNull(),
+  expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+  consumedAt: integer("consumed_at", { mode: "timestamp_ms" }),
+});
+
 export const mcpMediaSelections = sqliteTable("mcp_media_selections", {
   id: text("id").primaryKey(),
   bindingId: text("binding_id").notNull().references(() => mcpActorBindings.id, { onDelete: "cascade" }),

@@ -51,6 +51,7 @@
       "tag": "0006_mcp_mobile_handoff",
       "breakpoints": true
     },
-    { "idx": 7, "version": "6", "when": 1792587600000, "tag": "0007_mcp_beta_pilot", "breakpoints": true }
+    { "idx": 7, "version": "6", "when": 1792587600000, "tag": "0007_mcp_beta_pilot", "breakpoints": true },
+    { "idx": 8, "version": "6", "when": 1792634400000, "tag": "0008_mcp_setup_grants", "breakpoints": true }
   ]
 }

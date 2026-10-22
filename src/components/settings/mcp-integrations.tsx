@@ -58,6 +58,7 @@ export function McpIntegrations() {
   const [keyId, setKeyId] = useState("");
   const [publicKey, setPublicKey] = useState("");
   const [secret, setSecret] = useState<string | null>(null);
+  const [setupSecret, setSetupSecret] = useState<{ token: string; expiresAt: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -83,7 +84,7 @@ export function McpIntegrations() {
     event.preventDefault();
     void run(async () => {
       const created = await api<Integration>(base, "POST", { name: newName });
-      setSecret(null); setNewName(""); await reload(); await loadDetail(created.id);
+      setSecret(null); setSetupSecret(null); setNewName(""); await reload(); await loadDetail(created.id);
     });
   }
   function save(event: FormEvent) {
@@ -95,6 +96,7 @@ export function McpIntegrations() {
         publicLinkOrigin: linkOrigin.trim() || null, whatsappBotNumber: botNumber.trim() || null,
         pilotGroup: group.trim() || null,
       });
+      setSetupSecret(null);
       await reload(); await loadDetail(detail.id);
     });
   }
@@ -105,6 +107,7 @@ export function McpIntegrations() {
         expiresInDays: expires, ...(replaceCredentialId ? { replaceCredentialId, overlapMinutes: overlap } : {}),
       });
       setSecret(created.token);
+      setSetupSecret(null);
       await loadDetail(detail.id, false);
     });
   }
@@ -133,8 +136,9 @@ export function McpIntegrations() {
             <Label htmlFor="delegation-audience">Delegation audience</Label>
             <div className="flex gap-2">
               <Input id="delegation-audience" readOnly value={catalog.delegationAudience} className="font-mono text-xs" />
-              <Button variant="secondary" onClick={() => copy(catalog.delegationAudience)}>Copy audience</Button>
-            </div>
+               <Button variant="secondary" onClick={() => copy(catalog.delegationAudience)}>Copy audience</Button>
+             </div>
+             <p className="text-xs text-muted-foreground">Public instance identifier, available before issuing credentials. Agents can discover it without Plex sign-in at <code>/api/mcp/info</code>.</p>
           </div>
           <form onSubmit={create} className="space-y-2">
             <Label htmlFor="new-integration-name">New integration name</Label>
@@ -145,7 +149,7 @@ export function McpIntegrations() {
           </form>
           <div className="flex flex-wrap gap-2" aria-label="Choose integration">
             {catalog.integrations.map((integration) => <Button key={integration.id} variant={detail?.id === integration.id ? "default" : "secondary"} disabled={busy} onClick={() => {
-              setSecret(null); setPublicKey(""); setKeyId(""); setIssuer(""); void run(() => loadDetail(integration.id));
+              setSecret(null); setSetupSecret(null); setPublicKey(""); setKeyId(""); setIssuer(""); void run(() => loadDetail(integration.id));
             }}>{integration.name}</Button>)}
             {!catalog.integrations.length && <p className="text-sm text-muted-foreground">No service integrations yet.</p>}
           </div>
@@ -182,13 +186,32 @@ export function McpIntegrations() {
                  await api(`${base}/${detail.id}`, "PATCH", { name, allowedOperations: operations, pilotGroup: group.trim(), publicLinkOrigin: linkOrigin.trim(), whatsappBotNumber: botNumber.trim(), enabled: true }); await reload(); await loadDetail(detail.id);
                })}>Enable integration</Button>}
               <Button type="button" variant="secondary" disabled={busy || !detail.enabled} onClick={() => void run(async () => {
-                await api(`${base}/${detail.id}`, "PATCH", { enabled: false }); await reload(); await loadDetail(detail.id, false);
+                await api(`${base}/${detail.id}`, "PATCH", { enabled: false }); setSetupSecret(null); await reload(); await loadDetail(detail.id, false);
               })}>Disable integration</Button>
             </div>
           </form>
 
-          <div className="space-y-3">
-            <h4 className="font-medium">Credentials</h4>
+           <div className="space-y-3">
+             <h4 className="font-medium">Agent connection setup</h4>
+             <p className="text-sm text-muted-foreground">Authorize the agent to register one signing key and obtain a scoped service credential through the API. No agent browser or Plex sign-in is needed. The code expires after ten minutes and can be used once; configuration changes invalidate it.</p>
+             <Button disabled={busy || activeCredentials > 0 || !group.trim() || !linkOrigin.trim() || !botNumber.trim()} onClick={() => void run(async () => {
+               setSetupSecret(null);
+               await api(`${base}/${detail.id}`, "PATCH", { name, allowedOperations: operations, pilotGroup: group.trim(), publicLinkOrigin: linkOrigin.trim(), whatsappBotNumber: botNumber.trim() });
+               await reload(); await loadDetail(detail.id);
+               setSetupSecret(await api<{ token: string; expiresAt: string }>(`${base}/${detail.id}/setup`, "POST", {}));
+             })}>Create setup code</Button>
+             {activeCredentials > 0 && <p className="text-xs text-muted-foreground">An active credential already exists. Reuse its protected configuration, or explicitly revoke it below before enrolling a new connection.</p>}
+             {setupSecret && <div className="rounded-lg border p-3 space-y-2">
+               <Label htmlFor="connection-setup-code">Setup code (shown once)</Label>
+               <Textarea id="connection-setup-code" readOnly value={setupSecret.token} className="font-mono text-xs" />
+               <p className="text-xs text-muted-foreground">Expires {new Date(setupSecret.expiresAt).toLocaleString()}. Enter it only into the trusted setup helper&apos;s hidden prompt, not agent chat. The helper stores credentials as protected OpenClaw secrets, not a credentials file.</p>
+               <div className="flex gap-2"><Button variant="secondary" onClick={() => copy(setupSecret.token)}>Copy setup code</Button><Button variant="ghost" onClick={() => setSetupSecret(null)}>Dismiss setup code</Button></div>
+             </div>}
+           </div>
+
+           <div className="space-y-3">
+             <h4 className="font-medium">Credentials</h4>
+             <p className="text-xs text-muted-foreground">Issue credential creates only a service bearer. It does not create the public delegation audience; use Agent connection setup for API enrollment.</p>
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1"><Label htmlFor="credential-days">Credential lifetime (days)</Label><Input id="credential-days" type="number" min={1} max={365} value={expires} onChange={(event) => setExpires(Number(event.target.value))} /></div>
               <div className="space-y-1"><Label htmlFor="credential-overlap">Rotation overlap (minutes)</Label><Input id="credential-overlap" type="number" min={0} max={60} value={overlap} onChange={(event) => setOverlap(Number(event.target.value))} /></div>
