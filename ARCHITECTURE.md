@@ -30,11 +30,13 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 │   └── openclaw/
 │       ├── index.ts                  # Native factory/hook registration, canonical PN identity and private outbound receipt checks
 │       ├── host.ts                   # Narrow structural host types checked against the published pinned SDK
+│       ├── setup.ts                  # Trusted API enrollment helper; stdin-only native secret-store writes
 │       ├── openclaw.plugin.json      # Native plugin manifest and public config schema
 │       ├── package.json             # Separately packed ESM plugin, exact host peer and runtime dependencies
 │       ├── package-lock.json        # Plugin dependency lock/audit boundary
 │       ├── tsconfig.build.json      # Emit adapter and portable core into ignored dist/
-│       └── README.md                # Build/configuration instructions, supported identity scope and live-test prerequisites
+│       ├── README.md                # Companion plugin overview, compatibility and native-secret configuration
+│       └── SETUP.md                 # Packaged, discoverable agent-led API setup and owner authorization guide
 ├── scripts/check-openclaw-sdk.mjs    # Integrity-pinned SDK declarations-only compatibility check
 ├── drizzle/
 │   ├── 0000_short_gressill.sql      # Initial migration (5 tables)
@@ -44,7 +46,8 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 │   ├── 0004_mcp_delegation_replay.sql   # Durable HTTP nonce and provider-event replay claims
 │   ├── 0005_mcp_trusted_linking.sql     # Scoped hashed link challenges and versioned trusted actor bindings
 │   ├── 0006_mcp_mobile_handoff.sql      # Public origin/bot configuration and pending handoff fingerprint
-│   └── 0007_mcp_beta_pilot.sql          # Persisted pilot-group ceiling and durable selection/submission state
+│   ├── 0007_mcp_beta_pilot.sql          # Persisted pilot-group ceiling and durable selection/submission state
+│   └── 0008_mcp_setup_grants.sql        # Hashed, expiring, single-use owner enrollment grants
 ├── public/
 │   ├── manifest.json                # PWA web app manifest
 │   └── sw.js                        # Service worker (network-first)
@@ -68,6 +71,8 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
     │   │   │       └── title/route.ts       # PATCH rename
     │   │   ├── mcp/
     │   │   │   ├── route.ts                 # GET list tools / POST execute (bearer auth; ?mode=text for channel adapter)
+    │   │   │   ├── info/route.ts            # GET public versioned delegation audience, no Plex login
+    │   │   │   ├── setup/route.ts           # POST owner-code-authorized API key enrollment and credential issuance
     │   │   │   ├── link/route.ts            # Legacy unsigned channel registration
     │   │   │   └── account-links/
     │   │   │       ├── inspect/route.ts     # POST private challenge inspection; no URL/query secrets
@@ -92,6 +97,7 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
     │   │   │   │   ├── route.ts                 # GET list / POST create disabled integration (admin)
     │   │   │   │   └── [id]/
     │   │   │   │       ├── route.ts             # GET detail / PATCH name, scope, disable
+    │   │   │   │       ├── setup/route.ts       # POST admin creates one-use API setup code (shown once)
     │   │   │   │       ├── credentials/route.ts  # POST issue/rotate; secret returned once
     │   │   │   │       ├── credentials/[credentialId]/route.ts # DELETE revoke credential
     │   │   │   │       ├── bindings/[bindingId]/route.ts # DELETE admin revoke participant binding
@@ -165,6 +171,7 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
     │   │   ├── media-library.ts     # Strict library query/metadata schemas and group-safe catalog projection
     │   │   ├── media-dispatch.ts    # Pilot media policy, delivered prompt lifecycle and atomic confirmed request claim
     │   │   ├── integration-policy.ts # Live persisted integration/group policy, managed through Settings
+    │   │   ├── connection-setup.ts   # Owner setup grant issuance, atomic enrollment and replay/configuration checks
     │   │   ├── link-dispatch.ts     # Signed stateless MCP dispatch, exact source/scope policy and trusted delivery metadata
     │   │   ├── account-link-api.ts  # Browser JSON/session guards, safe errors and no-store/no-referrer output
     │   │   ├── auth-context.ts      # Discriminated personal/service server-owned caller context
@@ -217,7 +224,7 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 | `mcp_channel_identities` | `(channelType, channelUserId)` (composite PK), `userId` (FK) — maps external channel user (WhatsApp/Telegram/etc.) to a Thinkarr user |
 | `mcp_registration_tokens` | `token` (PK), `channelType`, `channelUserId`, `expiresAt` — short-lived (15 min) self-registration link tokens |
 | `mcp_pending_baskets` | `token` (PK), `itemsJson`, `userId`, `expiresAt` — one-time-use (10 min) confirm_request validation state |
-| `mcp_service_principals` | `id` (UUID PK), `name`, `enabled` (default false), `allowedOperations` (JSON), nullable administrator-configured `publicLinkOrigin` / `whatsappBotNumber`, creator user reference, timestamps — no Plex/user role |
+| `mcp_service_principals` | `id` (UUID PK), `name`, `enabled` (default false), `allowedOperations` (JSON), nullable administrator-configured `pilotGroup` / `publicLinkOrigin` / `whatsappBotNumber`, creator user reference, timestamps — no Plex/user role |
 | `mcp_service_credentials` | `id`, `principalId` (FK), unique SHA-256 `tokenHash`, safe `prefix`, creator, creation/expiry/revocation/last-use timestamps |
 | `mcp_service_keys` | `id`, `principalId` (FK), `issuer`, `keyId`, Ed25519 `publicKeyPem`, creation/revocation; unique principal/issuer/key ID |
 | `mcp_service_audit` | `id`, `principalId` (FK), nullable human `actorUserId`, action, opaque target ID, creation time — no secrets or raw arguments |
@@ -225,6 +232,8 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 | `mcp_delegation_events` | SHA-256 `eventHash` PK over principal/issuer/actor/context/provider event, principal FK, creation/expiry seconds; no raw sender/message/event identifiers |
 | `mcp_actor_bindings` | `id`, principal FK, hashed actor/context scopes (unique), channel/context kind, real user FK, immutable Plex ID snapshot, version, creation/update/revocation milliseconds |
 | `mcp_link_challenges` | Unique token/code digests, original principal/credential/key references, hashed actor/origin scopes, handoff-configuration fingerprint, browser user/Plex/session-hash snapshots, preparation/consumption/expiry milliseconds; no cleartext token/code/session ID |
+| `mcp_media_selections` | Actor binding/version/user and exact target/subset, draft/pending/submission/outcome state, prompt receipt/time/expiry; partial unique active slot per binding |
+| `mcp_setup_grants` | `id`, principal/creator FKs, unique SHA-256 setup-token digest, configuration fingerprint, expiry/consumption milliseconds; no cleartext setup code or issued credential |
 
 ---
 
@@ -270,6 +279,8 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 | POST | `/api/conversations/[id]/messages` | Save realtime turn |
 | GET | `/api/mcp` | List MCP tools (bearer auth, permission-filtered; `?mode=text` adds `confirm_request`) |
 | POST | `/api/mcp` | Personal tool execution (bearer auth; `?mode=text` enables text-channel adapter); service principals use signed linking and opt-in group-scoped beta media dispatch |
+| GET | `/api/mcp/info` | Public `{version:1,audience}` discovery, independent of Plex sessions/integration creation/credential issuance; no service or credential metadata |
+| POST | `/api/mcp/setup` | Redeem a single-use owner setup code in Authorization; register the supplied public key and issue a scoped service bearer atomically; no browser session required |
 | GET | `/api/mcp/link` | Validate a channel registration token |
 | POST | `/api/mcp/link` | Complete channel registration: exchange Plex PIN + registration token → store identity |
 | POST | `/api/mcp/account-links/inspect` | Inspect a JSON-body challenge from its configured browser origin; safe integration/channel/expiry metadata only |
@@ -292,6 +303,7 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 | GET | `/api/settings/mcp-integrations/[id]` | Get safe principal/credential/public-key/participant metadata and latest 20 audit records (admin session) |
 | PATCH | `/api/settings/mcp-integrations/[id]` | Update name/scopes/group/link settings and enable/disable; enabling requires a valid saved group, link origin and bot number; group changes revoke bindings/pending verification |
 | POST | `/api/settings/mcp-integrations/[id]/credentials` | Issue or rotate a credential; return secret only here with no-store |
+| POST | `/api/settings/mcp-integrations/[id]/setup` | Admin session authorizes a ten-minute, single-use enrollment grant for this integration; return setup code once with no-store |
 | DELETE | `/api/settings/mcp-integrations/[id]/credentials/[credentialId]` | Revoke an individual credential (admin session) |
 | POST | `/api/settings/mcp-integrations/[id]/keys` | Register an Ed25519 public verification key; private keys are rejected |
 | DELETE | `/api/settings/mcp-integrations/[id]/keys/[keyId]` | Revoke a verification key (admin session) |
@@ -381,6 +393,15 @@ Provider-event deduplication is separate from HTTP nonce replay. A valid message
 
 Every enabled-service POST, including initialization and discovery, must pass the verifier before the isolated service dispatcher. Activation is explicitly managed through authenticated Settings; enabled services still cannot enter the raw registry, which unconditionally rejects service contexts. Personal MCP access does not require these assertions.
 
+### API Connection Enrollment and Native OpenClaw Secrets
+The delegation audience is a public, stable instance identifier, created/read independently from service credentials. `/api/mcp/info` exposes only its versioned discovery value without Plex login, and Settings explains this before any credential is issued. Agents do not automate a Plex browser login for metadata or enrollment.
+
+An administrator creates a ten-minute setup code for one configured integration. Only its SHA-256 digest is stored. New codes replace prior grants; group/link/scope changes, disablement and credential issuance invalidate them. Redemption checks expiry/consumption, current creator administrator status and a configuration fingerprint in an immediate transaction. It accepts only issuer/key ID/Ed25519 public key, atomically registers/reuses that exact public key, issues one service credential and consumes the code. A normal service bearer cannot mint or redeem setup grants; owner session authority is not inherited. Existing active credentials are never rotated implicitly. Setup does not enable an integration or authorize a human/media request. Anonymous redemption has separate rate limits, streaming body/time bounds, sanitized errors and no-store/no-referrer responses. Private keys never enter Thinkarr.
+
+The packaged OpenClaw helper accepts the owner code through a hidden prompt/trusted stdin, discovers the audience and enrolls via HTTPS with no cookies or redirects. It reuses a supplied dedicated key or generates it in memory, pipes values to `openclaw secrets store set --kind secret`, and writes only public connection metadata/native SecretRefs into its own plugin config. It creates no custom credentials file, prints no raw HTTP/CLI errors, preserves an existing native configuration, and reports uncertain issuance rather than blindly retrying. Owner authorization is distinct from agent-local provisioning; the helper leaves activation to the ordinary platform owner flow. Its README/SETUP guide ships in the archive and uses generic deployment placeholders.
+
+The plugin manifest declares `connection.bearer` and `connection.privateKeyPem` as SecretRef inputs for OpenClaw materialization, Settings redaction and secret audit. New source configurations require references at those fields; the runtime receives resolved strings in its private closure. Unresolved inputs fail closed. The legacy mode-0600 credentials-file option remains only for migration compatibility; native setup is the supported default. Existing temporary private-key files are not deleted blindly—verify import/runtime access before retiring old copies. Secrets are protected by OpenClaw's native access model; this does not claim encryption of its underlying store.
+
 ### Signed Service MCP Transport
 `link-dispatch.ts` creates a separate official SDK server and stateless Streamable HTTP transport per request. It accepts at most 64 KiB and only non-batch JSON-RPC initialize, initialized notification, ping, tools/list and tools/call. The same current scope/source/channel policy controls discovery and direct execution, with exact tool names and strict argument schemas. Launch support is WhatsApp: `account_link_start` accepts tool-source calls or the exact `link-start` command; `account_link_confirm` requires a direct-message source and signed `link-confirm:<code>` intent matching its sole code argument. Model-supplied identity, recipient and context selectors are rejected. Authorization failures return sanitized HTTP 403, including denials detected during SDK execution; business failures use safe MCP `isError` results. Responses use no-store/no-referrer headers.
 
@@ -403,7 +424,7 @@ Private completion recognizes only the exact browser-prefilled `Link account <64
 The release-matched OpenClaw tool context lacks an explicit direct/group field; the host adapter establishes kind from validated provider-native addresses rather than session keys. The core also validates beta media outcomes through shared schemas and supports a trusted prompt-delivery capability; prompt drafts/receipts never enter model context. The application exposes the pilot through signed MCP, but gateway installation/deployment is an operator action.
 
 ### Version-Pinned OpenClaw Plugin
-`connectors/openclaw` packages a native plugin for OpenClaw `2026.10.4`, with an optional zero-argument `thinkarr_account_link` version-2 tool factory and an admitted `before_dispatch` hook. An optional native `pilotGroup` exposes three additive `thinkarr_media_*` read/selection tools only for that group and enables deterministic message confirmation. Native quote IDs/quote flags must agree between event/context; bare yes and unrelated finance text remain unclaimed. Registration is synchronous and version/lifecycle checked. Discovery never reads credentials. Each operation reads an operator-owned, regular, no-symlink, at-most-16-KiB JSON credential file with no group/world access; credential values and errors never enter tool output. Public configuration includes only its absolute path, receiving-account/self-identity map and optional pilot group, not participant admission rules. Host channel policy governs human admission; self identities, missing metadata and conflicting route/event facts fail closed.
+`connectors/openclaw` packages a native plugin for OpenClaw `2026.10.4`, with an optional zero-argument `thinkarr_account_link` version-2 tool factory and an admitted `before_dispatch` hook. An optional native `pilotGroup` exposes three additive `thinkarr_media_*` read/selection tools only for that group and enables deterministic message confirmation. Native quote IDs/quote flags must agree between event/context; bare yes and unrelated finance text remain unclaimed. Registration is synchronous and version/lifecycle checked. Native secrets are materialized by the host into private runtime configuration; credentials/errors never enter tool metadata/results. Legacy file mode reads only within a current invocation and requires an owned regular no-symlink file of at most 16 KiB with mode 0600. Source configuration contains public connection metadata, native SecretRefs, receiving-account/self-identity map and optional group restriction, not participant admission rules. Host channel policy governs human admission; self identities, missing metadata and conflicting route/event facts fail closed.
 
 The canonical sender namespace is the WhatsApp PN JID, normalizing exact E.164/PN-JID host aliases. Validated native `@g.us` addresses identify groups; direct addresses must match the sender. Session keys and latest-sender caches are unused. Unresolved LID, hosted/device-scoped and unknown addresses are rejected rather than guessed; verified provider alias support and reassignment recovery remain launch dependencies.
 
