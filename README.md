@@ -75,7 +75,7 @@ On first launch, the setup wizard will guide you through configuring:
 | `PORT` | `3000` | Server port |
 | `SECURE_COOKIES` | `false` | Set to `true` when ONLY running behind a reverse proxy with HTTPS, and you don't want to access locally over HTTP. |
 
-Configure delegated WhatsApp integrations in **Settings → MCP → Service integrations**, including the group, public linking origin, bot number and enable/disable state. No container environment changes or restart are required. See [OpenClaw setup](connectors/openclaw/README.md#minimal-beta-pilot) for the connector installation and credentials.
+Configure delegated WhatsApp integrations in **Settings → MCP → Service integrations**, including the group, public linking origin, bot number and enable/disable state. **Create setup code** authorizes one API enrollment; public audience metadata is available without login at `/api/mcp/info`. No container environment changes or restart are required. See the packaged [agent setup guide](connectors/openclaw/SETUP.md) for the companion plugin and native OpenClaw secrets.
 
 ## Setting up LLMs
 
