@@ -49,16 +49,29 @@ describe("MCP integration management API", () => {
     expect(db.select().from(schema.mcpServicePrincipals).all()).toHaveLength(0);
   });
 
-  it("creates disabled integrations, exposes only curated scope, and refuses activation", async () => {
+  it("creates disabled integrations, exposes curated scope, and requires saved connection settings before activation", async () => {
     const created = await POST(request({ name: "Helga" }));
     expect(created.status).toBe(200);
     const principal = (await created.json()).data;
     expect(principal.enabled).toBe(false);
     const listed = await (await GET()).json();
-    expect(listed.data.delegatedAccessAvailable).toBe(false);
+    expect(listed.data.delegatedAccessAvailable).toBe(true);
     expect(listed.data.integrations).toHaveLength(1);
     expect((await PATCH(request({ enabled: true }, "PATCH"), params(principal.id))).status).toBe(409);
     expect((await POST(request({ name: "Unsafe", allowedOperations: ["splitwise_add_expense"] }))).status).toBe(400);
+  });
+
+  it("saves group configuration, enables through the session API without environment setup and disables immediately", async () => {
+    const id = (await (await POST(request({ name: "Support" }))).json()).data.id;
+    const configured = await PATCH(request({ pilotGroup: "120300000000@g.us", publicLinkOrigin: "https://thinkarr.example.com", whatsappBotNumber: "+15555550100" }, "PATCH"), params(id));
+    expect(configured.status).toBe(200);
+    expect((await (await detailGET(request({}), params(id))).json()).data.pilotGroup).toBe("120300000000@g.us");
+    const enabled = await PATCH(request({ enabled: true }, "PATCH"), params(id));
+    expect(enabled.status).toBe(200); expect((await enabled.json()).data.enabled).toBe(true);
+    expect((await PATCH(request({ pilotGroup: null }, "PATCH"), params(id))).status).toBe(409);
+    expect((await PATCH(request({ pilotGroup: "not-a-native-group" }, "PATCH"), params(id))).status).toBe(400);
+    const disabled = await PATCH(request({ enabled: false }, "PATCH"), params(id));
+    expect((await disabled.json()).data.enabled).toBe(false);
   });
 
   it("issues a no-store secret once, rotates it, and returns only safe metadata on retrieval", async () => {

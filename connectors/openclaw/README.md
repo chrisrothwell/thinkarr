@@ -18,7 +18,7 @@ The archive is `thinkarr-openclaw-0.2.0.tgz`. It contains compiled ESM for the a
 
 ## Operator configuration
 
-The controlled beta pilot is opt-in. The package does not install itself, send messages or activate an integration. General Thinkarr integration activation is still unavailable; only the exact server-configured beta principal/group can be enabled in Settings.
+The integration is opt-in and starts disabled. Configure its WhatsApp group, public linking origin and bot number in Thinkarr Settings, then explicitly enable it there. No Thinkarr container environment changes or restart are needed. The package does not install itself or activate an integration.
 
 Example OpenClaw plugin entry:
 
@@ -67,9 +67,9 @@ Use a regular file owned by the gateway process UID with mode `0600`, outside mo
 
 ## Minimal beta pilot
 
-1. Deploy the reviewed build to beta through the normal release workflow. In beta Settings → Service integrations, create the disabled integration, copy its ID, configure the phone-reachable HTTPS link origin and bot E.164 number, issue its credential and register a dedicated public signing key.
-2. Configure **beta only** with `THINKARR_MCP_PILOT_PRINCIPAL=<integration UUID>` and `THINKARR_MCP_PILOT_GROUP=<native @g.us group ID>`, then restart beta. These identifiers are not credentials. The native group must match `pilotGroup` above. Removing/changing either environment setting invalidates the enabled pilot; it does not enable other integrations.
-3. Select `account_link_start`, `account_link_confirm`, `media_search`, `media_details`, `media_select` and `media_confirm_request` in the operation allowlist. Save, then choose **Enable beta pilot**. The Disable button remains the immediate stop control.
+1. In Thinkarr **Settings → MCP → Service integrations**, create the disabled integration. Set its **WhatsApp group ID**, phone-reachable HTTPS public linking origin and bot E.164 number. Copy its integration ID/audience, issue its credential and register a dedicated public signing key.
+2. Use the same native `@g.us` group ID as `pilotGroup` in the OpenClaw plugin configuration above. The saved Thinkarr integration is the server-side authority; there are no pilot environment variables. Changing its group immediately revokes existing participant bindings and pending verification, so participants must link again. Keep the plugin group configuration in sync when changing groups.
+3. Select `account_link_start`, `account_link_confirm`, `media_search`, `media_details`, `media_select` and `media_confirm_request` in the operation allowlist. **Save integration**, then choose **Enable integration**. Configuration changes and Disable take effect immediately without restarting Thinkarr.
 4. Install the built archive on the gateway using the normal OpenClaw plugin installation mechanism. Configure the mode-0600 credentials file described above and the actual receiving account/self number. Enable the plugin and add the four optional `thinkarr_*` tools to Helga's **additive** tool policy; preserve existing tools, Splitwise credentials and routing. No model tool can submit requests directly.
 5. In the isolated self-and-bot group, ask Helga to link Plex. Open the private link, sign in, tap **Finish in WhatsApp** and send the prefilled verification. Then ask for a title, choose it (and explicit TV seasons), and reply **request it** to the separately delivered confirmation. Check the actual requester and pending/approved result in Seerr.
 

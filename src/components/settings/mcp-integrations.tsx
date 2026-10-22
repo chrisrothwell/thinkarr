@@ -11,6 +11,7 @@ import { copyToClipboard } from "@/lib/utils";
 interface Integration {
   id: string; name: string; enabled: boolean; allowedOperations: string[];
   publicLinkOrigin: string | null; whatsappBotNumber: string | null;
+  pilotGroup: string | null;
 }
 interface Credential {
   id: string; prefix: string; expiresAt: string; revokedAt: string | null; lastUsedAt: string | null;
@@ -25,7 +26,7 @@ interface Detail extends Integration {
 }
 interface Catalog {
   integrations: Integration[]; availableOperations: string[];
-  delegatedAccessAvailable: boolean; delegationAudience: string; pilotPrincipalId?: string | null;
+  delegatedAccessAvailable: boolean; delegationAudience: string;
 }
 const base = "/api/settings/mcp-integrations";
 const active = (credential: Credential) => !credential.revokedAt && Date.parse(credential.expiresAt) > Date.now();
@@ -50,6 +51,7 @@ export function McpIntegrations() {
   const [operations, setOperations] = useState<string[]>([]);
   const [linkOrigin, setLinkOrigin] = useState("");
   const [botNumber, setBotNumber] = useState("");
+  const [group, setGroup] = useState("");
   const [expires, setExpires] = useState(90);
   const [overlap, setOverlap] = useState(0);
   const [issuer, setIssuer] = useState("");
@@ -68,6 +70,7 @@ export function McpIntegrations() {
     if (updateForm) {
       setName(value.name); setOperations(value.allowedOperations);
       setLinkOrigin(value.publicLinkOrigin ?? ""); setBotNumber(value.whatsappBotNumber ?? "");
+      setGroup(value.pilotGroup ?? "");
     }
   }
   async function run(action: () => Promise<void>) {
@@ -90,6 +93,7 @@ export function McpIntegrations() {
       await api(`${base}/${detail.id}`, "PATCH", {
         name, allowedOperations: operations,
         publicLinkOrigin: linkOrigin.trim() || null, whatsappBotNumber: botNumber.trim() || null,
+        pilotGroup: group.trim() || null,
       });
       await reload(); await loadDetail(detail.id);
     });
@@ -122,7 +126,7 @@ export function McpIntegrations() {
         <CardDescription>Manage scoped machine callers separately from personal MCP tokens and Plex accounts.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-5">
-        <p className="text-sm text-muted-foreground">{catalog?.pilotPrincipalId ? "Beta pilot access is available only for the server-configured integration and test group." : "Integrations can be prepared, but delegated tool access is not enabled in this build."}</p>
+        <p className="text-sm text-muted-foreground">Configure and enable each integration here. Access is restricted to its saved WhatsApp group; container changes and restarts are not required.</p>
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
         {!catalog ? <p role="status">Loading integrations…</p> : <>
           <div className="space-y-1.5">
@@ -156,6 +160,8 @@ export function McpIntegrations() {
           <form onSubmit={save} className="space-y-3">
             <Label htmlFor="integration-name">Integration name</Label>
             <Input id="integration-name" required maxLength={100} value={name} onChange={(event) => setName(event.target.value)} />
+            <div className="space-y-1"><Label htmlFor="integration-group">WhatsApp group ID</Label><Input id="integration-group" maxLength={512} value={group} placeholder="120300000000@g.us" onChange={(event) => setGroup(event.target.value)} /></div>
+            <p className="text-xs text-muted-foreground">Use the native group ID from OpenClaw. Changing the group invalidates existing participant links and pending verification; participants must link again.</p>
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1"><Label htmlFor="integration-link-origin">Public linking origin</Label><Input id="integration-link-origin" type="url" maxLength={2048} value={linkOrigin} placeholder="https://thinkarr.example.com" onChange={(event) => setLinkOrigin(event.target.value)} /></div>
               <div className="space-y-1"><Label htmlFor="integration-bot-number">WhatsApp bot number</Label><Input id="integration-bot-number" type="tel" maxLength={16} value={botNumber} placeholder="+15555550100" onChange={(event) => setBotNumber(event.target.value)} /></div>
@@ -172,9 +178,9 @@ export function McpIntegrations() {
             </fieldset>
             <div className="flex gap-2">
                <Button type="submit" disabled={busy}>Save integration</Button>
-               {catalog?.pilotPrincipalId === detail.id && !detail.enabled && <Button type="button" disabled={busy} onClick={() => void run(async () => {
-                 await api(`${base}/${detail.id}`, "PATCH", { enabled: true }); await reload(); await loadDetail(detail.id, false);
-               })}>Enable beta pilot</Button>}
+               {catalog?.delegatedAccessAvailable && !detail.enabled && <Button type="button" disabled={busy || !group.trim() || !linkOrigin.trim() || !botNumber.trim()} onClick={() => void run(async () => {
+                 await api(`${base}/${detail.id}`, "PATCH", { name, allowedOperations: operations, pilotGroup: group.trim(), publicLinkOrigin: linkOrigin.trim(), whatsappBotNumber: botNumber.trim(), enabled: true }); await reload(); await loadDetail(detail.id);
+               })}>Enable integration</Button>}
               <Button type="button" variant="secondary" disabled={busy || !detail.enabled} onClick={() => void run(async () => {
                 await api(`${base}/${detail.id}`, "PATCH", { enabled: false }); await reload(); await loadDetail(detail.id, false);
               })}>Disable integration</Button>

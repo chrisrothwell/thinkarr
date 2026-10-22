@@ -9,7 +9,7 @@ test("administrator manages scoped integrations, one-time secrets and public ver
   await page.goto("/settings");
   await page.getByRole("button", { name: "MCP", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Service integrations" })).toBeVisible();
-  await expect(page.getByText("Integrations can be prepared, but delegated tool access is not enabled in this build.")).toBeVisible();
+  await expect(page.getByText("Configure and enable each integration here. Access is restricted to its saved WhatsApp group; container changes and restarts are not required.")).toBeVisible();
   const integrationName = `E2E integration ${randomUUID().slice(0, 8)}`;
   await page.getByLabel("New integration name").fill(integrationName);
   const detailLoaded = page.waitForResponse((response) => response.request().method() === "GET"
@@ -17,11 +17,17 @@ test("administrator manages scoped integrations, one-time secrets and public ver
   await page.getByRole("button", { name: "Create integration" }).click();
   expect((await detailLoaded).ok()).toBe(true);
   await expect(page.getByLabel("Integration name", { exact: true })).toHaveValue(integrationName);
+  await expect(page.getByRole("button", { name: "Enable integration", exact: true })).toBeDisabled();
+  await page.getByLabel("WhatsApp group ID", { exact: true }).fill("120300000000@g.us");
   await page.getByLabel("media_select", { exact: true }).check();
   await page.getByLabel("Public linking origin", { exact: true }).fill("https://thinkarr.example.com");
   await page.getByLabel("WhatsApp bot number", { exact: true }).fill("+15555550100");
   await page.getByRole("button", { name: "Save integration", exact: true }).click();
   await expect(page.getByRole("button", { name: "Save integration", exact: true })).toBeEnabled();
+  await page.getByRole("button", { name: "Enable integration", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Disable integration", exact: true })).toBeEnabled();
+  await page.getByRole("button", { name: "Disable integration", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Disable integration", exact: true })).toBeDisabled();
 
   await page.getByRole("button", { name: "Issue credential", exact: true }).click();
   const secret = page.getByLabel("New credential (shown once)", { exact: true });
@@ -37,6 +43,7 @@ test("administrator manages scoped integrations, one-time secrets and public ver
   await expect(page.getByLabel("media_select", { exact: true })).toBeChecked();
   await expect(page.getByLabel("Public linking origin", { exact: true })).toHaveValue("https://thinkarr.example.com");
   await expect(page.getByLabel("WhatsApp bot number", { exact: true })).toHaveValue("15555550100");
+  await expect(page.getByLabel("WhatsApp group ID", { exact: true })).toHaveValue("120300000000@g.us");
   await expect(secret).toHaveCount(0);
   expect(await page.locator("input, textarea").evaluateAll((nodes, token) => nodes.some((node) => (node as HTMLInputElement).value === token), firstToken)).toBe(false);
   await page.getByRole("button", { name: /^Rotate credential/ }).click();
@@ -59,7 +66,7 @@ test("administrator manages scoped integrations, one-time secrets and public ver
   await expect(page.getByText("connector:e2e / key-1 — Revoked", { exact: true })).toBeVisible();
   await expect(page.getByText(/key_registered/)).toBeVisible();
   await expect(page.getByRole("button", { name: "Disable integration", exact: true })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Enable integration", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Enable integration", exact: true })).toBeEnabled();
 });
 
 test("a real non-admin session has personal MCP settings but no integration UI or management access", async ({ browser }) => {

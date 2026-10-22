@@ -6,7 +6,7 @@ import { getDb, schema } from "@/lib/db";
 import { resolveServiceActor } from "./account-linking";
 import { consumeDelegatedEvent, requireCurrentDelegation, type VerifiedServiceMcpContext } from "./delegation";
 import { createDelegatedMediaAccess } from "./media-access";
-import { requirePilotGroup } from "./pilot";
+import { requireIntegrationGroup } from "./integration-policy";
 import {
   mediaToolArguments, mediaTools, mediaInputSchema, mediaPresentationArguments, mediaSelectionArguments,
   mediaOutcome, type MediaOutcome,
@@ -15,7 +15,7 @@ import {
 const selections = schema.mcpMediaSelections;
 const empty = z.object({}).strict();
 function current(context: VerifiedServiceMcpContext) {
-  requirePilotGroup(context);
+  requireIntegrationGroup(context);
   const policy = requireCurrentDelegation(context);
   return { ...resolveServiceActor(context), operations: policy.allowedOperations };
 }
