@@ -74,6 +74,22 @@ async function fixture() {
 }
 
 describe("OpenClaw linking adapter", () => {
+  it("declares every registered optional tool for manifest-first loading and activates the inbound hook at startup", async () => {
+    const h = await fixture(); h.api.pluginConfig = { ...h.api.pluginConfig, pilotGroup: group }; register(h.api);
+    const registrations = vi.mocked(h.api.registerTool).mock.calls;
+    const names = registrations.flatMap(([, options]) => options.names).sort();
+    expect(manifest.contracts.tools.toSorted()).toEqual(names);
+    expect(Object.keys(manifest.toolMetadata).sort()).toEqual(names);
+    expect(Object.values(manifest.toolMetadata).every((tool) => tool.optional)).toBe(true);
+    expect(manifest.activation.onStartup).toBe(true);
+    expect(h.api.on).toHaveBeenCalledWith("before_dispatch", expect.any(Function), expect.any(Object));
+    // Owned/discoverable names do not create authority in a context-free catalog.
+    for (const [registration] of registrations) {
+      expect(registration.create(toolContext({ requesterSenderId: undefined }))).toBeNull();
+      expect(registration.create(toolContext())?.name).toBeDefined();
+    }
+    expect(fetch).not.toHaveBeenCalled(); expect(h.sends).toHaveLength(0);
+  });
   it("declares native secret fields for platform materialization/redaction/audit and accepts only references in source config", async () => {
     const h = await fixture(); const connection = JSON.parse(await readFile(h.credentialsFile, "utf8"));
     const validate = new Ajv().compile(manifest.configSchema);

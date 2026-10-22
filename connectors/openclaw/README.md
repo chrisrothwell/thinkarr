@@ -23,13 +23,15 @@ npm run build:openclaw
 npm pack ./connectors/openclaw
 ```
 
-Install the resulting `thinkarr-openclaw-0.3.0.tgz` through the supported local archive mechanism:
+Install the resulting `thinkarr-openclaw-0.3.1.tgz` through the supported local archive mechanism:
 
 ```bash
-openclaw plugins install /path/to/thinkarr-openclaw-0.3.0.tgz --no-enable
+openclaw plugins install npm-pack:/path/to/thinkarr-openclaw-0.3.1.tgz --no-enable
 ```
 
 The Control UI can configure, enable and reload an installed plugin. Its catalog installer does not accept arbitrary local archives; a CLI or the browser's operator Terminal is needed for this archive installation. The package is not currently advertised as a published npm/ClawHub release.
+
+For an already-enrolled `0.3.0` connection, update the managed archive to `0.3.1` with the normal replacement/capability review and reload. Keep the existing native secrets, connection settings and keys; do not run enrollment again to repair missing activation metadata. This patch works with the same Thinkarr API build. The `npm-pack:` source uses OpenClaw's managed npm/integrity path for this npm-generated artifact.
 
 ## Native-secret configuration
 
@@ -58,6 +60,7 @@ OpenClaw resolves `connection.bearer` and `connection.privateKeyPem` before plug
 
 ## Runtime behavior
 
+- The manifest declares all four owned tools and intentionally activates at startup so the admitted inbound-message hook exists before the first link/confirmation reply. All tools remain optional and require additive owner grants.
 - Optional tools: `thinkarr_account_link`, `thinkarr_media_search`, `thinkarr_media_details`, `thinkarr_media_select`. Read/selection tools do not submit requests.
 - Tool factories capture host-owned sender/account/native conversation and current-invocation guards. There is no latest-sender cache or session-key authority inference.
 - The adapter supports canonical E.164/PN-JID identities and validated native group addresses. Unresolved LID, hosted/device and ambiguous identities fail closed.
@@ -67,4 +70,4 @@ OpenClaw resolves `connection.bearer` and `connection.privateKeyPem` before plug
 
 Existing `0.2` credentials-file configurations remain a compatibility path, not the recommended setup. Migrate their private values into native secrets and remove the old plugin option. Verify the new connection and retire only confirmed obsolete plaintext copies; the helper does not delete existing key files automatically.
 
-The SDK compatibility check, offline route tests and package build do not prove live provider admission, identity aliases, receipts or handset behavior. Verify the authorized integration in its intended conversation after provisioning.
+The SDK compatibility check, offline route tests and package build do not prove live provider admission, identity aliases, receipts or handset behavior. Verify the authorized integration in its intended conversation after provisioning. Context-free tool catalogs can omit these factories because they have no admitted human sender; repeated reloads or broader permissions do not supply that identity. Follow the bounded readiness procedure in SETUP.md.
