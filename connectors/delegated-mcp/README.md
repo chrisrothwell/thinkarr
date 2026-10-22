@@ -1,6 +1,6 @@
 # Delegated MCP linking connector core
 
-`linking.ts` is a harness-neutral trusted connector core, independent of Next.js and Thinkarr's database. It uses the standard MCP SDK and JOSE dependencies already pinned by this repository. The separately packaged [OpenClaw adapter](../openclaw/README.md) wraps this core. General integration activation remains disabled; the explicitly configured beta pilot can be enabled through Settings.
+`linking.ts` is a harness-neutral trusted connector core, independent of Next.js and Thinkarr's database. It uses the standard MCP SDK and JOSE dependencies already pinned by this repository. The separately packaged [OpenClaw adapter](../openclaw/README.md) wraps this core. Integrations start disabled; their group configuration and activation are managed in Thinkarr Settings without container environment changes.
 
 ## Host contract
 

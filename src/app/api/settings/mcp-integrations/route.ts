@@ -1,11 +1,10 @@
 import { integrationAdminApi, integrationJson } from "@/lib/mcp/integration-api";
 import { createIntegration, createIntegrationSchema, DELEGATED_MCP_AVAILABLE, listIntegrations, SERVICE_OPERATIONS } from "@/lib/mcp/service-principals";
-import { pilotConfiguration } from "@/lib/mcp/pilot";
 import { getDelegationAudience } from "@/lib/mcp/delegation";
 
 export async function GET() {
   return integrationAdminApi(() => ({
-    integrations: listIntegrations(), delegatedAccessAvailable: DELEGATED_MCP_AVAILABLE, pilotPrincipalId: pilotConfiguration()?.principalId ?? null,
+    integrations: listIntegrations(), delegatedAccessAvailable: DELEGATED_MCP_AVAILABLE,
     availableOperations: SERVICE_OPERATIONS, delegationAudience: getDelegationAudience(),
   }));
 }

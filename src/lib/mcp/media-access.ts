@@ -10,7 +10,7 @@ import {
   type AvailableLibraryItem, type LibraryDetailsInput, type LibraryMetadata, type LibrarySearchInput, type LibrarySearchResult,
 } from "./media-library";
 import { catalogItem, mediaDetailsArguments, mediaSearchArguments, mediaSelectionArguments, type MediaSelection } from "../../../connectors/delegated-mcp/media-contract";
-import { requirePilotGroup } from "./pilot";
+import { requireIntegrationGroup } from "./integration-policy";
 
 const operations = ["media_search", "media_details", "media_select", "media_pending_selection", "media_confirm_request"] as const;
 type MediaOperation = typeof operations[number];
@@ -226,7 +226,7 @@ export function createDelegatedMediaAccess(context: VerifiedServiceMcpContext, o
     if (current.restricted || (current.limit && current.remaining! < units)) return { eligible: false, reason: "quota" };
     return id;
   }
-  function pilotOperation() { requirePilotGroup(context); assertCurrent(); }
+  function pilotOperation() { requireIntegrationGroup(context); assertCurrent(); }
   const rawCatalog = z.object({
     id: positive, title: z.string().min(1).max(300).optional(), name: z.string().min(1).max(300).optional(),
     releaseDate: z.string().max(40).nullish(), firstAirDate: z.string().max(40).nullish(),

@@ -43,14 +43,23 @@ describe("administrator-managed service identities", () => {
     expect(listIntegrations()).toHaveLength(1);
   });
 
-  it("restricts configurable scope to explicit curated operations and cannot be enabled in this build", () => {
+  it("restricts configurable scope and requires a group and private-link configuration before enabling", () => {
     expect(() => createIntegration({ name: "Unsafe", allowedOperations: ["plex_get_on_deck"] as never }, adminId)).toThrow();
     const principal = integration();
-    expect(() => updateIntegration(principal.id, { enabled: true }, adminId)).toThrow(/not available/);
+    expect(() => updateIntegration(principal.id, { enabled: true }, adminId)).toThrow(/Configure the WhatsApp group/);
     const updated = updateIntegration(principal.id, { name: "Updated", allowedOperations: ["media_search"], enabled: false }, adminId);
     expect(updated.name).toBe("Updated");
     expect(updated.allowedOperations).toEqual(["media_search"]);
     expect(updated.enabled).toBe(false);
+  });
+
+  it("configures independent integrations through persisted settings without process-wide pilot restrictions", () => {
+    const first = integration(); const second = integration();
+    for (const [principal, group] of [[first, "120300000000@g.us"], [second, "120300000001@g.us"]] as const) {
+      const updated = updateIntegration(principal.id, { pilotGroup: group, publicLinkOrigin: "https://thinkarr.example.com", whatsappBotNumber: "+15555550100", enabled: true }, adminId);
+      expect(updated).toMatchObject({ enabled: true, pilotGroup: group });
+    }
+    expect(listIntegrations().filter((p) => p.enabled)).toHaveLength(2);
   });
 
   it("returns a secret only at issuance, stores its hash, and keeps secrets/hashes out of retrieval and audit logs", () => {

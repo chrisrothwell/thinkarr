@@ -5,7 +5,6 @@ import { z } from "zod";
 import { getDb, schema } from "@/lib/db";
 import type { ServiceMcpContext } from "./auth-context";
 import { SERVICE_OPERATIONS } from "./service-principals";
-import { pilotConfiguration } from "./pilot";
 
 export const DELEGATION_CLOCK_SKEW_SECONDS = 5;
 export const DELEGATION_MAX_LIFETIME_SECONDS = 60;
@@ -85,7 +84,6 @@ function requireActive(db: ReadStore, caller: ServiceMcpContext, keyId: string, 
     .innerJoin(k, and(eq(k.principalId, p.id), eq(k.id, keyId)))
     .where(eq(p.id, caller.principalId)).get();
   if (!row?.enabled || row.revokedAt || row.keyRevokedAt || row.expiresAt <= now) throw new DelegationError("INACTIVE_SERVICE");
-  if (row.pilotGroup && (pilotConfiguration()?.principalId !== caller.principalId || pilotConfiguration()?.group !== row.pilotGroup)) throw new DelegationError("INACTIVE_SERVICE");
   let allowedOperations: string[];
   try { allowedOperations = z.array(z.enum(SERVICE_OPERATIONS)).parse(JSON.parse(row.allowedOperations)); }
   catch { throw new DelegationError("INACTIVE_SERVICE"); }
