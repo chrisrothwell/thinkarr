@@ -7,6 +7,18 @@
  */
 
 import { test, expect } from "@playwright/test";
+import { ADMIN_AUTH_FILE } from "./global-setup";
+
+test.describe("legacy channel-link view", () => {
+  // The existing proxy requires a session for this page. Exercise its missing
+  // token state without changing that access policy as part of a dependency PR.
+  test.use({ storageState: ADMIN_AUTH_FILE });
+  test("a channel link without a token immediately shows the invalid-link state", async ({ page }) => {
+    await page.goto("/mcp/link");
+    await expect(page.getByText("This link has expired or is invalid. Send another message to get a new one.")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Connect with Plex", exact: true })).toHaveCount(0);
+  });
+});
 
 test.describe("stale session redirect", () => {
   test("/chat redirects to /login when session cookie is invalid", async ({ page, context }) => {

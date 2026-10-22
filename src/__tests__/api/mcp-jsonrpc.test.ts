@@ -10,6 +10,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { resolveBasket } from "@/lib/tools/pending-basket";
+import { requestMovie } from "@/lib/services/overseerr";
 
 vi.mock("@/lib/db", () => ({
   getDb: () => ({
@@ -61,8 +63,8 @@ vi.mock("@/lib/services/overseerr", () => ({ requestMovie: vi.fn(), requestTv: v
 vi.mock("@/lib/tools/pending-basket", () => ({ createBasket: vi.fn(), resolveBasket: vi.fn() }));
 vi.mock("@/lib/tools/display-titles-text", () => ({ formatDisplayTitlesAsText: vi.fn() }));
 
-function makeRequest(body: unknown, bearer = "test-bearer"): Request {
-  return new Request("http://localhost/api/mcp", {
+function makeRequest(body: unknown, bearer = "test-bearer", url = "http://localhost/api/mcp"): Request {
+  return new Request(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -197,5 +199,88 @@ describe("POST /api/mcp — JSON-RPC 2.0 envelope (#461)", () => {
     // Legacy shape: bare { tools: [...] }, no jsonrpc/id envelope
     expect(data.jsonrpc).toBeUndefined();
     expect(Array.isArray(data.tools)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ?mode=text threading through the spec-compliant JSON-RPC path
+//
+// Regression: handleMcpProtocolRequest() originally reimplemented tools/list
+// filtering inline (ignoring textMode entirely) and hardcoded `textMode: false`
+// for tools/call. confirm_request was therefore invisible to, and unusable by,
+// any external MCP client that speaks proper JSON-RPC 2.0 — it only worked via
+// the legacy ad-hoc envelope used by the OpenClaw text-channel adapter.
+// ---------------------------------------------------------------------------
+
+describe("POST /api/mcp?mode=text — textMode threading through the JSON-RPC path", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("tools/list includes confirm_request when ?mode=text is set", async () => {
+    const { POST } = await import("@/app/api/mcp/route");
+    const res = await POST(
+      makeRequest(
+        { jsonrpc: "2.0", method: "tools/list", id: 10 },
+        "test-bearer",
+        "http://localhost/api/mcp?mode=text",
+      ),
+    );
+    const data = await res.json();
+
+    const names = data.result.tools.map((t: { name: string }) => t.name);
+    expect(names).toContain("confirm_request");
+  });
+
+  it("tools/list omits confirm_request when ?mode=text is absent", async () => {
+    const { POST } = await import("@/app/api/mcp/route");
+    const res = await POST(makeRequest({ jsonrpc: "2.0", method: "tools/list", id: 11 }));
+    const data = await res.json();
+
+    const names = data.result.tools.map((t: { name: string }) => t.name);
+    expect(names).not.toContain("confirm_request");
+  });
+
+  it("tools/call confirm_request succeeds via the JSON-RPC path when ?mode=text is set", async () => {
+    vi.mocked(resolveBasket).mockReturnValue({ overseerrId: 1, mediaType: "movie", title: "The Matrix" });
+    vi.mocked(requestMovie).mockResolvedValue({ success: true, message: "ok" });
+
+    const { POST } = await import("@/app/api/mcp/route");
+    const res = await POST(
+      makeRequest(
+        {
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: { name: "confirm_request", arguments: { pendingKey: "abc", selection: 1 } },
+          id: 12,
+        },
+        "user-token",
+        "http://localhost/api/mcp?mode=text",
+      ),
+    );
+    const data = await res.json();
+
+    expect(data.result.isError).toBeUndefined();
+    const payload = JSON.parse(data.result.content[0].text);
+    expect(payload.success).toBe(true);
+  });
+
+  it("tools/call confirm_request is rejected via the JSON-RPC path when ?mode=text is absent", async () => {
+    const { POST } = await import("@/app/api/mcp/route");
+    const res = await POST(
+      makeRequest(
+        {
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: { name: "confirm_request", arguments: { pendingKey: "abc", selection: 1 } },
+          id: 13,
+        },
+        "user-token",
+      ),
+    );
+    const data = await res.json();
+
+    expect(data.error).toBeDefined();
+    expect(data.error.message).toMatch(/only available in text mode/i);
   });
 });

@@ -74,6 +74,8 @@ On first launch, the setup wizard will guide you through configuring:
 | `CONFIG_DIR` | `/config` | Directory for database and config |
 | `PORT` | `3000` | Server port |
 | `SECURE_COOKIES` | `false` | Set to `true` when ONLY running behind a reverse proxy with HTTPS, and you don't want to access locally over HTTP. |
+| `THINKARR_MCP_PILOT_PRINCIPAL` | unset | Beta-only opt-in integration UUID; requires the matching pilot group. See [pilot setup](connectors/openclaw/README.md#minimal-beta-pilot). |
+| `THINKARR_MCP_PILOT_GROUP` | unset | Native WhatsApp `@g.us` test-group ID. Other groups/integrations cannot use the pilot. |
 
 ## Setting up LLMs
 

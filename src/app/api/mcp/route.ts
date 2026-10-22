@@ -21,31 +21,35 @@ import { formatDisplayTitlesAsText } from "@/lib/tools/display-titles-text";
 import { createBasket, resolveBasket } from "@/lib/tools/pending-basket";
 import * as overseerr from "@/lib/services/overseerr";
 import type { DisplayTitle } from "@/types/titles";
+import type { McpExecutionContext, PersonalMcpContext, ServiceMcpContext } from "@/lib/mcp/auth-context";
+import { authenticateServiceMcpToken, isServiceMcpToken, recordServiceMcpDenial } from "@/lib/mcp/service-principals";
+import { handleServiceLinkPost } from "@/lib/mcp/link-dispatch";
 
 type McpPermission = "admin" | "user";
 
-interface AuthResult {
-  permission: McpPermission;
-  userId?: number;
-}
+type AuthResult = PersonalMcpContext;
 
 /**
  * Authenticate an MCP request via Bearer token.
  * Returns the permission level, or null if unauthorized.
  */
-function authenticateMcp(request: Request): AuthResult | null {
+function authenticateMcp(request: Request): McpExecutionContext | null {
   const authHeader = request.headers.get("authorization");
   if (!authHeader?.startsWith("Bearer ")) return null;
 
   const token = authHeader.slice(7);
+  // Reserved service tokens never enter the generic administrator/user path,
+  // including when revoked, disabled or copied into the old token config.
+  if (isServiceMcpToken(token)) return authenticateServiceMcpToken(token);
   const storedToken = getConfig("mcp.bearerToken");
 
   // Check global admin token (backward compat)
   if (storedToken && token === storedToken) {
     // Admin token — can optionally scope to a user via X-User-Id
     const userIdHeader = request.headers.get("x-user-id");
-    if (userIdHeader) {
-      const parsedUserId = parseInt(userIdHeader, 10);
+    if (userIdHeader !== null) {
+      if (!/^[1-9]\d{0,9}$/.test(userIdHeader)) return null;
+      const parsedUserId = Number(userIdHeader);
       if (!Number.isSafeInteger(parsedUserId) || parsedUserId <= 0 || parsedUserId > 2_147_483_647) {
         return null;
       }
@@ -56,10 +60,11 @@ function authenticateMcp(request: Request): AuthResult | null {
         .where(eq(schema.users.id, parsedUserId))
         .get();
       if (user) {
-        return { permission: user.isAdmin ? "admin" : "user", userId: user.id };
+        return { kind: "personal", permission: user.isAdmin ? "admin" : "user", userId: user.id };
       }
+      return null;
     }
-    return { permission: "admin" };
+    return { kind: "personal", permission: "admin" };
   }
 
   // Check per-user tokens — token automatically scopes to that user's permission level
@@ -68,11 +73,18 @@ function authenticateMcp(request: Request): AuthResult | null {
     const db = getDb();
     const user = db.select().from(schema.users).where(eq(schema.users.id, userId)).get();
     if (user) {
-      return { permission: user.isAdmin ? "admin" : "user", userId: user.id };
+      return { kind: "personal", permission: user.isAdmin ? "admin" : "user", userId: user.id };
     }
   }
 
   return null;
+}
+
+function serviceAccessUnavailable(auth: ServiceMcpContext) {
+  recordServiceMcpDenial(auth);
+  // Checked before tool initialization, channel-header delegation, body parsing
+  // and SDK dispatch, so every transport/mode enforces the same disabled gate.
+  return NextResponse.json({ error: "Delegated MCP access is not enabled in this build." }, { status: 403 });
 }
 
 /**
@@ -106,13 +118,13 @@ function resolveChannelIdentity(
     db.insert(schema.mcpRegistrationTokens)
       .values({ token, channelType, channelUserId, expiresAt })
       .run();
-    logger.info("MCP_CHANNEL_UNREGISTERED", { channelType, registrationToken: token });
+    logger.info("MCP_CHANNEL_UNREGISTERED", { channelType });
     return "unregistered";
   }
 
   const user = db.select().from(schema.users).where(eq(schema.users.id, identity.userId)).get();
   if (!user) return "unregistered";
-  return { permission: user.isAdmin ? "admin" : "user", userId: user.id };
+  return { kind: "personal", permission: user.isAdmin ? "admin" : "user", userId: user.id };
 }
 
 /**
@@ -259,7 +271,7 @@ async function runToolCall(opts: {
   logger.info("MCP_TOOL_EXEC", { tool: toolName, permission: auth.permission, userId: auth.userId });
 
   try {
-    const resultStr = await executeTool(toolName, argsString);
+    const resultStr = await executeTool(toolName, argsString, auth);
     const result = JSON.parse(resultStr);
 
     // In text mode, intercept display_titles and convert to markdown + pending basket
@@ -305,21 +317,21 @@ function buildToolList(permission: McpPermission, textMode: boolean) {
  * A fresh `Server` + transport is created per request — the SDK's stateless
  * transports (no `sessionIdGenerator`) cannot be reused across requests.
  */
-async function handleMcpProtocolRequest(request: Request, auth: AuthResult, token: string): Promise<Response> {
+async function handleMcpProtocolRequest(request: Request, auth: AuthResult, token: string, textMode: boolean): Promise<Response> {
   const server = new Server(
     { name: "thinkarr", version: process.env.NEXT_PUBLIC_APP_VERSION ?? "unknown" },
     { capabilities: { tools: {} } },
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async (_req, extra) => {
-    const permission = (extra.authInfo?.extra?.permission as McpPermission | undefined) ?? auth.permission;
-    const allTools = getOpenAITools();
-    const filtered =
-      permission === "admin"
-        ? allTools
-        : allTools.filter((t) => t.type === "function" && canExecuteTool(t.function.name, permission));
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    const permission = auth.permission;
 
-    const tools: Tool[] = filtered
+    // Reuse buildToolList so confirm_request is included in ?mode=text here
+    // exactly as it is for the legacy ad-hoc dispatch below — this was
+    // previously reimplemented inline without the textMode branch, so
+    // spec-compliant JSON-RPC clients (unlike the legacy-envelope OpenClaw
+    // adapter) never saw confirm_request even when connecting with ?mode=text.
+    const tools: Tool[] = buildToolList(permission, textMode)
       .filter((t) => t.type === "function")
       .map((t) => ({
         name: t.function.name,
@@ -330,16 +342,14 @@ async function handleMcpProtocolRequest(request: Request, auth: AuthResult, toke
     return { tools };
   });
 
-  server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
-    const permission = (extra.authInfo?.extra?.permission as McpPermission | undefined) ?? auth.permission;
-    const userId = (extra.authInfo?.extra?.userId as number | undefined) ?? auth.userId;
+  server.setRequestHandler(CallToolRequestSchema, async (req) => {
     const { name, arguments: args } = req.params;
 
     const outcome = await runToolCall({
       toolName: name,
       rawArguments: args,
-      auth: { permission, userId },
-      textMode: false,
+      auth,
+      textMode,
     });
 
     if (!outcome.ok) {
@@ -383,6 +393,7 @@ export async function GET(request: Request) {
       { status: 401 },
     );
   }
+  if (auth.kind === "service") return serviceAccessUnavailable(auth);
 
   initializeTools();
 
@@ -405,6 +416,10 @@ export async function POST(request: Request) {
       { error: "Unauthorized. Provide a valid Bearer token." },
       { status: 401 },
     );
+  }
+  if (baseAuth.kind === "service") {
+    if (!baseAuth.enabled) return serviceAccessUnavailable(baseAuth);
+    return handleServiceLinkPost(request, baseAuth);
   }
 
   initializeTools();
@@ -471,7 +486,7 @@ export async function POST(request: Request) {
       headers: request.headers,
       body: rawBody,
     });
-    return handleMcpProtocolRequest(freshRequest, auth, request.headers.get("authorization")!.slice(7));
+    return handleMcpProtocolRequest(freshRequest, auth, request.headers.get("authorization")!.slice(7), textMode);
   }
 
   // Legacy ad-hoc dispatch (no `jsonrpc` envelope) — kept for backward compatibility
