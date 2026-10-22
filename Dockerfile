@@ -27,7 +27,10 @@ ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
 ENV TZ=UTC
 
-RUN apk upgrade --no-cache && \
+# The standalone runtime uses node directly; npm's bundled dependencies belong
+# only in the build stages, not in the shipped image.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx && \
+    apk upgrade --no-cache && \
     apk add --no-cache shadow su-exec tzdata && \
     mkdir -p /config && \
     chown node:node /config

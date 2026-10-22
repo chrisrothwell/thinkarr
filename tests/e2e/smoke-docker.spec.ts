@@ -17,7 +17,16 @@
  */
 
 import { test, expect } from "@playwright/test";
-import { ADMIN_AUTH_FILE } from "./global-setup-docker";
+import { execFileSync } from "node:child_process";
+import { ADMIN_AUTH_FILE, CONTAINER_NAME } from "./global-setup-docker";
+
+test("runtime retains Node without shipping npm or its bundled dependencies", () => {
+  const version = execFileSync("docker", [
+    "exec", CONTAINER_NAME, "sh", "-ec",
+    "node --version && test ! -e /usr/local/lib/node_modules/npm && ! command -v npm && ! command -v npx",
+  ], { encoding: "utf8", timeout: 30_000 });
+  expect(version.trim()).toMatch(/^v\d+\.\d+\.\d+$/);
+});
 
 // ---------------------------------------------------------------------------
 // Boot + routing (no session required)
