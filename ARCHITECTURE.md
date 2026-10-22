@@ -11,7 +11,7 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 - **Tools**: In-process MCP-style tool registry (Zod schemas → OpenAI function format), also exposed as external MCP endpoint
 - **Auth**: Plex PIN-based OAuth (custom implementation, no NextAuth)
 - **Styling**: Tailwind CSS 4, dark theme, shadcn/ui-style components
-- **Docker**: Multi-stage Alpine/Node build, PUID/PGID/TZ support, `/config` volume
+- **Docker**: Multi-stage Alpine/Node build, standalone runtime without npm/npx, PUID/PGID/TZ support, `/config` volume
 - **Observability**: Optional Langfuse tracing (opt-in via env vars or Settings UI)
 
 ---
@@ -367,6 +367,8 @@ Chat and realtime event callbacks read current conversation/options/connection v
 
 ### Dependency Audit Scope
 The lockfile is the deployment dependency contract. The CI production audit blocks on every severity and updates must use fixed compatible dependency versions without bypassing the gate. Development-only findings are reported separately. CI uses Node 22 and the Docker image uses Node 26; runtime dependencies must support both.
+
+The production Docker stage removes the base image's npm CLI, npx launcher and npm-bundled dependencies. Build stages retain npm for installation/compilation; the standalone entrypoint runs `node server.js` directly. This prevents unused package-manager dependencies from shipping vulnerabilities independently of the application lockfile. Docker smoke coverage checks that Node runs and npm/npx plus the bundled npm directory are absent; image vulnerability scanning remains enabled without npm-only CVE suppressions.
 
 ### Delegation Verification and Two Independent Replay Boundaries
 `src/lib/mcp/delegation.ts` uses the maintained `jose` library to verify the compact Ed25519 JWS profile. It pins algorithm/type, registered principal/issuer/key ID, stable instance audience, strict versioned source/identity/intent claims and a maximum 60-second assertion lifetime with five seconds of clock tolerance. HTTP method, exact encoded path/query and SHA-256 of the original body bytes must match. It does not accept inline or remote verification keys, user-selected beneficiary fields or proxy-derived audiences.
