@@ -22,9 +22,10 @@ beforeEach(() => {
 });
 afterEach(() => { sqlite.close(); vi.useRealTimers(); });
 
-async function pending() {
+async function pending(group?: string) {
   const f = await delegatedLinkFixture(db, adminId);
-  const origin = await f.context();
+  if (group) updateIntegration(f.principal.id, { pilotGroup: group }, adminId);
+  const origin = await f.context(group ? { conversation: group } : {});
   const challenge = initiateAccountLink(origin);
   if (challenge.linked) throw new Error("Unexpected existing binding");
   return { ...f, origin, challenge };
@@ -32,7 +33,7 @@ async function pending() {
 
 describe("trusted actor linking", () => {
   it("builds a configured fragment-only private address and invalidates pending links when handoff settings change", async () => {
-    const f = await pending();
+    const f = await pending("120300000000@g.us");
     const url = new URL(f.challenge.privateLinkUrl);
     expect(url.origin).toBe("https://thinkarr.invalid");
     expect(url.search).toBe("");

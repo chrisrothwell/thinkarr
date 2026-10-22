@@ -1,16 +1,14 @@
 import { createHash, createPublicKey, randomBytes, randomUUID } from "node:crypto";
-import { and, desc, eq, gt, isNull } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, schema } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import type { ServiceMcpContext } from "./auth-context";
 import { publicLinkOriginSchema, whatsappBotNumberSchema } from "./link-handoff";
-import { isPilotIntegration, pilotConfiguration } from "./pilot";
+import { whatsappGroupSchema } from "./integration-policy";
 
 export const SERVICE_TOKEN_PREFIX = "thk_svc_";
-// General activation is unavailable. A server-configured beta principal/group
-// can be enabled explicitly through the normal management API.
-export const DELEGATED_MCP_AVAILABLE = false;
+export const DELEGATED_MCP_AVAILABLE = true;
 export const SERVICE_OPERATIONS = [
   "media_search", "media_details", "media_select", "media_pending_selection",
   "media_confirm_request", "account_link_start", "account_link_confirm",
@@ -22,6 +20,7 @@ export const createIntegrationSchema = z.object({
   allowedOperations: operations.default(["media_search", "media_details"]),
   publicLinkOrigin: publicLinkOriginSchema.nullable().optional(),
   whatsappBotNumber: whatsappBotNumberSchema.nullable().optional(),
+  pilotGroup: whatsappGroupSchema.nullable().optional(),
 }).strict();
 export const updateIntegrationSchema = z.object({
   name: z.string().trim().min(1).max(100).optional(),
@@ -29,6 +28,7 @@ export const updateIntegrationSchema = z.object({
   enabled: z.boolean().optional(),
   publicLinkOrigin: publicLinkOriginSchema.nullable().optional(),
   whatsappBotNumber: whatsappBotNumberSchema.nullable().optional(),
+  pilotGroup: whatsappGroupSchema.nullable().optional(),
 }).strict().refine((value) => Object.keys(value).length > 0, "No changes supplied");
 export const issueCredentialSchema = z.object({
   expiresInDays: z.number().int().min(1).max(365).default(90),
@@ -90,6 +90,7 @@ export function createIntegration(input: z.input<typeof createIntegrationSchema>
     const created = tx.insert(schema.mcpServicePrincipals).values({
       id: randomUUID(), name: value.name, allowedOperations: JSON.stringify(value.allowedOperations), createdByUserId: actorUserId,
       publicLinkOrigin: value.publicLinkOrigin, whatsappBotNumber: value.whatsappBotNumber,
+      pilotGroup: value.pilotGroup,
     }).returning().get();
     audit(tx, created.id, actorUserId, "principal_created");
     return created;
@@ -99,23 +100,35 @@ export function createIntegration(input: z.input<typeof createIntegrationSchema>
 
 export function updateIntegration(id: string, input: z.input<typeof updateIntegrationSchema>, actorUserId: number) {
   const value = updateIntegrationSchema.parse(input);
-  if (value.enabled && !isPilotIntegration(id)) throw new IntegrationError("Delegated MCP access is not available in this build", 409);
   principalOrThrow(id);
   const db = getDb();
   db.transaction((tx) => {
     const principal = tx.select().from(schema.mcpServicePrincipals).where(eq(schema.mcpServicePrincipals.id, id)).get()!;
+    const enabled = value.enabled ?? principal.enabled;
+    const group = value.pilotGroup !== undefined ? value.pilotGroup : principal.pilotGroup;
+    const origin = value.publicLinkOrigin !== undefined ? value.publicLinkOrigin : principal.publicLinkOrigin;
+    const bot = value.whatsappBotNumber !== undefined ? value.whatsappBotNumber : principal.whatsappBotNumber;
+    if (enabled && (!whatsappGroupSchema.safeParse(group).success || !origin || !bot)) {
+      throw new IntegrationError("Configure the WhatsApp group, public linking origin and bot number before enabling the integration", 409);
+    }
+    const groupChanged = value.pilotGroup !== undefined && value.pilotGroup !== principal.pilotGroup;
     tx.update(schema.mcpServicePrincipals).set({
       ...(value.name !== undefined ? { name: value.name } : {}),
       ...(value.allowedOperations !== undefined ? { allowedOperations: JSON.stringify(value.allowedOperations) } : {}),
-      ...(value.enabled !== undefined ? { enabled: value.enabled, ...(value.enabled ? { pilotGroup: pilotConfiguration()!.group } : {}) } : {}), updatedAt: new Date(),
+      ...(value.enabled !== undefined ? { enabled: value.enabled } : {}), updatedAt: new Date(),
+      ...(value.pilotGroup !== undefined ? { pilotGroup: value.pilotGroup } : {}),
       ...(value.publicLinkOrigin !== undefined ? { publicLinkOrigin: value.publicLinkOrigin } : {}),
       ...(value.whatsappBotNumber !== undefined ? { whatsappBotNumber: value.whatsappBotNumber } : {}),
     }).where(eq(schema.mcpServicePrincipals.id, id)).run();
     if ((value.publicLinkOrigin !== undefined && value.publicLinkOrigin !== principal.publicLinkOrigin)
-      || (value.whatsappBotNumber !== undefined && value.whatsappBotNumber !== principal.whatsappBotNumber)) {
+      || (value.whatsappBotNumber !== undefined && value.whatsappBotNumber !== principal.whatsappBotNumber) || groupChanged) {
       tx.update(schema.mcpLinkChallenges).set({ consumedAt: new Date() }).where(and(
         eq(schema.mcpLinkChallenges.principalId, id), isNull(schema.mcpLinkChallenges.consumedAt),
       )).run();
+    }
+    if (groupChanged) {
+      tx.update(schema.mcpActorBindings).set({ revokedAt: new Date(), updatedAt: new Date(), version: sql`${schema.mcpActorBindings.version} + 1` })
+        .where(and(eq(schema.mcpActorBindings.principalId, id), isNull(schema.mcpActorBindings.revokedAt))).run();
     }
     audit(tx, id, actorUserId, value.enabled === false ? "principal_disabled" : "principal_updated");
   }, { behavior: "immediate" });

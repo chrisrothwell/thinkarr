@@ -33,8 +33,7 @@ afterEach(async () => { sqlite.close(); vi.useRealTimers(); vi.unstubAllGlobals(
 
 async function fixture(link = true) {
   const f = await delegatedLinkFixture(db, adminId);
-  vi.stubEnv("THINKARR_MCP_PILOT_PRINCIPAL", f.principal.id); vi.stubEnv("THINKARR_MCP_PILOT_GROUP", group);
-  updateIntegration(f.principal.id, { allowedOperations: [...SERVICE_OPERATIONS], enabled: true }, adminId);
+  updateIntegration(f.principal.id, { allowedOperations: [...SERVICE_OPERATIONS], pilotGroup: group, enabled: true }, adminId);
   db.update(schema.users).set({ plexId: "101", plexToken: "SECRET-actor-token" }).where(eq(schema.users.id, f.userA)).run();
   const credentialsFile = join(directory, "credentials.json");
   await writeFile(credentialsFile, JSON.stringify({ endpoint: "https://thinkarr.invalid/api/mcp", publicLinkOrigin: "https://thinkarr.invalid",
@@ -146,13 +145,43 @@ describe("minimal beta pilot: real plugin, signed SDK, SQLite, mocked Seerr", ()
     expect(h.state.writes).toHaveLength(0); expect(executeTool).not.toHaveBeenCalled();
   });
 
-  it("requires linking, the configured principal/group and the current pilot environment", async () => {
+  it("requires linking, an enabled integration and its saved group", async () => {
     const h = await fixture(false);
     expect((await h.tool("thinkarr_media_search", { query: "Movie" })).details.status).toBe("failed");
     expect((await h.raw("account_link_start", {}, { conversation: "another@g.us" })).status).toBe(403);
-    vi.stubEnv("THINKARR_MCP_PILOT_GROUP", "");
+    updateIntegration(h.f.principal.id, { enabled: false }, adminId);
     expect((await h.raw("account_link_start")).status).toBe(403);
-    expect(() => updateIntegration(h.f.principal.id, { enabled: true }, adminId)).toThrow("not available");
+    expect(() => updateIntegration(h.f.principal.id, { enabled: true, pilotGroup: null }, adminId)).toThrow("Configure the WhatsApp group");
+  });
+
+  it("uses saved settings even when obsolete pilot environment variables disagree", async () => {
+    const h = await fixture();
+    vi.stubEnv("THINKARR_MCP_PILOT_PRINCIPAL", "another-principal"); vi.stubEnv("THINKARR_MCP_PILOT_GROUP", "another@g.us");
+    expect((await h.select()).details.status).toBe("prompt_sent");
+    expect(await h.dispatch("request it")).toMatchObject({ text: expect.stringContaining("awaiting approval") });
+  });
+
+  it("invalidates pending links, active bindings and selections when the configured group changes", async () => {
+    const h = await fixture(); await h.select();
+    const pending = initiateAccountLink(await h.f.context({ sender: "another-participant", conversation: group }));
+    if (pending.linked) throw new Error("Unexpected fixture binding");
+    const binding = db.select().from(schema.mcpActorBindings).get()!;
+    updateIntegration(h.f.principal.id, { pilotGroup: "120300000001@g.us" }, adminId);
+    expect(db.select().from(schema.mcpActorBindings).get()).toMatchObject({ version: binding.version + 1, revokedAt: expect.any(Date) });
+    expect(() => prepareAccountLink(pending.token, h.f.sessionA, h.f.userA)).toThrow("expired");
+    expect((await h.raw("media_search", { query: "Movie" })).status).toBe(403);
+    // Changing back cannot resurrect the old binding or human confirmation.
+    updateIntegration(h.f.principal.id, { pilotGroup: group }, adminId);
+    expect(await h.dispatch("request it")).toMatchObject({ text: expect.stringContaining("could not be completed") });
+    expect(h.state.writes).toHaveLength(0);
+  });
+
+  it("does not revoke participant links when saving the same group and ordinary settings", async () => {
+    const h = await fixture(); await h.select();
+    const binding = db.select().from(schema.mcpActorBindings).get()!;
+    updateIntegration(h.f.principal.id, { name: "Renamed integration", pilotGroup: group }, adminId);
+    expect(db.select().from(schema.mcpActorBindings).get()).toMatchObject({ version: binding.version, revokedAt: null });
+    expect(await h.dispatch("request it")).toMatchObject({ text: expect.stringContaining("awaiting approval") });
   });
 
   it.each(["missingUser", "permission", "quota", "already-requested"])("fails closed on current %s without any downstream write", async (mode) => {
