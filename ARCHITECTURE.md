@@ -368,6 +368,8 @@ Chat and realtime event callbacks read current conversation/options/connection v
 ### Dependency Audit Scope
 The lockfile is the deployment dependency contract. The CI production audit blocks on every severity and updates must use fixed compatible dependency versions without bypassing the gate. Development-only findings are reported separately. CI uses Node 22 and the Docker image uses Node 26; runtime dependencies must support both.
 
+Transitive build-tool refreshes retain the framework's dependency constraints and keep Vitest and its coverage provider on the same release. Browser-target metadata, esbuild platform binaries and PostCSS resolutions are pinned together in the lockfile.
+
 The production Docker stage removes the base image's npm CLI, npx launcher and npm-bundled dependencies. Build stages retain npm for installation/compilation; the standalone entrypoint runs `node server.js` directly. This prevents unused package-manager dependencies from shipping vulnerabilities independently of the application lockfile. Docker smoke coverage checks that Node runs and npm/npx plus the bundled npm directory are absent; image vulnerability scanning remains enabled without npm-only CVE suppressions.
 
 ### Delegation Verification and Two Independent Replay Boundaries
