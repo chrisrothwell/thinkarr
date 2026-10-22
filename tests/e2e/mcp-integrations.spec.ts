@@ -9,6 +9,12 @@ test("administrator manages scoped integrations, one-time secrets and public ver
   await page.goto("/settings");
   await page.getByRole("button", { name: "MCP", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Service integrations" })).toBeVisible();
+  const audience = await page.getByLabel("Delegation audience", { exact: true }).inputValue();
+  expect(audience).toMatch(/^[a-f0-9-]{36}$/);
+  const discovery = await fetch(`${BASE_URL}/api/mcp/info`);
+  expect(discovery.ok).toBe(true);
+  expect(await discovery.json()).toEqual({ version: 1, audience });
+  await expect(page.getByText(/Public instance identifier, available before issuing credentials/)).toBeVisible();
   await expect(page.getByText("Configure and enable each integration here. Access is restricted to its saved WhatsApp group; container changes and restarts are not required.")).toBeVisible();
   const integrationName = `E2E integration ${randomUUID().slice(0, 8)}`;
   await page.getByLabel("New integration name").fill(integrationName);
@@ -29,11 +35,18 @@ test("administrator manages scoped integrations, one-time secrets and public ver
   await page.getByRole("button", { name: "Disable integration", exact: true }).click();
   await expect(page.getByRole("button", { name: "Disable integration", exact: true })).toBeDisabled();
 
+  await page.getByRole("button", { name: "Create setup code", exact: true }).click();
+  const setupCode = page.getByLabel("Setup code (shown once)", { exact: true });
+  await expect(setupCode).toHaveValue(/^thk_setup_/);
+  await page.getByRole("button", { name: "Dismiss setup code", exact: true }).click();
+  await expect(setupCode).toHaveCount(0);
+
   await page.getByRole("button", { name: "Issue credential", exact: true }).click();
   const secret = page.getByLabel("New credential (shown once)", { exact: true });
   await expect(secret).toBeVisible();
   const firstToken = await secret.inputValue();
   expect(firstToken.startsWith("thk_svc_")).toBe(true);
+  await expect(page.getByLabel("Delegation audience", { exact: true })).toHaveValue(audience);
   await page.getByRole("button", { name: "Dismiss secret" }).click();
   await expect(secret).toHaveCount(0);
 

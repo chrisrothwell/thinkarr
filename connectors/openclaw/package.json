@@ -1,9 +1,9 @@
 {
   "name": "@thinkarr/openclaw",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
-  "files": ["dist", "openclaw.plugin.json", "README.md"],
+  "files": ["dist", "openclaw.plugin.json", "README.md", "SETUP.md"],
   "openclaw": { "extensions": ["./dist/openclaw/index.js"] },
   "engines": { "node": ">=24.16.0 <25 || >=26.1.0" },
   "peerDependencies": { "openclaw": "2026.10.4" },

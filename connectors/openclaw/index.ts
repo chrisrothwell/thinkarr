@@ -2,16 +2,20 @@ import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { z } from "zod";
-import { createLinkingConnector, type LinkOutcome, type LinkingConnectorConfig, type PrivateLinkDelivery, type TrustedLinkInvocation } from "../delegated-mcp/linking.js";
+import { createLinkingConnector, linkingConnectorConfigSchema, type LinkOutcome, type LinkingConnectorConfig, type PrivateLinkDelivery, type TrustedLinkInvocation } from "../delegated-mcp/linking.js";
 import type { OpenClawHost, ToolContext } from "./host.js";
 import { confirmationIntent, mediaTools, mediaInputSchema, type MediaOutcome } from "../delegated-mcp/media-contract.js";
 
-const optionsSchema = z.object({
-  credentialsFile: z.string().refine(isAbsolute),
+const routingOptions = {
   // Receiving bot accounts/self identities, not a participant allowlist.
   accounts: z.record(z.string().min(1).max(512), z.string().regex(/^\+[1-9][0-9]{6,14}$/)),
   pilotGroup: z.string().max(512).regex(/^[0-9]+(?:-[0-9]+)?@g\.us$/).optional(),
-}).strict();
+};
+const optionsSchema = z.union([
+  z.object({ ...routingOptions, connection: linkingConnectorConfigSchema }).strict(),
+  // Compatibility for existing 0.2 installations; new setup uses native secrets.
+  z.object({ ...routingOptions, credentialsFile: z.string().refine(isAbsolute) }).strict(),
+]);
 
 /** Provider-address classification, not session-key parsing or alias guessing.
  * LID/hosted/device/unknown identities need verified provider mapping and are
@@ -51,8 +55,9 @@ const messages = {
   failed: "Account linking could not be completed. Please ask for a new private link.",
 };
 
-/** Synchronous native plugin registration. Credentials are read only inside a
- * current invocation, never during metadata/discovery or into model results.
+/** Synchronous registration. The host materializes declared native secrets;
+ * values remain in this closure, never tool metadata/results. Legacy files are
+ * read only inside a current invocation.
  */
 export function register<C extends object>(api: OpenClawHost<C>) {
   if (!["full", "tool-discovery"].includes(api.registrationMode)) return;
@@ -103,7 +108,7 @@ export function register<C extends object>(api: OpenClawHost<C>) {
       const signal = AbortSignal.any([AbortSignal.timeout(15_000), ...(invocation.signal ? [invocation.signal] : [])]);
       const assertCurrent = () => { signal.throwIfAborted(); invocation.assertCurrent(); };
       assertCurrent();
-      const credentials = await readCredentials(options.credentialsFile);
+      const credentials = "connection" in options ? options.connection : await readCredentials(options.credentialsFile);
       assertCurrent();
       const connector = await createLinkingConnector(credentials, { sendPrivate: (d) => sendPrivate(cfg, d) });
       assertCurrent();
@@ -120,7 +125,7 @@ export function register<C extends object>(api: OpenClawHost<C>) {
       const signal = AbortSignal.any([AbortSignal.timeout(25_000), ...(invocation.signal ? [invocation.signal] : [])]);
       const assertCurrent = () => { signal.throwIfAborted(); invocation.assertCurrent(); assertLive(); };
       assertCurrent();
-      const credentials = await readCredentials(options.credentialsFile);
+      const credentials = "connection" in options ? options.connection : await readCredentials(options.credentialsFile);
       assertCurrent();
       const connector = await createLinkingConnector(credentials, {
         sendPrivate: (d) => sendPrivate(cfg, d),
@@ -238,5 +243,5 @@ export function register<C extends object>(api: OpenClawHost<C>) {
   }, { timeoutMs: options.pilotGroup ? 30_000 : 20_000 });
 }
 
-const plugin = { id: "thinkarr", name: "Thinkarr", description: "Private, sender-verified Plex linking over signed MCP", register };
+const plugin = { id: "thinkarr", name: "Thinkarr", description: "Thinkarr companion with private Plex linking and participant-scoped media requests", register };
 export default plugin;

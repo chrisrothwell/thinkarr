@@ -13,6 +13,6 @@
     "typeRoots": ["../../node_modules/@types"],
     "plugins": []
   },
-  "include": ["index.ts", "host.ts", "../delegated-mcp/linking.ts"],
+  "include": ["index.ts", "host.ts", "setup.ts", "../delegated-mcp/linking.ts"],
   "exclude": ["dist", "node_modules"]
 }

@@ -20,6 +20,7 @@ const configSchema = z.object({
 }).strict();
 
 export type LinkingConnectorConfig = z.infer<typeof configSchema>;
+export { configSchema as linkingConnectorConfigSchema };
 /** Host-owned, canonical provider identity, never model/tool arguments. */
 export type TrustedLinkInvocation = z.infer<typeof actorSchema> & {
   assertCurrent: () => void;
