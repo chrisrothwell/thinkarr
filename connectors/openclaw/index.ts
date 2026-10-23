@@ -4,6 +4,7 @@ import { isAbsolute } from "node:path";
 import { z } from "zod";
 import { createLinkingConnector, linkingConnectorConfigSchema, type LinkOutcome, type LinkingConnectorConfig, type PrivateLinkDelivery, type TrustedLinkInvocation } from "../delegated-mcp/linking.js";
 import type { OpenClawHost, ToolContext } from "./host.js";
+import { loadPreparedSecretReader } from "./secrets.js";
 import { confirmationIntent, mediaTools, mediaInputSchema, type MediaOutcome } from "../delegated-mcp/media-contract.js";
 
 const routingOptions = {
@@ -11,7 +12,14 @@ const routingOptions = {
   accounts: z.record(z.string().min(1).max(512), z.string().regex(/^\+[1-9][0-9]{6,14}$/)),
   pilotGroup: z.string().max(512).regex(/^[0-9]+(?:-[0-9]+)?@g\.us$/).optional(),
 };
-const nativeOptionsSchema = z.object({ ...routingOptions, connection: linkingConnectorConfigSchema }).strict();
+const secretRefSchema = z.object({
+  source: z.enum(["store", "env", "file", "exec"]), provider: z.string().min(1), id: z.string().min(1),
+}).strict();
+const nativeConnectionSchema = linkingConnectorConfigSchema.extend({
+  bearer: z.union([linkingConnectorConfigSchema.shape.bearer, secretRefSchema]),
+  privateKeyPem: z.union([linkingConnectorConfigSchema.shape.privateKeyPem, secretRefSchema]),
+});
+const nativeOptionsSchema = z.object({ ...routingOptions, connection: nativeConnectionSchema }).strict();
 const legacyOptionsSchema = z.object({ ...routingOptions, credentialsFile: z.string().refine(isAbsolute) }).strict();
 const optionsSchema = z.union([
   nativeOptionsSchema,
@@ -27,7 +35,14 @@ function configurationError(input: unknown): Error {
   const native = !!record && Object.hasOwn(record, "connection");
   const result = (native ? nativeOptionsSchema : legacyOptionsSchema).safeParse(input);
   const fields = new Set(["endpoint", "publicLinkOrigin", "service", "issuer", "audience", "keyId", "bearer", "privateKeyPem"]);
-  const details = result.success ? [] : result.error.issues.map((issue) => {
+  const issues = result.success ? [] : result.error.issues.flatMap((issue) => {
+    if (issue.code !== "invalid_union" || issue.path[0] !== "connection") return [issue];
+    const connection = record && Reflect.get(record, "connection");
+    const value = connection && typeof connection === "object" ? Reflect.get(connection, issue.path[1]!) : undefined;
+    const branch = issue.errors[typeof value === "string" ? 0 : 1];
+    return branch ? branch.map((child) => ({ ...child, path: [...issue.path, ...child.path] })) : [issue];
+  });
+  const details = issues.map((issue) => {
     const [root, field] = issue.path;
     const path = root === "connection" ? (typeof field === "string" && fields.has(field) ? `connection.${field}` : "connection")
       : root === "accounts" ? "accounts.*" : root === "pilotGroup" || root === "credentialsFile" ? root : "config";
@@ -79,9 +94,9 @@ const messages = {
   failed: "Account linking could not be completed. Please ask for a new private link.",
 };
 
-/** Synchronous registration. The host materializes declared native secrets;
- * values remain in this closure, never tool metadata/results. Legacy files are
- * read only inside a current invocation.
+/** Synchronous registration accepts source refs or host-materialized strings.
+ * Prepared native secrets and legacy files are read only during an admitted
+ * invocation, never during registration or tool discovery.
  */
 export function register<C extends object>(api: OpenClawHost<C>) {
   if (!["full", "tool-discovery"].includes(api.registrationMode)) return;
@@ -92,6 +107,29 @@ export function register<C extends object>(api: OpenClawHost<C>) {
   const lifecycle = api.lifecycle.signal;
   if (!lifecycle) throw new Error("Thinkarr requires plugin lifecycle admission");
   const assertLive = () => lifecycle.throwIfAborted();
+
+  async function credentialsForInvocation(assertCurrent: () => void) {
+    assertCurrent(); assertLive();
+    if (!("connection" in options)) return { credentials: await readCredentials(options.credentialsFile), assertSecretsCurrent: assertLive };
+    const connection = options.connection;
+    if (typeof connection.bearer === "string" && typeof connection.privateKeyPem === "string") {
+      return { credentials: linkingConnectorConfigSchema.parse(connection), assertSecretsCurrent: assertLive };
+    }
+    const read = await loadPreparedSecretReader();
+    assertCurrent(); assertLive();
+    // Fixed manifest-owned paths, never a caller-supplied ref/provider/secret ID.
+    const bearer = read("thinkarr", "connection.bearer");
+    const key = read("thinkarr", "connection.privateKeyPem");
+    if (!Number.isSafeInteger(bearer.revision) || bearer.revision !== key.revision || !bearer.value || !key.value) throw new Error();
+    const assertSecretsCurrent = () => {
+      assertLive();
+      const currentBearer = read("thinkarr", "connection.bearer");
+      const currentKey = read("thinkarr", "connection.privateKeyPem");
+      if (currentBearer.revision !== bearer.revision || currentKey.revision !== bearer.revision || !currentBearer.value || !currentKey.value) throw new Error();
+    };
+    assertSecretsCurrent();
+    return { credentials: linkingConnectorConfigSchema.parse({ ...connection, bearer: bearer.value, privateKeyPem: key.value }), assertSecretsCurrent };
+  }
 
   function actor(channel: unknown, account: unknown, sender: unknown, nativeConversation: unknown) {
     if (channel !== "whatsapp" || typeof account !== "string" || !Object.hasOwn(options.accounts, account)) return;
@@ -130,11 +168,13 @@ export function register<C extends object>(api: OpenClawHost<C>) {
   async function run(invocation: TrustedLinkInvocation, cfg: C, completion?: { content: string; eventId: string; eventTime: number }): Promise<LinkOutcome> {
     try {
       const signal = AbortSignal.any([AbortSignal.timeout(15_000), ...(invocation.signal ? [invocation.signal] : [])]);
-      const assertCurrent = () => { signal.throwIfAborted(); invocation.assertCurrent(); };
+      let assertSecretsCurrent = assertLive;
+      const assertCurrent = () => { signal.throwIfAborted(); invocation.assertCurrent(); assertSecretsCurrent(); };
       assertCurrent();
-      const credentials = "connection" in options ? options.connection : await readCredentials(options.credentialsFile);
+      const prepared = await credentialsForInvocation(assertCurrent);
+      assertSecretsCurrent = prepared.assertSecretsCurrent;
       assertCurrent();
-      const connector = await createLinkingConnector(credentials, { sendPrivate: (d) => sendPrivate(cfg, d) });
+      const connector = await createLinkingConnector(prepared.credentials, { sendPrivate: (d) => sendPrivate(cfg, d) });
       assertCurrent();
       const current = { ...invocation, signal, assertCurrent };
       return completion
@@ -147,11 +187,13 @@ export function register<C extends object>(api: OpenClawHost<C>) {
     try {
       if (invocation.kind !== "group" || invocation.conversation !== options.pilotGroup) return { status: "failed" };
       const signal = AbortSignal.any([AbortSignal.timeout(25_000), ...(invocation.signal ? [invocation.signal] : [])]);
-      const assertCurrent = () => { signal.throwIfAborted(); invocation.assertCurrent(); assertLive(); };
+      let assertSecretsCurrent = assertLive;
+      const assertCurrent = () => { signal.throwIfAborted(); invocation.assertCurrent(); assertSecretsCurrent(); };
       assertCurrent();
-      const credentials = "connection" in options ? options.connection : await readCredentials(options.credentialsFile);
+      const prepared = await credentialsForInvocation(assertCurrent);
+      assertSecretsCurrent = prepared.assertSecretsCurrent;
       assertCurrent();
-      const connector = await createLinkingConnector(credentials, {
+      const connector = await createLinkingConnector(prepared.credentials, {
         sendPrivate: (d) => sendPrivate(cfg, d),
         async sendPrompt(delivery) {
           const guard = () => { delivery.assertCurrent(); assertCurrent(); };

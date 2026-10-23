@@ -10,6 +10,9 @@ import { delegatedLinkFixture } from "../helpers/delegated-link";
 import { canonicalPhone, register } from "../../../connectors/openclaw/index";
 import type { DispatchContext, DispatchEvent, DispatchResult, OpenClawHost, Outbound, ToolContext } from "../../../connectors/openclaw/host";
 import manifest from "../../../connectors/openclaw/openclaw.plugin.json";
+import { loadPreparedSecretReader } from "../../../connectors/openclaw/secrets";
+
+vi.mock("../../../connectors/openclaw/secrets", () => ({ loadPreparedSecretReader: vi.fn() }));
 
 let db: TestDb;
 let sqlite: Database.Database;
@@ -34,6 +37,7 @@ beforeEach(async () => {
   directory = await mkdtemp(join(tmpdir(), "thinkarr-openclaw-"));
   vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date("2026-10-20T08:00:00Z"));
   vi.clearAllMocks();
+  vi.mocked(loadPreparedSecretReader).mockRejectedValue(new Error("unavailable"));
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => POST(new Request(input, init))));
 });
 afterEach(async () => { sqlite.close(); vi.useRealTimers(); vi.unstubAllGlobals(); await rm(directory, { recursive: true, force: true }); });
@@ -110,23 +114,66 @@ describe("OpenClaw linking adapter", () => {
     expect(JSON.stringify(result)).not.toContain(connection.bearer); expect(JSON.stringify(result)).not.toContain(connection.privateKeyPem);
     h.lifecycle.abort(); expect((await h.create()!.execute("disposed", {})).details.status).toBe("failed");
   });
-  it("fails closed when the host has not materialized a configured secret reference", async () => {
+  it("registers source refs without accessing secrets, then uses the admitted host reader for a real private link", async () => {
     const h = await fixture(); const connection = JSON.parse(await readFile(h.credentialsFile, "utf8"));
-    connection.bearer = { source: "store", provider: "default", id: "PROTECTED_TOKEN" };
-    h.api.pluginConfig = { accounts: { "account-A": "+15555550100" }, connection };
-    expect(() => register(h.api)).toThrow("Invalid Thinkarr plugin configuration [native]: connection.bearer: invalid_type (received object)"); expect(fetch).not.toHaveBeenCalled();
-    expect(h.api.registerTool).not.toHaveBeenCalled(); expect(h.api.on).not.toHaveBeenCalled();
+    const read = vi.fn((_plugin: string, path: string) => ({ value: path === "connection.bearer" ? connection.bearer : connection.privateKeyPem, revision: 1 }));
+    vi.mocked(loadPreparedSecretReader).mockResolvedValue(read);
+    h.api.pluginConfig = { accounts: { "account-A": "+15555550100" }, connection: { ...connection,
+      bearer: { source: "store", provider: "default", id: "PROTECTED_TOKEN" },
+      privateKeyPem: { source: "store", provider: "default", id: "PROTECTED_KEY" },
+    } };
+    await rm(h.credentialsFile); register(h.api);
+    expect(loadPreparedSecretReader).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
+    expect(h.create(toolContext({ requesterSenderId: undefined }))).toBeNull(); expect(read).not.toHaveBeenCalled();
+    const result = await h.create()!.execute("native-refs", {});
+    expect(result.details.status).toBe("private_link_sent");
+    expect(read.mock.calls.every(([plugin, path]) => plugin === "thinkarr" && ["connection.bearer", "connection.privateKeyPem"].includes(path))).toBe(true);
+    const code = prepareAccountLink(new URL(h.sends[0].text.split(" ").at(-1)!).hash.slice(7), h.f.sessionA, h.f.userA).completionCode;
+    expect(await h.dispatch({ content: `Link account ${code}`, channel: "whatsapp", senderId: sender,
+      messageId: "native-verification", timestamp: Date.now(), isGroup: false,
+    }, { channelId: "whatsapp", accountId: "account-A", conversationId: sender, senderId: sender, messageId: "native-verification" }))
+      .toEqual({ handled: true, text: "Your Plex account is linked." });
+    expect(JSON.stringify(result)).not.toContain(connection.bearer); expect(JSON.stringify(result)).not.toContain(connection.privateKeyPem);
+  });
+  it.each(["unavailable", "mismatched-revisions", "malformed-value", "reader-denied"])("fails closed for prepared secrets: %s", async (mode) => {
+    const h = await fixture(); const connection = JSON.parse(await readFile(h.credentialsFile, "utf8"));
+    h.api.pluginConfig = { accounts: { "account-A": "+15555550100" }, connection: { ...connection,
+      bearer: { source: "store", provider: "default", id: "PROTECTED_TOKEN" },
+      privateKeyPem: { source: "store", provider: "default", id: "PROTECTED_KEY" },
+    } };
+    if (mode !== "reader-denied") vi.mocked(loadPreparedSecretReader).mockResolvedValue((_plugin, path) => ({
+      value: mode === "unavailable" ? undefined : mode === "malformed-value" ? "invalid" : path === "connection.bearer" ? connection.bearer : connection.privateKeyPem,
+      revision: mode === "mismatched-revisions" && path === "connection.privateKeyPem" ? 2 : 1,
+    }));
+    register(h.api);
+    expect((await h.create()!.execute("denied", {})).details.status).toBe("failed");
+    expect(fetch).not.toHaveBeenCalled(); expect(h.sends).toHaveLength(0);
+  });
+  it.each(["revision", "unavailable"])("fences a native secret %s change before private delivery", async (mode) => {
+    const h = await fixture(); const connection = JSON.parse(await readFile(h.credentialsFile, "utf8"));
+    let changed = false;
+    h.api.pluginConfig = { accounts: { "account-A": "+15555550100" }, connection: { ...connection,
+      bearer: { source: "store", provider: "default", id: "PROTECTED_TOKEN" },
+      privateKeyPem: { source: "store", provider: "default", id: "PROTECTED_KEY" },
+    } };
+    vi.mocked(loadPreparedSecretReader).mockResolvedValue((_plugin, path) => ({
+      value: changed && mode === "unavailable" ? undefined : path === "connection.bearer" ? connection.bearer : connection.privateKeyPem,
+      revision: changed && mode === "revision" ? 2 : 1,
+    }));
+    h.api.runtime.channel.outbound.loadAdapter = async () => { changed = true; return h.outbound; };
+    register(h.api);
+    expect((await h.create()!.execute("revoked", {})).details.status).toBe("failed"); expect(h.sends).toHaveLength(0);
   });
   it("identifies malformed runtime secret types/formats without logging values, reference IDs or arbitrary keys", async () => {
     const h = await fixture(); const connection = JSON.parse(await readFile(h.credentialsFile, "utf8"));
     const hidden = "SENSITIVE_VALUE_MUST_NOT_APPEAR";
     h.api.pluginConfig = { accounts: { [hidden]: hidden }, connection: { ...connection,
-      bearer: hidden, privateKeyPem: { source: "store", provider: hidden, id: hidden }, [hidden]: hidden,
+      bearer: hidden, privateKeyPem: [hidden], [hidden]: hidden,
     }, [hidden]: hidden };
     let error: Error | undefined;
     try { register(h.api); } catch (caught) { error = caught as Error; }
     expect(error?.message).toContain("connection.bearer: invalid_format (received string)");
-    expect(error?.message).toContain("connection.privateKeyPem: invalid_type (received object)");
+    expect(error?.message).toContain("connection.privateKeyPem: invalid_type (received array)");
     expect(error?.message).toContain("accounts.*: invalid_format");
     expect(error?.message).toContain("unrecognized_keys");
     for (const value of [hidden, connection.bearer, connection.privateKeyPem]) expect(String(error)).not.toContain(value);
