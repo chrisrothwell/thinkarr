@@ -52,7 +52,15 @@ An enrollment reply may be lost after a real credential issuance. Do not blindly
 
 Use the normal OpenClaw owner capability review and plugin enable action. Grant the four optional `thinkarr_*` tools additively to the intended agent/context; retain unrelated tools and finance routing. The helper does not replace the agent's tool allowlist.
 
-Refresh secrets/reload the plugin as required and run `openclaw secrets audit --check`. Inspect the plugin's **actual runtime registrations** and the intended group's effective tools. Confirm missing references, wrong group/account/self identity or revoked credentials fail closed. Do not report ready on the basis of installed package metadata alone.
+Refresh secrets as required and run `openclaw secrets audit --check`. Separate this integration's unresolved references from pre-existing unrelated audit findings; do not start a broad secret migration as an activation repair.
+
+Apply the managed plugin update/reload once and wait for its generation receipt. Check the **running Gateway's** `plugins.list` runtime state and any concrete error. Installed/enabled configuration and cold or scoped CLI inspection are not proof that the Gateway loaded the instance. If it remains unloaded, stop and report the manifest/activation/policy/error evidence; repeated reloads and source/catalog inspection are not a recovery strategy. Follow an explicit restart-required receipt if the platform returns one. Use managed archive replacement and ordinary capability consent; do not edit installed bundle files or bypass provenance/trust checks.
+
+The manifest must own all four tool names and activate at startup for its message hook. Generic `tools.catalog` and even session-metadata `tools.effective` inspections can omit the executable tools: version-2 factories require actual host WhatsApp sender/account/native-conversation metadata and an admitted invocation. Do not invent an identity, relax factory guards, widen the agent profile or keep reloading just to make those names appear in a context-free catalog.
+
+Once native secrets resolve and the Gateway runtime is active, report **configured/runtime-active; awaiting an authorized WhatsApp turn**, rather than treating missing context-free tools as failed enrollment. The owner's next admitted message in the configured group provides the real context for checking tool availability and initiating private linking. Check role/group/account/self/revocation failures through that authorized interaction; no autonomous challenge/message/request is needed for offline readiness.
+
+If setup has already succeeded, retain the existing native secrets and registered key. Activation repair is not a reason to issue a new setup code, rotate the bearer, regenerate keys or rerun enrollment. Resume a blocked setup only after meaningful new evidence or a relevant package/config change, not another unchanged polling/heartbeat pass.
 
 After native secret storage and runtime access are verified, retire only temporary plaintext key/credential copies created for this connection. Never delete an unknown file or an active signing key before its replacement is verified.
 

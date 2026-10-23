@@ -2,6 +2,16 @@
   "id": "thinkarr",
   "name": "Thinkarr",
   "description": "Thinkarr companion: private Plex linking and participant-scoped media requests",
+  "activation": { "onStartup": true },
+  "contracts": {
+    "tools": ["thinkarr_account_link", "thinkarr_media_search", "thinkarr_media_details", "thinkarr_media_select"]
+  },
+  "toolMetadata": {
+    "thinkarr_account_link": { "optional": true },
+    "thinkarr_media_search": { "optional": true },
+    "thinkarr_media_details": { "optional": true },
+    "thinkarr_media_select": { "optional": true }
+  },
   "configContracts": {
     "secretInputs": {
       "paths": [
