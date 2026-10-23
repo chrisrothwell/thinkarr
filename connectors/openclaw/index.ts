@@ -11,11 +11,35 @@ const routingOptions = {
   accounts: z.record(z.string().min(1).max(512), z.string().regex(/^\+[1-9][0-9]{6,14}$/)),
   pilotGroup: z.string().max(512).regex(/^[0-9]+(?:-[0-9]+)?@g\.us$/).optional(),
 };
+const nativeOptionsSchema = z.object({ ...routingOptions, connection: linkingConnectorConfigSchema }).strict();
+const legacyOptionsSchema = z.object({ ...routingOptions, credentialsFile: z.string().refine(isAbsolute) }).strict();
 const optionsSchema = z.union([
-  z.object({ ...routingOptions, connection: linkingConnectorConfigSchema }).strict(),
+  nativeOptionsSchema,
   // Compatibility for existing 0.2 installations; new setup uses native secrets.
-  z.object({ ...routingOptions, credentialsFile: z.string().refine(isAbsolute) }).strict(),
+  legacyOptionsSchema,
 ]);
+
+/** Diagnostics contain only schema-owned paths, codes and primitive types.
+ * Never stringify Zod errors: messages/keys/inputs can contain credential data.
+ */
+function configurationError(input: unknown): Error {
+  const record = input && typeof input === "object" ? input : undefined;
+  const native = !!record && Object.hasOwn(record, "connection");
+  const result = (native ? nativeOptionsSchema : legacyOptionsSchema).safeParse(input);
+  const fields = new Set(["endpoint", "publicLinkOrigin", "service", "issuer", "audience", "keyId", "bearer", "privateKeyPem"]);
+  const details = result.success ? [] : result.error.issues.map((issue) => {
+    const [root, field] = issue.path;
+    const path = root === "connection" ? (typeof field === "string" && fields.has(field) ? `connection.${field}` : "connection")
+      : root === "accounts" ? "accounts.*" : root === "pilotGroup" || root === "credentialsFile" ? root : "config";
+    // Use actual types only for fixed connection fields, never dynamic map keys.
+    const connection = record && Reflect.get(record, "connection");
+    const value = path.startsWith("connection.") && connection && typeof connection === "object"
+      ? Reflect.get(connection, field!) : undefined;
+    const received = value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
+    return `${path}: ${issue.code}${path.startsWith("connection.") ? ` (received ${received})` : ""}`;
+  });
+  return new Error(`Invalid Thinkarr plugin configuration [${native ? "native" : "legacy"}]: ${[...new Set(details)].slice(0, 12).join("; ")}`);
+}
 
 /** Provider-address classification, not session-key parsing or alias guessing.
  * LID/hosted/device/unknown identities need verified provider mapping and are
@@ -63,7 +87,7 @@ export function register<C extends object>(api: OpenClawHost<C>) {
   if (!["full", "tool-discovery"].includes(api.registrationMode)) return;
   if (api.runtime.version !== "2026.10.4") throw new Error("Thinkarr requires OpenClaw 2026.10.4");
   const parsed = optionsSchema.safeParse(api.pluginConfig);
-  if (!parsed.success) throw new Error("Invalid Thinkarr plugin configuration");
+  if (!parsed.success) throw configurationError(api.pluginConfig);
   const options = parsed.data;
   const lifecycle = api.lifecycle.signal;
   if (!lifecycle) throw new Error("Thinkarr requires plugin lifecycle admission");

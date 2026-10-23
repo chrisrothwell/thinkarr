@@ -114,7 +114,23 @@ describe("OpenClaw linking adapter", () => {
     const h = await fixture(); const connection = JSON.parse(await readFile(h.credentialsFile, "utf8"));
     connection.bearer = { source: "store", provider: "default", id: "PROTECTED_TOKEN" };
     h.api.pluginConfig = { accounts: { "account-A": "+15555550100" }, connection };
-    expect(() => register(h.api)).toThrow("Invalid Thinkarr plugin configuration"); expect(fetch).not.toHaveBeenCalled();
+    expect(() => register(h.api)).toThrow("Invalid Thinkarr plugin configuration [native]: connection.bearer: invalid_type (received object)"); expect(fetch).not.toHaveBeenCalled();
+    expect(h.api.registerTool).not.toHaveBeenCalled(); expect(h.api.on).not.toHaveBeenCalled();
+  });
+  it("identifies malformed runtime secret types/formats without logging values, reference IDs or arbitrary keys", async () => {
+    const h = await fixture(); const connection = JSON.parse(await readFile(h.credentialsFile, "utf8"));
+    const hidden = "SENSITIVE_VALUE_MUST_NOT_APPEAR";
+    h.api.pluginConfig = { accounts: { [hidden]: hidden }, connection: { ...connection,
+      bearer: hidden, privateKeyPem: { source: "store", provider: hidden, id: hidden }, [hidden]: hidden,
+    }, [hidden]: hidden };
+    let error: Error | undefined;
+    try { register(h.api); } catch (caught) { error = caught as Error; }
+    expect(error?.message).toContain("connection.bearer: invalid_format (received string)");
+    expect(error?.message).toContain("connection.privateKeyPem: invalid_type (received object)");
+    expect(error?.message).toContain("accounts.*: invalid_format");
+    expect(error?.message).toContain("unrecognized_keys");
+    for (const value of [hidden, connection.bearer, connection.privateKeyPem]) expect(String(error)).not.toContain(value);
+    expect(fetch).not.toHaveBeenCalled(); expect(h.api.registerTool).not.toHaveBeenCalled(); expect(h.api.on).not.toHaveBeenCalled();
   });
   it("registers supported factory/hook, sends only to the sender privately and completes the real backend link", async () => {
     const h = await fixture(); register(h.api);

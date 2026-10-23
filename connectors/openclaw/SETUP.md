@@ -50,6 +50,8 @@ An enrollment reply may be lost after a real credential issuance. Do not blindly
 
 ## Activate and verify
 
+Registration errors in `0.3.2` identify schema-owned fields, validation codes and connection-value types only, for example `connection.bearer: invalid_type (received object)`. Report that bounded error and generation receipt, not configuration snapshots, Zod error objects or secret values. If a native secrets refresh has already succeeded and registration still fails, stop; do not repeat refresh/reload or reenroll. A diagnostic package identifies the rejected input but is not proof that the underlying configuration problem is fixed. An update may itself attempt activation; collect that result before deciding whether a separate reload is necessary.
+
 Use the normal OpenClaw owner capability review and plugin enable action. Grant the four optional `thinkarr_*` tools additively to the intended agent/context; retain unrelated tools and finance routing. The helper does not replace the agent's tool allowlist.
 
 Refresh secrets as required and run `openclaw secrets audit --check`. Separate this integration's unresolved references from pre-existing unrelated audit findings; do not start a broad secret migration as an activation repair.

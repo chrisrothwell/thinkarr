@@ -23,15 +23,15 @@ npm run build:openclaw
 npm pack ./connectors/openclaw
 ```
 
-Install the resulting `thinkarr-openclaw-0.3.1.tgz` through the supported local archive mechanism:
+Install the resulting `thinkarr-openclaw-0.3.2.tgz` through the supported local archive mechanism:
 
 ```bash
-openclaw plugins install npm-pack:/path/to/thinkarr-openclaw-0.3.1.tgz --no-enable
+openclaw plugins install npm-pack:/path/to/thinkarr-openclaw-0.3.2.tgz --no-enable
 ```
 
 The Control UI can configure, enable and reload an installed plugin. Its catalog installer does not accept arbitrary local archives; a CLI or the browser's operator Terminal is needed for this archive installation. The package is not currently advertised as a published npm/ClawHub release.
 
-For an already-enrolled `0.3.0` connection, update the managed archive to `0.3.1` with the normal replacement/capability review and reload. Keep the existing native secrets, connection settings and keys; do not run enrollment again to repair missing activation metadata. This patch works with the same Thinkarr API build. The `npm-pack:` source uses OpenClaw's managed npm/integrity path for this npm-generated artifact.
+For an already-enrolled `0.3.x` connection, update the managed archive with the normal replacement/capability review. Keep the existing native secrets, connection settings and keys; do not run enrollment again. This patch works with the same Thinkarr API build. Version `0.3.2` adds value-free configuration diagnostics; it does not claim to fix an unidentified runtime configuration failure. Local archives, including `npm-pack:` sources, remain outside OpenClaw's reviewed trust sources. Managed installation/integrity tracking does not confer official trust or remove a provenance warning.
 
 ## Native-secret configuration
 
