@@ -19,6 +19,8 @@ export type DiagnosticFields = {
   receiptMessageIdPresent?: boolean;
   receiptDestinationSupported?: boolean;
   receiptDestinationMatches?: boolean;
+  protocolPhase?: "initialize" | "initialized" | "tool_call" | "other";
+  receiptDestinationKind?: "pn_jid" | "e164" | "lid" | "group" | "missing" | "other";
 };
 export type DiagnosticSink = (level: DiagnosticLevel, stage: string, fields?: DiagnosticFields) => void;
 export type DiagnosticLogger = { info: (message: string) => void; warn: (message: string) => void; error: (message: string) => void };
@@ -28,7 +30,7 @@ export class ConnectorDiagnosticError extends Error {
   constructor(readonly reason: string) { super(reason); }
 }
 
-const outcomes = new Set(["linked", "private_link_sent", "failed", "ok", "prompt_sent", "submitted", "pending_approval", "expired", "reply_to_prompt", "blocked", "unknown", "unclaimed"]);
+const outcomes = new Set(["linked", "private_link_sent", "private_delivery_unconfirmed", "unavailable", "failed", "ok", "prompt_sent", "submitted", "pending_approval", "expired", "reply_to_prompt", "blocked", "unknown", "unclaimed"]);
 const errorCodes = new Set([
   "ECONNREFUSED", "ECONNRESET", "ENOTFOUND", "EAI_AGAIN", "ETIMEDOUT", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT",
   "CERT_HAS_EXPIRED", "DEPTH_ZERO_SELF_SIGNED_CERT", "UNABLE_TO_VERIFY_LEAF_SIGNATURE", "ERR_TLS_CERT_ALTNAME_INVALID",
@@ -101,6 +103,8 @@ export function createDiagnosticTrace(logger: DiagnosticLogger | undefined, debu
         ...Object.fromEntries((["bearerAvailable", "keyAvailable", "revisionMatches", "debugEnabled", "mediaEnabled", "acknowledgementConfirmed", "receiptChannelMatches", "receiptMessageIdPresent", "receiptDestinationSupported", "receiptDestinationMatches"] as const)
           .filter((key) => typeof fields[key] === "boolean").map((key) => [key, fields[key]])),
         ...(typeof fields.outcome === "string" && outcomes.has(fields.outcome) ? { outcome: fields.outcome } : {}),
+        ...(fields.protocolPhase && ["initialize", "initialized", "tool_call", "other"].includes(fields.protocolPhase) ? { protocolPhase: fields.protocolPhase } : {}),
+        ...(fields.receiptDestinationKind && ["pn_jid", "e164", "lid", "group", "missing", "other"].includes(fields.receiptDestinationKind) ? { receiptDestinationKind: fields.receiptDestinationKind } : {}),
       };
       // Detailed records use info so the plugin switch works without changing
       // the Gateway's global log threshold; the record still says level=debug.

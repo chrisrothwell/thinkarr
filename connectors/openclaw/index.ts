@@ -2,7 +2,7 @@ import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { z } from "zod";
-import { createLinkingConnector, linkingConnectorConfigSchema, type LinkOutcome, type LinkingConnectorConfig, type PrivateLinkDelivery, type TrustedLinkInvocation } from "../delegated-mcp/linking.js";
+import { createLinkingConnector, linkingConnectorConfigSchema, LINK_OPERATION_TIMEOUT_MS, LINK_VERIFICATION_TIMEOUT_MS, LINK_HOOK_TIMEOUT_MS, type LinkOutcome, type LinkingConnectorConfig, type PrivateLinkDelivery, type TrustedLinkInvocation } from "../delegated-mcp/linking.js";
 import type { OpenClawHost, ToolContext } from "./host.js";
 import { loadPreparedSecretReader } from "./secrets.js";
 import { confirmationIntent, mediaTools, mediaInputSchema, type MediaOutcome } from "../delegated-mcp/media-contract.js";
@@ -93,6 +93,9 @@ const failure: LinkOutcome = Object.freeze({ status: "failed" });
 const messages = {
   linked: "Your Plex account is linked.",
   private_link_sent: "I sent your private Plex sign-in link. Open it, then finish verification in WhatsApp.",
+  private_delivery_unconfirmed: "A private Plex sign-in message may have been sent. Please check your private WhatsApp chat and follow the instructions there. If it arrived, use that link rather than requesting another one.",
+  unavailable: "Thinkarr did not respond in time. Please try this step again while your current private link is valid; keep the link if you already received one.",
+  unknown: "I could not confirm the result from Thinkarr. Please check your account-link status before trying again.",
   failed: "Account linking could not be completed. Please ask for a new private link.",
 };
 
@@ -172,6 +175,7 @@ export function register<C extends object>(api: OpenClawHost<C>) {
 
   async function sendPrivateText(cfg: C, delivery: Pick<PrivateLinkDelivery, "account" | "recipient" | "assertCurrent" | "signal">, text: string, log: DiagnosticSink, kind: "private" | "ack" = "private") {
     let stage = `outbound.${kind}_validate`;
+    let dispatches = 0;
     const step = (next: string) => { stage = next; log("debug", stage); };
     try {
       step(stage);
@@ -185,7 +189,6 @@ export function register<C extends object>(api: OpenClawHost<C>) {
       step(`outbound.${kind}_resolve`);
       const resolved = outbound.resolveTarget({ cfg, to: recipient, accountId: delivery.account, mode: "explicit", allowFrom: [recipient] });
       if (!resolved.ok || canonicalPhone(resolved.to) !== recipient) throw new ConnectorDiagnosticError("private_target_mismatch");
-      let dispatches = 0;
       const guard = () => { delivery.assertCurrent(); assertLive(); };
       guard();
       step(`outbound.${kind}_send`);
@@ -204,10 +207,20 @@ export function register<C extends object>(api: OpenClawHost<C>) {
         receiptChannelMatches: result.channel === "whatsapp", receiptMessageIdPresent: !!result.messageId?.trim(),
         receiptDestinationSupported: !!canonicalPhone(result.toJid), receiptDestinationMatches: canonicalPhone(result.toJid) === recipient,
       };
-      log(Object.values(receiptChecks).every(Boolean) ? "debug" : "warn", `outbound.${kind}_receipt_checks`, receiptChecks);
-      if (result.channel !== "whatsapp" || !result.messageId?.trim() || canonicalPhone(result.toJid) !== recipient) throw new ConnectorDiagnosticError("private_receipt_invalid");
+      const destination = result.toJid?.replace(/^whatsapp:/, "");
+      const receiptDestinationKind = destination === undefined || destination === "" ? "missing"
+        : destination.endsWith("@g.us") ? "group" : /^[0-9]+@lid$/.test(destination) ? "lid" : /^[0-9]+@s\.whatsapp\.net$/.test(destination) ? "pn_jid"
+          : /^\+[1-9][0-9]{6,14}$/.test(destination) ? "e164" : "other";
+      log(Object.values(receiptChecks).every(Boolean) ? "debug" : "warn", `outbound.${kind}_receipt_checks`, { ...receiptChecks, receiptDestinationKind });
+      if (result.channel !== "whatsapp" || receiptDestinationKind === "group") throw new ConnectorDiagnosticError("private_receipt_invalid");
+      if (!result.messageId?.trim() || !canonicalPhone(result.toJid)) throw new ConnectorDiagnosticError("private_delivery_unconfirmed");
+      if (canonicalPhone(result.toJid) !== recipient) throw new ConnectorDiagnosticError("private_receipt_invalid");
       return { accepted: true as const, channel: "whatsapp" as const, account: delivery.account, recipient, messageId: result.messageId };
-    } catch (error) { log("error", stage, diagnosticErrorFields(error)); throw error; }
+    } catch (error) {
+      log("error", stage, diagnosticErrorFields(error));
+      if (dispatches > 0 && !(error instanceof ConnectorDiagnosticError)) throw new ConnectorDiagnosticError("private_delivery_unconfirmed");
+      throw error;
+    }
   }
 
   const sendPrivate = (cfg: C, delivery: PrivateLinkDelivery, log: DiagnosticSink) =>
@@ -218,7 +231,7 @@ export function register<C extends object>(api: OpenClawHost<C>) {
     const step = (next: string) => { stage = next; trace.log("debug", stage); };
     trace.log("info", "operation.started");
     try {
-      const signal = AbortSignal.any([AbortSignal.timeout(15_000), ...(invocation.signal ? [invocation.signal] : [])]);
+      const signal = AbortSignal.any([AbortSignal.timeout(LINK_OPERATION_TIMEOUT_MS), ...(invocation.signal ? [invocation.signal] : [])]);
       let assertSecretsCurrent = assertLive;
       const assertCurrent = () => { signal.throwIfAborted(); try { invocation.assertCurrent(); } catch { throw new ConnectorDiagnosticError("invocation_not_current"); } assertSecretsCurrent(); };
       assertCurrent();
@@ -234,7 +247,7 @@ export function register<C extends object>(api: OpenClawHost<C>) {
       const result = completion
         ? (await connector.handlePrivateLinkMessage({ ...current, eventId: completion.eventId, eventTime: completion.eventTime }, completion.content)) ?? failure
         : await connector.startLink(current);
-      trace.log(result.status === "failed" ? "warn" : "info", completion ? "verification.result" : "operation.completed", { outcome: result.status });
+      trace.log(["linked", "private_link_sent"].includes(result.status) ? "info" : "warn", completion ? "verification.result" : "operation.completed", { outcome: result.status });
       return result;
     } catch (error) { trace.error(stage, error); trace.log("warn", completion ? "verification.result" : "operation.completed", { outcome: "failed" }); return failure; }
   }
@@ -312,7 +325,7 @@ export function register<C extends object>(api: OpenClawHost<C>) {
       const cfg = ctx.runtimeConfig ?? ctx.config ?? api.config;
       return {
         name: "thinkarr_account_link", label: "Link Plex account",
-        description: "Privately link the current WhatsApp participant to Plex. Takes no identity or delivery arguments; returns only a safe outcome.",
+        description: "Privately link the current WhatsApp participant to Plex. Takes no identity or delivery arguments. If private delivery is unconfirmed, direct the user to check their private chat and do not automatically request another link. An unknown outcome requires checking account-link status first.",
         parameters: { type: "object", properties: {}, additionalProperties: false },
         async execute(_id, args, signal) {
           let outcome = failure;
@@ -380,7 +393,7 @@ export function register<C extends object>(api: OpenClawHost<C>) {
         return { handled: true, text: result.status === "ok" ? mediaMessages.failed : mediaMessages[result.status] };
       }
       const trace = createDiagnosticTrace(api.logger, options.debug, "link_complete");
-      const signal = AbortSignal.any([lifecycle, AbortSignal.timeout(18_000)]);
+      const signal = AbortSignal.any([lifecycle, AbortSignal.timeout(LINK_VERIFICATION_TIMEOUT_MS)]);
       const assertCurrent = () => { signal.throwIfAborted(); if (!active) throw new ConnectorDiagnosticError("verification_handler_closed"); assertLive(); };
       const outcome = await run({ ...identity, signal, assertCurrent }, api.config,
         { content: event.content, eventId: event.messageId!, eventTime: event.timestamp! }, trace);
@@ -395,10 +408,10 @@ export function register<C extends object>(api: OpenClawHost<C>) {
         // acknowledgement or return automatic reply text that could duplicate it.
         trace.error("verification.reply_unconfirmed", error);
       }
-      trace.log(acknowledgementConfirmed ? "info" : "warn", "operation.completed", { outcome: outcome.status, acknowledgementConfirmed });
+      trace.log(acknowledgementConfirmed && outcome.status === "linked" ? "info" : "warn", "operation.completed", { outcome: outcome.status, acknowledgementConfirmed });
       return { handled: true };
     } finally { active = false; }
-  }, { timeoutMs: options.pilotGroup ? 30_000 : 20_000 });
+  }, { timeoutMs: LINK_HOOK_TIMEOUT_MS });
 }
 
 const plugin = { id: "thinkarr", name: "Thinkarr", description: "Thinkarr companion with private Plex linking and participant-scoped media requests", register };

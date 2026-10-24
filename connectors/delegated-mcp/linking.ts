@@ -22,13 +22,18 @@ const configSchema = z.object({
 
 export type LinkingConnectorConfig = z.infer<typeof configSchema>;
 export { configSchema as linkingConnectorConfigSchema };
+// Three sequential signed MCP exchanges must fit before the tool result. Keep
+// this bounded below the assertion lifetime, with fresh signatures per POST.
+export const LINK_OPERATION_TIMEOUT_MS = 45_000;
+export const LINK_VERIFICATION_TIMEOUT_MS = 55_000;
+export const LINK_HOOK_TIMEOUT_MS = 60_000;
 /** Host-owned, canonical provider identity, never model/tool arguments. */
 export type TrustedLinkInvocation = z.infer<typeof actorSchema> & {
   assertCurrent: () => void;
   signal?: AbortSignal;
 };
 export type TrustedLinkMessage = TrustedLinkInvocation & z.infer<typeof eventSchema>;
-export type LinkOutcome = Readonly<{ status: "linked" | "private_link_sent" | "failed" }>;
+export type LinkOutcome = Readonly<{ status: "linked" | "private_link_sent" | "private_delivery_unconfirmed" | "unavailable" | "unknown" | "failed" }>;
 export type PrivateLinkDelivery = Readonly<{
   channel: "whatsapp"; account: string; recipient: string; url: string; expiresAt: string;
   /** The host must recheck immediately before every physical provider send. */
@@ -121,6 +126,7 @@ export async function createLinkingConnector(config: LinkingConnectorConfig, hos
   async function invoke(invocation: TrustedLinkInvocation, code?: string, event?: z.infer<typeof eventSchema>, media?: MediaCall): Promise<LinkOutcome | MediaOutcome> {
     let client: Client | undefined;
     let active = true;
+    let toolCallStarted = false;
     let stage = "connector.actor";
     const step = (next: string) => { stage = next; log("debug", stage); };
     const reject = (reason: string) => { log("warn", stage, { reason, outcome: "failed" }); return failed; };
@@ -132,7 +138,7 @@ export async function createLinkingConnector(config: LinkingConnectorConfig, hos
       }));
       const assertCurrent = invocation.assertCurrent;
       if (typeof assertCurrent !== "function") return reject("invocation_guard_missing");
-      const signal = AbortSignal.any([AbortSignal.timeout(media ? 25_000 : 15_000), ...(invocation.signal ? [invocation.signal] : [])]);
+      const signal = AbortSignal.any([AbortSignal.timeout(media ? 25_000 : LINK_OPERATION_TIMEOUT_MS), ...(invocation.signal ? [invocation.signal] : [])]);
       const guard = () => {
         if (!active) throw new Error("Closed connector invocation");
         signal.throwIfAborted(); assertCurrent();
@@ -144,16 +150,25 @@ export async function createLinkingConnector(config: LinkingConnectorConfig, hos
       const transport = new StreamableHTTPClientTransport(endpoint, {
         fetch: async (input, init) => {
           let requestStage = "mcp.http.prepare";
+          let protocolPhase: "initialize" | "initialized" | "tool_call" | "other" = "other";
           try {
             log("debug", requestStage);
             guard();
             const request = new Request(input, init);
-            if (request.url !== endpoint.href || request.method !== "POST") throw new ConnectorDiagnosticError("connector_request_target_invalid");
+            const requestSignal = AbortSignal.any([signal, request.signal]);
+            requestSignal.throwIfAborted();
+            if (request.url !== endpoint.href) throw new ConnectorDiagnosticError("connector_request_target_invalid");
+            // The SDK probes optional standalone SSE after initialized. This
+            // connector is POST-only: reject locally without auth or network I/O.
+            if (request.method === "GET") { log("debug", "mcp.sse_unsupported"); return new Response(null, { status: 405 }); }
+            if (request.method !== "POST") throw new ConnectorDiagnosticError("connector_request_target_invalid");
             const body = new Uint8Array(await request.arrayBuffer());
             if (body.byteLength > 65536) throw new ConnectorDiagnosticError("connector_request_too_large");
+            const method = JSON.parse(new TextDecoder().decode(body)).method;
+            protocolPhase = method === "initialize" ? "initialize" : method === "notifications/initialized" ? "initialized" : method === "tools/call" ? "tool_call" : "other";
             guard();
             const now = Math.floor(Date.now() / 1000);
-            requestStage = "mcp.http.sign"; log("debug", requestStage);
+            requestStage = "mcp.http.sign"; log("debug", requestStage, { protocolPhase });
             const assertion = await new SignJWT({
               v: 1, iss: settings.issuer, aud: settings.audience, service: settings.service,
               ...actor, ...source, iat: now, exp: now + 60, jti: randomUUID(),
@@ -167,15 +182,16 @@ export async function createLinkingConnector(config: LinkingConnectorConfig, hos
             const version = request.headers.get("mcp-protocol-version");
             if (version) headers.set("mcp-protocol-version", version);
             guard();
-            requestStage = "mcp.http.fetch"; log("debug", requestStage);
+            requestSignal.throwIfAborted();
+            requestStage = "mcp.http.fetch"; log("debug", requestStage, { protocolPhase });
             const response = await fetchRequest(endpoint.href, {
-              method: "POST", body: Buffer.from(body), headers, redirect: "error", credentials: "omit", signal,
+              method: "POST", body: Buffer.from(body), headers, redirect: "error", credentials: "omit", signal: requestSignal,
             });
             guard();
-            log(response.ok ? "debug" : "error", "mcp.http.response", { httpStatus: response.status, ...(!response.ok ? { reason: "http_request_rejected" } : {}) });
+            log(response.ok ? "debug" : "error", "mcp.http.response", { protocolPhase, httpStatus: response.status, ...(!response.ok ? { reason: "http_request_rejected" } : {}) });
             if (response.redirected || (response.status >= 300 && response.status < 400)) throw new ConnectorDiagnosticError("connector_redirect_refused");
             return response;
-          } catch (error) { log("error", requestStage, diagnosticErrorFields(error)); throw error; }
+          } catch (error) { log("error", requestStage, { ...diagnosticErrorFields(error), protocolPhase }); throw error; }
         },
       });
       client = new Client({ name: "thinkarr-linking-connector", version: "1" });
@@ -183,9 +199,10 @@ export async function createLinkingConnector(config: LinkingConnectorConfig, hos
       await client.connect(transport);
       guard();
       step("mcp.tool_call");
+      toolCallStarted = true;
       const result = CallToolResultSchema.parse(await client.callTool({
         name: media?.name ?? (code ? "account_link_confirm" : "account_link_start"), arguments: media ? media.args as Record<string, unknown> : code ? { code } : {},
-      }, undefined, { signal, timeout: media ? 20_000 : 10_000 }));
+      }, undefined, { signal, timeout: 20_000 }));
       guard();
       step("mcp.tool_result");
       // Allow only the exact wire outcomes. Never forward arbitrary server text,
@@ -243,7 +260,19 @@ export async function createLinkingConnector(config: LinkingConnectorConfig, hos
       log("debug", "link.private_sent");
       return sent;
     } catch (error) {
-      log("error", stage, diagnosticErrorFields(error));
+      const details = diagnosticErrorFields(error);
+      log("error", stage, details);
+      if (!media && error instanceof ConnectorDiagnosticError && error.reason === "private_delivery_unconfirmed") return { status: "private_delivery_unconfirmed" };
+      let code: unknown;
+      try { code = error && typeof error === "object" ? Reflect.get(error, "code") : undefined; } catch { /* retain a safe failed outcome */ }
+      const connectivityFailure = details.errorType === "TimeoutError" || code === -32001
+        || (details.errorCode !== undefined && ["ECONNREFUSED", "ECONNRESET", "ENOTFOUND", "EAI_AGAIN", "ETIMEDOUT", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT"].includes(details.errorCode))
+        || (typeof code === "number" && code >= 500 && code <= 599);
+      if (!media && connectivityFailure) {
+        const status = toolCallStarted ? "unknown" : "unavailable";
+        log("warn", "link.transport_outcome", { reason: toolCallStarted ? "tool_outcome_unconfirmed" : "handshake_unavailable", outcome: status });
+        return { status };
+      }
       return failed;
     } finally {
       active = false;

@@ -30,6 +30,20 @@ const actor = (patch: Partial<TrustedLinkInvocation> = {}): TrustedLinkInvocatio
 });
 const receipt = (d: PrivateLinkDelivery) => ({ accepted: true as const, channel: d.channel, account: d.account, recipient: d.recipient, messageId: "provider-private-message" });
 const routeFetch: typeof fetch = (input, init) => POST(new Request(input, init));
+function fakeDeadlineSignals() {
+  vi.useFakeTimers();
+  return vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(new DOMException("Operation timed out", "TimeoutError")), ms);
+    return controller.signal;
+  });
+}
+function untilAborted(signal: AbortSignal, onAbort: () => void = () => {}) {
+  return new Promise<Response>((_resolve, reject) => {
+    const abort = () => { onAbort(); reject(signal.reason); };
+    if (signal.aborted) abort(); else signal.addEventListener("abort", abort, { once: true });
+  });
+}
 
 beforeEach(() => {
   ({ db, sqlite } = createTestDb()); adminId = seedUser(db, { isAdmin: true });
@@ -55,7 +69,7 @@ describe("trusted linking connector core", () => {
     const connector = await createLinkingConnector(config, { diagnostics: trace.log, sendPrivate: async (d) => receipt(d),
       fetch: async () => new Response(`SECRET BODY ${config.bearer}`, { status }),
     });
-    expect(await connector.startLink(actor())).toEqual({ status: "failed" });
+    expect(await connector.startLink(actor())).toEqual({ status: status >= 500 ? "unavailable" : "failed" });
     expect(lines.some((line) => line.includes('"stage":"mcp.http.response"') && line.includes(`"httpStatus":${status}`))).toBe(true);
     expect(lines.join()).not.toContain(config.bearer); expect(lines.join()).not.toContain("SECRET BODY");
   });
@@ -65,7 +79,7 @@ describe("trusted linking connector core", () => {
     const connector = await createLinkingConnector(config, { diagnostics: trace.log, sendPrivate: async (d) => receipt(d), fetch: async () => {
       throw new TypeError(`SECRET URL ${config.endpoint}`, { cause: Object.assign(new Error(config.bearer), { code: "ECONNREFUSED" }) });
     } });
-    expect(await connector.startLink(actor())).toEqual({ status: "failed" });
+    expect(await connector.startLink(actor())).toEqual({ status: "unavailable" });
     expect(lines.some((line) => line.includes('"stage":"mcp.http.fetch"') && line.includes('"errorCode":"ECONNREFUSED"'))).toBe(true);
     expect(lines.join()).not.toContain("SECRET URL"); expect(lines.join()).not.toContain(config.endpoint); expect(lines.join()).not.toContain(config.bearer);
   });
@@ -81,6 +95,60 @@ describe("trusted linking connector core", () => {
     expect(await connector.startLink(actor())).toEqual({ status: "failed" });
     expect(lines.join()).toContain(kind === "known" ? "remote_link_configuration_required" : "remote_tool_error");
     expect(lines.join()).not.toContain("SECRET REMOTE"); expect(lines.join()).not.toContain(config.privateKeyPem);
+  });
+  it("allows a slow but bounded handshake longer than fifteen seconds and rejects the optional SSE probe locally", async () => {
+    const { config } = await fixture(); const timeout = fakeDeadlineSignals();
+    const started = Promise.withResolvers<void>(); const requests: string[] = [];
+    const connector = await createLinkingConnector(config, { sendPrivate: async (d) => receipt(d), fetch: async (input, init) => {
+      expect(init?.method).toBe("POST"); // Standalone SSE GET never reaches the network.
+      const method = JSON.parse(String(init?.body)).method; requests.push(method);
+      const response = await routeFetch(input, init);
+      if (method === "initialize") { started.resolve(); await new Promise((resolve) => setTimeout(resolve, 22_000)); }
+      return response;
+    } });
+    try {
+      let settled = false; const pending = connector.startLink(actor()).then((result) => { settled = true; return result; });
+      await started.promise; await vi.advanceTimersByTimeAsync(16_000); expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(await pending).toEqual({ status: "private_link_sent" });
+      expect(requests).toEqual(["initialize", "notifications/initialized", "tools/call"]);
+    } finally { timeout.mockRestore(); }
+  });
+  it("reports an unavailable handshake without submitting verification or creating a binding", async () => {
+    const { config } = await fixture(); const timeout = fakeDeadlineSignals(); const notification = Promise.withResolvers<void>();
+    let toolCalls = 0; let aborted = false;
+    const connector = await createLinkingConnector(config, { sendPrivate: async (d) => receipt(d), fetch: async (input, init) => {
+      const body = JSON.parse(String(init?.body));
+      if (body.method === "tools/call") toolCalls++;
+      if (body.method === "notifications/initialized") { notification.resolve(); return untilAborted(init!.signal!, () => { aborted = true; }); }
+      return routeFetch(input, init);
+    } });
+    try {
+      const pending = connector.handlePrivateLinkMessage({ ...actor({ kind: "direct" }), eventId: "verification", eventTime: Date.now() }, `Link account ${"a".repeat(64)}`);
+      await notification.promise; await vi.advanceTimersByTimeAsync(45_001);
+      expect(await pending).toEqual({ status: "unavailable" }); expect(aborted).toBe(true); expect(toolCalls).toBe(0);
+      expect(db.select().from(schema.mcpActorBindings).all()).toHaveLength(0);
+    } finally { timeout.mockRestore(); }
+  });
+  it("preserves an uncertain committed verification outcome and cancels the underlying HTTP request without retrying", async () => {
+    const { f, config } = await fixture(); let holdConfirmation = false; let calls = 0; let aborted = false;
+    const submitted = Promise.withResolvers<void>(); const deliveries: PrivateLinkDelivery[] = [];
+    const connector = await createLinkingConnector(config, { sendPrivate: async (d) => { deliveries.push(d); return receipt(d); }, fetch: async (input, init) => {
+      const body = JSON.parse(String(init?.body)); const response = await routeFetch(input, init);
+      if (holdConfirmation && body.method === "tools/call") { calls++; submitted.resolve(); return untilAborted(init!.signal!, () => { aborted = true; }); }
+      return response;
+    } });
+    await connector.startLink(actor());
+    const code = prepareAccountLink(new URL(deliveries[0].url).hash.slice(7), f.sessionA, f.userA).completionCode;
+    const timeout = fakeDeadlineSignals(); holdConfirmation = true;
+    try {
+      const pending = connector.handlePrivateLinkMessage({ ...actor({ kind: "direct" }), eventId: "commit-then-timeout", eventTime: Date.now() }, `Link account ${code}`);
+      await submitted.promise;
+      expect(db.select().from(schema.mcpActorBindings).all()).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(20_001);
+      expect(await pending).toEqual({ status: "unknown" }); expect(calls).toBe(1); expect(aborted).toBe(true);
+      expect(db.select().from(schema.mcpActorBindings).all()).toHaveLength(1);
+    } finally { timeout.mockRestore(); }
   });
   it("signs real SDK requests, privately delivers the handoff and completes browser verification", async () => {
     const { f, config } = await fixture();

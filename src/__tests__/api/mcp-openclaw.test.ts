@@ -92,6 +92,41 @@ async function prepareVerification(h: Awaited<ReturnType<typeof fixture>>) {
 }
 
 describe("OpenClaw linking adapter", () => {
+  it.each(["missing", "lid", "other"])("directs the user to private instructions without claiming verified delivery or retrying an unsupported receipt (%s)", async (kind) => {
+    const h = await fixture(true);
+    const destination = kind === "missing" ? undefined : kind === "lid" ? "999999@lid" : "unrecognized-provider-target";
+    h.outbound.sendText = vi.fn(async (params) => {
+      await params.onPlatformSendDispatch(); h.sends.push(params);
+      return { channel: "whatsapp", messageId: "accepted-message", toJid: destination };
+    });
+    register(h.api); const result = await h.create()!.execute("ambiguous-delivery", {});
+    expect(result.details.status).toBe("private_delivery_unconfirmed");
+    expect(result.content[0].text).toContain("check your private WhatsApp chat");
+    expect(result.content[0].text).toContain("rather than requesting another one");
+    expect(h.outbound.sendText).toHaveBeenCalledTimes(1); expect(h.sends).toHaveLength(1);
+    expect(db.select().from(schema.mcpLinkChallenges).all()).toHaveLength(1);
+    expect(JSON.stringify(result)).not.toContain(h.sends[0].text.split(" ").at(-1)!);
+    expect(h.logs().find((r) => r.stage === "outbound.private_receipt_checks")).toMatchObject({ receiptDestinationKind: kind, receiptDestinationSupported: false });
+    if (destination) expect(JSON.stringify(h.logs())).not.toContain(destination);
+  });
+  it.each([false, true])("privately explains a connection timeout or uncertain verification result without requesting a replacement link (committed=%s)", async (committed) => {
+    const h = await fixture(true); register(h.api); const { event, context } = await prepareVerification(h);
+    let toolCalls = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const method = JSON.parse(String(init?.body)).method;
+      if (!committed) throw new DOMException("Timeout containing SECRET", "TimeoutError");
+      const response = await POST(new Request(input, init));
+      if (method === "tools/call") { toolCalls++; throw new DOMException("Lost response SECRET", "TimeoutError"); }
+      return response;
+    }));
+    expect(await h.dispatch(event, context)).toEqual({ handled: true });
+    expect(db.select().from(schema.mcpActorBindings).all()).toHaveLength(committed ? 1 : 0);
+    expect(toolCalls).toBe(committed ? 1 : 0); expect(h.sends).toHaveLength(2);
+    expect(h.sends[1].text).toContain(committed ? "check your account-link status" : "did not respond in time");
+    expect(h.sends[1].text).not.toContain("ask for a new private link");
+    expect(h.logs().find((r) => r.stage === "verification.result")).toMatchObject({ outcome: committed ? "unknown" : "unavailable" });
+    expect(JSON.stringify(h.logs())).not.toContain("SECRET");
+  });
   it.each(["+15555550100", "15555550100@s.whatsapp.net", sender, "15555550101@s.whatsapp.net"])("completes private verification with a host-shaped conversation and sends one explicit acknowledgement (%s)", async (nativeConversation) => {
     const h = await fixture(true); register(h.api);
     const { event, context, code } = await prepareVerification(h);
@@ -338,7 +373,7 @@ describe("OpenClaw linking adapter", () => {
   it("registers supported factory/hook, sends only to the sender privately and completes the real backend link", async () => {
     const h = await fixture(); register(h.api);
     expect(h.api.registerTool).toHaveBeenCalledWith(expect.objectContaining({ contextVersion: 2 }), { names: ["thinkarr_account_link"], optional: true });
-    expect(h.api.on).toHaveBeenCalledWith("before_dispatch", expect.any(Function), { timeoutMs: 20_000 });
+    expect(h.api.on).toHaveBeenCalledWith("before_dispatch", expect.any(Function), { timeoutMs: 60_000 });
     const ctx = toolContext({ deliveryContext: { channel: "whatsapp", accountId: "account-A", to: group } });
     const tool = h.create(ctx)!;
     // Host metadata is captured by the factory, never read from later model args.
@@ -407,7 +442,7 @@ describe("OpenClaw linking adapter", () => {
     });
     register(h.api);
     const result = await h.create()!.execute("x", {});
-    expect(result.details).toEqual({ status: "failed" });
+    expect(result.details).toEqual({ status: ["missing-receipt", "throw-after-send"].includes(mode) ? "private_delivery_unconfirmed" : "failed" });
     expect(JSON.stringify(result)).not.toContain("#token=");
     expect(h.sends).toHaveLength(["group-target", "lid-target"].includes(mode) ? 0 : 1);
   });

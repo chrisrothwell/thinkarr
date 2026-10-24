@@ -23,10 +23,10 @@ npm run build:openclaw
 npm pack ./connectors/openclaw
 ```
 
-Install the resulting `thinkarr-openclaw-0.3.5.tgz` through the supported local archive mechanism:
+Install the resulting `thinkarr-openclaw-0.3.6.tgz` through the supported local archive mechanism:
 
 ```bash
-openclaw plugins install npm-pack:/path/to/thinkarr-openclaw-0.3.5.tgz --no-enable
+openclaw plugins install npm-pack:/path/to/thinkarr-openclaw-0.3.6.tgz --no-enable
 ```
 
 The Control UI can configure, enable and reload an installed plugin. Its catalog installer does not accept arbitrary local archives; a CLI or the browser's operator Terminal is needed for this archive installation. The package is not currently advertised as a published npm/ClawHub release.
@@ -101,9 +101,22 @@ Both modes exclude credential values, SecretRef IDs, config/file paths, URLs, JW
 - The adapter supports canonical E.164/PN-JID identities and validated native group addresses. Unresolved LID, hosted/device and ambiguous identities fail closed.
 - A verified private inbound event may identify its conversation by the human peer or by this receiving account's bot address. Only after channel, private-kind, message-ID, timestamp and sender agreement checks does the adapter normalize that bot-recipient form to the authenticated sender. Other accounts' bot addresses, other peers and self echoes remain rejected; model tool contexts do not receive this exception.
 - Private verification sends one explicit, fixed-text acknowledgement to the verified sender through the checked WhatsApp outbound adapter. The hook returns handled with no automatic text, so success/failure replies do not depend on automatic-reply policy and cannot be duplicated by it. Binding completion and acknowledgement confirmation are logged separately; an unconfirmed acknowledgement is never blindly retried and does not undo a committed binding.
+- Linking has a 45-second overall MCP budget and a 20-second tool-call budget; private verification reserves 55 seconds including its acknowledgement within a 60-second hook limit. Both invocation cancellation and the SDK's per-request/transport signal reach physical HTTP requests. The optional standalone SSE GET probe receives a local 405 with no credential/network forwarding; signed POST-only policy is unchanged. Debug HTTP records identify the `initialize`, `initialized` or `tool_call` protocol phase.
 - Private links and request prompts require checked physical-send fences and actual provider destination/message receipts. No public-link fallback or automatic send retry.
 - Native `request it`/`request 1` confirms the one presented title/season choice. The prompt lasts two minutes. Replaced/old prompts require the exact current quote; generic yes only matches that prompt. Unrelated messages stay with their normal router.
 - Thinkarr owns the durable actor/binding/event/selection claim and verifies effective Seerr identity, permissions, quotas and returned attribution. Pending approval is preserved. Unknown outcomes are checked in Seerr rather than blindly retried; Seerr owns completion emails.
+
+Linking outcomes distinguish failure from uncertainty:
+
+| Outcome | User guidance |
+| --- | --- |
+| `private_link_sent` | A matching provider receipt was verified; follow the private message. |
+| `private_delivery_unconfirmed` | A send was dispatched but its receipt/actual destination could not be verified (including unresolved LID destinations). Check private WhatsApp instructions; use an arrived link rather than requesting another one. This does not claim verified delivery or relax destination checks. |
+| `unavailable` | A connection/handshake failed before the linking tool call; retry the current step while its private link is valid. No automatic retry or replacement challenge is made. |
+| `unknown` | The linking tool call may have committed but its response was lost/timed out. Check account-link status before another attempt; do not assume success or failure. |
+| `linked` | Thinkarr confirmed the participant binding. Acknowledgement delivery is logged separately. |
+
+Receipt diagnostics include a value-free `receiptDestinationKind` (`pn_jid`, `e164`, `lid`, `group`, `missing`, `other`). An unsupported destination never becomes a verified match; a known wrong group/recipient remains rejected.
 
 Existing `0.2` credentials-file configurations remain a compatibility path, not the recommended setup. Migrate their private values into native secrets and remove the old plugin option. Verify the new connection and retire only confirmed obsolete plaintext copies; the helper does not delete existing key files automatically.
 

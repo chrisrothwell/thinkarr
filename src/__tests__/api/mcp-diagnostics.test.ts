@@ -17,8 +17,8 @@ describe("value-free companion diagnostics", () => {
     expect(new Set(records(log).map((r) => r.traceId)).size).toBe(1);
     expect(records(log).find((r) => r.level === "error")).toMatchObject({ reason: "prepared_bearer_unavailable", operation: "link_start" });
     const second = createDiagnosticTrace(log, true, "link_complete");
-    second.log("debug", "mcp.http.response", { httpStatus: 200 });
-    expect(records(log).find((r) => r.stage === "mcp.http.response")).toMatchObject({ level: "debug", httpStatus: 200 });
+    second.log("debug", "mcp.http.response", { httpStatus: 200, protocolPhase: "initialize" });
+    expect(records(log).find((r) => r.stage === "mcp.http.response")).toMatchObject({ level: "debug", httpStatus: 200, protocolPhase: "initialize" });
     expect(new Set(records(log).map((r) => r.traceId)).size).toBe(2);
   });
 
@@ -28,7 +28,7 @@ describe("value-free companion diagnostics", () => {
     const error = new TypeError(secret, { cause: Object.assign(new Error(secret), { code: "ECONNREFUSED", url: secret }) });
     trace.error("mcp.http.fetch", error);
     trace.log("debug", "secrets.prepared_status", { bearerAvailable: false, keyAvailable: true, revisionMatches: true,
-      reason: secret, outcome: secret, httpStatus: 999, bearer: secret, message: secret } as never);
+      reason: secret, outcome: secret, httpStatus: 999, protocolPhase: secret, receiptDestinationKind: secret, bearer: secret, message: secret } as never);
     expect(records(log).find((r) => r.stage === "mcp.http.fetch")).toMatchObject({ errorType: "TypeError", errorCode: "ECONNREFUSED" });
     expect(records(log).find((r) => r.stage === "secrets.prepared_status")).toMatchObject({ bearerAvailable: false, keyAvailable: true, revisionMatches: true });
     expect(records(log).find((r) => r.stage === "secrets.prepared_status")).not.toHaveProperty("httpStatus");
