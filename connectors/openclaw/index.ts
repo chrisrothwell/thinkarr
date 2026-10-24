@@ -6,8 +6,10 @@ import { createLinkingConnector, linkingConnectorConfigSchema, type LinkOutcome,
 import type { OpenClawHost, ToolContext } from "./host.js";
 import { loadPreparedSecretReader } from "./secrets.js";
 import { confirmationIntent, mediaTools, mediaInputSchema, type MediaOutcome } from "../delegated-mcp/media-contract.js";
+import { ConnectorDiagnosticError, createDiagnosticTrace, diagnosticErrorFields, type DiagnosticSink } from "../delegated-mcp/diagnostics.js";
 
 const routingOptions = {
+  debug: z.boolean().default(false),
   // Receiving bot accounts/self identities, not a participant allowlist.
   accounts: z.record(z.string().min(1).max(512), z.string().regex(/^\+[1-9][0-9]{6,14}$/)),
   pilotGroup: z.string().max(512).regex(/^[0-9]+(?:-[0-9]+)?@g\.us$/).optional(),
@@ -45,7 +47,7 @@ function configurationError(input: unknown): Error {
   const details = issues.map((issue) => {
     const [root, field] = issue.path;
     const path = root === "connection" ? (typeof field === "string" && fields.has(field) ? `connection.${field}` : "connection")
-      : root === "accounts" ? "accounts.*" : root === "pilotGroup" || root === "credentialsFile" ? root : "config";
+      : root === "accounts" ? "accounts.*" : root === "pilotGroup" || root === "credentialsFile" || root === "debug" ? root : "config";
     // Use actual types only for fixed connection fields, never dynamic map keys.
     const connection = record && Reflect.get(record, "connection");
     const value = path.startsWith("connection.") && connection && typeof connection === "object"
@@ -78,11 +80,11 @@ async function readCredentials(path: string): Promise<LinkingConnectorConfig> {
   const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const stat = await file.stat();
-    if (!stat.isFile() || stat.size > 16_384 || (stat.mode & 0o077) !== 0 || stat.uid !== process.getuid?.()) throw new Error();
+    if (!stat.isFile() || stat.size > 16_384 || (stat.mode & 0o077) !== 0 || stat.uid !== process.getuid?.()) throw new ConnectorDiagnosticError("legacy_credentials_file_unsafe");
     // Bound the actual read too if the file changes after fstat.
     const buffer = Buffer.alloc(16_385);
     const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
-    if (bytesRead > 16_384) throw new Error();
+    if (bytesRead > 16_384) throw new ConnectorDiagnosticError("legacy_credentials_file_too_large");
     return JSON.parse(buffer.subarray(0, bytesRead).toString("utf8"));
   } finally { await file.close(); }
 }
@@ -99,33 +101,44 @@ const messages = {
  * invocation, never during registration or tool discovery.
  */
 export function register<C extends object>(api: OpenClawHost<C>) {
+  const registration = createDiagnosticTrace(api.logger, api.pluginConfig?.debug === true, "registration");
   if (!["full", "tool-discovery"].includes(api.registrationMode)) return;
-  if (api.runtime.version !== "2026.10.4") throw new Error("Thinkarr requires OpenClaw 2026.10.4");
+  if (api.runtime.version !== "2026.10.4") { registration.error("registration.version", new ConnectorDiagnosticError("host_version_unsupported")); throw new Error("Thinkarr requires OpenClaw 2026.10.4"); }
   const parsed = optionsSchema.safeParse(api.pluginConfig);
-  if (!parsed.success) throw configurationError(api.pluginConfig);
+  if (!parsed.success) { registration.error("registration.config", new ConnectorDiagnosticError("configuration_invalid")); throw configurationError(api.pluginConfig); }
   const options = parsed.data;
   const lifecycle = api.lifecycle.signal;
-  if (!lifecycle) throw new Error("Thinkarr requires plugin lifecycle admission");
-  const assertLive = () => lifecycle.throwIfAborted();
+  if (!lifecycle) { registration.error("registration.lifecycle", new ConnectorDiagnosticError("plugin_lifetime_missing")); throw new Error("Thinkarr requires plugin lifecycle admission"); }
+  const assertLive = () => { if (lifecycle.aborted) throw new ConnectorDiagnosticError("plugin_lifetime_closed"); };
+  registration.log("info", "registration.ready", { debugEnabled: options.debug, mediaEnabled: !!options.pilotGroup });
+  lifecycle.addEventListener("abort", () => registration.log("info", "registration.disposed"), { once: true });
 
-  async function credentialsForInvocation(assertCurrent: () => void) {
+  async function credentialsForInvocation(assertCurrent: () => void, log: DiagnosticSink) {
     assertCurrent(); assertLive();
-    if (!("connection" in options)) return { credentials: await readCredentials(options.credentialsFile), assertSecretsCurrent: assertLive };
+    if (!("connection" in options)) { log("debug", "credentials.legacy_file"); return { credentials: await readCredentials(options.credentialsFile), assertSecretsCurrent: assertLive }; }
     const connection = options.connection;
     if (typeof connection.bearer === "string" && typeof connection.privateKeyPem === "string") {
+      log("debug", "credentials.materialized");
       return { credentials: linkingConnectorConfigSchema.parse(connection), assertSecretsCurrent: assertLive };
     }
+    log("debug", "secrets.sdk_load");
     const read = await loadPreparedSecretReader();
     assertCurrent(); assertLive();
     // Fixed manifest-owned paths, never a caller-supplied ref/provider/secret ID.
+    log("debug", "secrets.prepared_read");
     const bearer = read("thinkarr", "connection.bearer");
     const key = read("thinkarr", "connection.privateKeyPem");
-    if (!Number.isSafeInteger(bearer.revision) || bearer.revision !== key.revision || !bearer.value || !key.value) throw new Error();
+    const available = { bearerAvailable: !!bearer.value, keyAvailable: !!key.value, revisionMatches: Number.isSafeInteger(bearer.revision) && bearer.revision === key.revision };
+    log(available.bearerAvailable && available.keyAvailable && available.revisionMatches ? "debug" : "error", "secrets.prepared_status", available);
+    if (!bearer.value) throw new ConnectorDiagnosticError("prepared_bearer_unavailable");
+    if (!key.value) throw new ConnectorDiagnosticError("prepared_signing_key_unavailable");
+    if (!available.revisionMatches) throw new ConnectorDiagnosticError("prepared_secret_revision_mismatch");
     const assertSecretsCurrent = () => {
       assertLive();
       const currentBearer = read("thinkarr", "connection.bearer");
       const currentKey = read("thinkarr", "connection.privateKeyPem");
-      if (currentBearer.revision !== bearer.revision || currentKey.revision !== bearer.revision || !currentBearer.value || !currentKey.value) throw new Error();
+      if (currentBearer.revision !== bearer.revision || currentKey.revision !== bearer.revision) throw new ConnectorDiagnosticError("prepared_secret_revision_changed");
+      if (!currentBearer.value || !currentKey.value) throw new ConnectorDiagnosticError("prepared_secret_access_revoked");
     };
     assertSecretsCurrent();
     return { credentials: linkingConnectorConfigSchema.parse({ ...connection, bearer: bearer.value, privateKeyPem: key.value }), assertSecretsCurrent };
@@ -140,81 +153,116 @@ export function register<C extends object>(api: OpenClawHost<C>) {
     return { channel: "whatsapp" as const, account, sender: canonical, kind: origin.kind, conversation: origin.id };
   }
 
-  async function sendPrivate(cfg: C, delivery: PrivateLinkDelivery) {
-    delivery.assertCurrent(); assertLive();
-    const recipient = canonicalPhone(delivery.recipient);
-    if (!recipient || !Object.hasOwn(options.accounts, delivery.account)) throw new Error();
-    const outbound = await api.runtime.channel.outbound.loadAdapter("whatsapp");
-    delivery.assertCurrent(); assertLive();
-    if (!outbound?.resolveTarget || !outbound.sendText) throw new Error();
-    const resolved = outbound.resolveTarget({ cfg, to: recipient, accountId: delivery.account, mode: "explicit", allowFrom: [recipient] });
-    if (!resolved.ok || canonicalPhone(resolved.to) !== recipient) throw new Error();
-    let dispatches = 0;
-    const guard = () => { delivery.assertCurrent(); assertLive(); };
-    guard();
-    const result = await outbound.sendText({
-      cfg, to: resolved.to, accountId: delivery.account,
-      text: `Link your Plex account privately: ${delivery.url}`,
-      signal: delivery.signal, assertDirectAdapterHandoff: guard,
-      // The pinned WhatsApp implementation awaits this before each physical
-      // send (including chunks); it does not forward assertDirectAdapterHandoff.
-      onPlatformSendDispatch: async () => { guard(); dispatches++; },
-    });
-    guard();
-    if (dispatches === 0 || result.channel !== "whatsapp" || !result.messageId?.trim() || canonicalPhone(result.toJid) !== recipient) throw new Error();
-    return { accepted: true as const, channel: "whatsapp" as const, account: delivery.account, recipient, messageId: result.messageId };
+  async function sendPrivate(cfg: C, delivery: PrivateLinkDelivery, log: DiagnosticSink) {
+    let stage = "outbound.private_validate";
+    const step = (next: string) => { stage = next; log("debug", stage); };
+    try {
+      step(stage);
+      delivery.assertCurrent(); assertLive();
+      const recipient = canonicalPhone(delivery.recipient);
+      if (!recipient || !Object.hasOwn(options.accounts, delivery.account)) throw new ConnectorDiagnosticError("private_target_invalid");
+      step("outbound.private_adapter");
+      const outbound = await api.runtime.channel.outbound.loadAdapter("whatsapp");
+      delivery.assertCurrent(); assertLive();
+      if (!outbound?.resolveTarget || !outbound.sendText) throw new ConnectorDiagnosticError("whatsapp_outbound_unavailable");
+      step("outbound.private_resolve");
+      const resolved = outbound.resolveTarget({ cfg, to: recipient, accountId: delivery.account, mode: "explicit", allowFrom: [recipient] });
+      if (!resolved.ok || canonicalPhone(resolved.to) !== recipient) throw new ConnectorDiagnosticError("private_target_mismatch");
+      let dispatches = 0;
+      const guard = () => { delivery.assertCurrent(); assertLive(); };
+      guard();
+      step("outbound.private_send");
+      const result = await outbound.sendText({
+        cfg, to: resolved.to, accountId: delivery.account,
+        text: `Link your Plex account privately: ${delivery.url}`,
+        signal: delivery.signal, assertDirectAdapterHandoff: guard,
+        // The pinned WhatsApp implementation awaits this before each physical
+        // send (including chunks); it does not forward assertDirectAdapterHandoff.
+        onPlatformSendDispatch: async () => { guard(); log("debug", "outbound.private_dispatch"); dispatches++; },
+      });
+      guard();
+      step("outbound.private_receipt");
+      if (dispatches === 0) throw new ConnectorDiagnosticError("private_dispatch_fence_missing");
+      if (result.channel !== "whatsapp" || !result.messageId?.trim() || canonicalPhone(result.toJid) !== recipient) throw new ConnectorDiagnosticError("private_receipt_invalid");
+      return { accepted: true as const, channel: "whatsapp" as const, account: delivery.account, recipient, messageId: result.messageId };
+    } catch (error) { log("error", stage, diagnosticErrorFields(error)); throw error; }
   }
 
   async function run(invocation: TrustedLinkInvocation, cfg: C, completion?: { content: string; eventId: string; eventTime: number }): Promise<LinkOutcome> {
+    const trace = createDiagnosticTrace(api.logger, options.debug, completion ? "link_complete" : "link_start");
+    let stage = "invocation.admission";
+    const step = (next: string) => { stage = next; trace.log("debug", stage); };
+    trace.log("info", "operation.started");
     try {
       const signal = AbortSignal.any([AbortSignal.timeout(15_000), ...(invocation.signal ? [invocation.signal] : [])]);
       let assertSecretsCurrent = assertLive;
-      const assertCurrent = () => { signal.throwIfAborted(); invocation.assertCurrent(); assertSecretsCurrent(); };
+      const assertCurrent = () => { signal.throwIfAborted(); try { invocation.assertCurrent(); } catch { throw new ConnectorDiagnosticError("invocation_not_current"); } assertSecretsCurrent(); };
       assertCurrent();
-      const prepared = await credentialsForInvocation(assertCurrent);
+      step("credentials.load");
+      const prepared = await credentialsForInvocation(assertCurrent, trace.log);
       assertSecretsCurrent = prepared.assertSecretsCurrent;
       assertCurrent();
-      const connector = await createLinkingConnector(prepared.credentials, { sendPrivate: (d) => sendPrivate(cfg, d) });
+      step("connector.create");
+      const connector = await createLinkingConnector(prepared.credentials, { sendPrivate: (d) => sendPrivate(cfg, d, trace.log), diagnostics: trace.log });
       assertCurrent();
       const current = { ...invocation, signal, assertCurrent };
-      return completion
+      step("connector.invoke");
+      const result = completion
         ? (await connector.handlePrivateLinkMessage({ ...current, eventId: completion.eventId, eventTime: completion.eventTime }, completion.content)) ?? failure
         : await connector.startLink(current);
-    } catch { return failure; }
+      trace.log(result.status === "failed" ? "warn" : "info", "operation.completed", { outcome: result.status });
+      return result;
+    } catch (error) { trace.error(stage, error); trace.log("warn", "operation.completed", { outcome: "failed" }); return failure; }
   }
 
-  async function runMedia(invocation: TrustedLinkInvocation, cfg: C, action: (connector: Awaited<ReturnType<typeof createLinkingConnector>>, current: TrustedLinkInvocation) => Promise<MediaOutcome | undefined>): Promise<MediaOutcome | undefined> {
+  async function runMedia(invocation: TrustedLinkInvocation, cfg: C, action: (connector: Awaited<ReturnType<typeof createLinkingConnector>>, current: TrustedLinkInvocation) => Promise<MediaOutcome | undefined>, operation = "media_operation"): Promise<MediaOutcome | undefined> {
+    const trace = createDiagnosticTrace(api.logger, options.debug, operation);
+    let stage = "invocation.admission";
+    const step = (next: string) => { stage = next; trace.log("debug", stage); };
+    trace.log("info", "operation.started");
     try {
-      if (invocation.kind !== "group" || invocation.conversation !== options.pilotGroup) return { status: "failed" };
+      if (invocation.kind !== "group" || invocation.conversation !== options.pilotGroup) throw new ConnectorDiagnosticError("media_group_mismatch");
       const signal = AbortSignal.any([AbortSignal.timeout(25_000), ...(invocation.signal ? [invocation.signal] : [])]);
       let assertSecretsCurrent = assertLive;
-      const assertCurrent = () => { signal.throwIfAborted(); invocation.assertCurrent(); assertSecretsCurrent(); };
+      const assertCurrent = () => { signal.throwIfAborted(); try { invocation.assertCurrent(); } catch { throw new ConnectorDiagnosticError("invocation_not_current"); } assertSecretsCurrent(); };
       assertCurrent();
-      const prepared = await credentialsForInvocation(assertCurrent);
+      step("credentials.load");
+      const prepared = await credentialsForInvocation(assertCurrent, trace.log);
       assertSecretsCurrent = prepared.assertSecretsCurrent;
       assertCurrent();
+      step("connector.create");
       const connector = await createLinkingConnector(prepared.credentials, {
-        sendPrivate: (d) => sendPrivate(cfg, d),
+        diagnostics: trace.log,
+        sendPrivate: (d) => sendPrivate(cfg, d, trace.log),
         async sendPrompt(delivery) {
           const guard = () => { delivery.assertCurrent(); assertCurrent(); };
           guard();
-          if (delivery.conversation !== options.pilotGroup || delivery.account !== invocation.account) throw new Error();
+          trace.log("debug", "outbound.prompt_validate");
+          if (delivery.conversation !== options.pilotGroup || delivery.account !== invocation.account) throw new ConnectorDiagnosticError("prompt_target_invalid");
+          trace.log("debug", "outbound.prompt_adapter");
           const outbound = await api.runtime.channel.outbound.loadAdapter("whatsapp");
           guard();
-          if (!outbound?.resolveTarget || !outbound.sendText) throw new Error();
+          if (!outbound?.resolveTarget || !outbound.sendText) throw new ConnectorDiagnosticError("whatsapp_outbound_unavailable");
+          trace.log("debug", "outbound.prompt_resolve");
           const resolved = outbound.resolveTarget({ cfg, to: delivery.conversation, accountId: delivery.account, mode: "explicit", allowFrom: [delivery.conversation] });
-          if (!resolved.ok || conversation(resolved.to)?.id !== delivery.conversation) throw new Error();
+          if (!resolved.ok || conversation(resolved.to)?.id !== delivery.conversation) throw new ConnectorDiagnosticError("prompt_target_mismatch");
           let dispatches = 0;
+          trace.log("debug", "outbound.prompt_send");
           const receipt = await outbound.sendText({ cfg, to: resolved.to, accountId: delivery.account, text: delivery.text,
-            signal: delivery.signal, assertDirectAdapterHandoff: guard, onPlatformSendDispatch: async () => { guard(); dispatches++; } });
+            signal: delivery.signal, assertDirectAdapterHandoff: guard, onPlatformSendDispatch: async () => { guard(); trace.log("debug", "outbound.prompt_dispatch"); dispatches++; } });
           guard();
-          if (!dispatches || receipt.channel !== "whatsapp" || !receipt.messageId?.trim() || conversation(receipt.toJid)?.id !== delivery.conversation) throw new Error();
+          trace.log("debug", "outbound.prompt_receipt");
+          if (!dispatches) throw new ConnectorDiagnosticError("prompt_dispatch_fence_missing");
+          if (receipt.channel !== "whatsapp" || !receipt.messageId?.trim() || conversation(receipt.toJid)?.id !== delivery.conversation) throw new ConnectorDiagnosticError("prompt_receipt_invalid");
           return { accepted: true, conversation: delivery.conversation, messageId: receipt.messageId };
         },
       });
       assertCurrent();
-      return await action(connector, { ...invocation, signal, assertCurrent });
-    } catch { return { status: "failed" }; }
+      step("connector.invoke");
+      const result = await action(connector, { ...invocation, signal, assertCurrent });
+      trace.log(result && ["failed", "blocked", "unknown"].includes(result.status) ? "warn" : "info", "operation.completed", { outcome: result?.status ?? "unclaimed" });
+      return result;
+    } catch (error) { trace.error(stage, error); trace.log("warn", "operation.completed", { outcome: "failed" }); return { status: "failed" }; }
   }
   const mediaMessages = {
     prompt_sent: "The request confirmation was sent. Reply to that message with “request it” to submit.",
@@ -230,11 +278,12 @@ export function register<C extends object>(api: OpenClawHost<C>) {
     contextVersion: 2,
     create(ctx: ToolContext<C>) {
       const identity = actor(ctx.messageChannel, ctx.agentAccountId, ctx.requesterSenderId, ctx.nativeChannelId);
-      if (!identity || typeof ctx.assertInvocationCurrent !== "function") return null;
+      if (!identity || typeof ctx.assertInvocationCurrent !== "function") { registration.log("debug", "factory.link_denied", { reason: "host_identity_or_guard_missing" }); return null; }
       const route = ctx.deliveryContext;
       if (route && ((route.channel !== undefined && route.channel !== identity.channel)
         || (route.accountId !== undefined && route.accountId !== identity.account)
-        || (route.to !== undefined && conversation(route.to)?.id !== identity.conversation))) return null;
+        || (route.to !== undefined && conversation(route.to)?.id !== identity.conversation))) { registration.log("debug", "factory.link_denied", { reason: "delivery_context_mismatch" }); return null; }
+      registration.log("debug", "factory.link_admitted");
       const assertCurrent = ctx.assertInvocationCurrent;
       const cfg = ctx.runtimeConfig ?? ctx.config ?? api.config;
       return {
@@ -246,7 +295,7 @@ export function register<C extends object>(api: OpenClawHost<C>) {
           if (z.object({}).strict().safeParse(args).success) {
             outcome = await run({ ...identity, signal: signal ? AbortSignal.any([signal, lifecycle]) : lifecycle,
               assertCurrent: () => { assertLive(); assertCurrent(); } }, cfg);
-          }
+          } else registration.log("warn", "tool.link_arguments", { reason: "tool_arguments_invalid" });
           return { content: [{ type: "text" as const, text: messages[outcome.status] }], details: outcome };
         },
       };
@@ -260,7 +309,8 @@ export function register<C extends object>(api: OpenClawHost<C>) {
       const route = ctx.deliveryContext;
       if (!identity || identity.kind !== "group" || identity.conversation !== options.pilotGroup || typeof ctx.assertInvocationCurrent !== "function"
         || (route && ((route.channel !== undefined && route.channel !== identity.channel) || (route.accountId !== undefined && route.accountId !== identity.account)
-          || (route.to !== undefined && conversation(route.to)?.id !== identity.conversation)))) return null;
+           || (route.to !== undefined && conversation(route.to)?.id !== identity.conversation)))) { registration.log("debug", "factory.media_denied", { reason: "host_identity_group_or_route_invalid" }); return null; }
+      registration.log("debug", "factory.media_admitted");
       const assertCurrent = ctx.assertInvocationCurrent;
       return {
         name: `thinkarr_${name}`, label: "Thinkarr media pilot",
@@ -269,7 +319,7 @@ export function register<C extends object>(api: OpenClawHost<C>) {
         parameters: mediaInputSchema(name),
         async execute(_id, args, signal) {
           const result = await runMedia({ ...identity, signal: signal ? AbortSignal.any([signal, lifecycle]) : lifecycle,
-            assertCurrent: () => { assertLive(); assertCurrent(); } }, ctx.runtimeConfig ?? ctx.config ?? api.config, (connector, current) => connector.mediaTool(current, name, args)) ?? { status: "failed" as const };
+            assertCurrent: () => { assertLive(); assertCurrent(); } }, ctx.runtimeConfig ?? ctx.config ?? api.config, (connector, current) => connector.mediaTool(current, name, args), name) ?? { status: "failed" as const };
           return { content: [{ type: "text" as const, text: result.status === "ok" ? JSON.stringify(result) : mediaMessages[result.status] }], details: result };
         },
       };
@@ -284,21 +334,22 @@ export function register<C extends object>(api: OpenClawHost<C>) {
     const replyTo = event.replyToId;
     const intent = options.pilotGroup ? confirmationIntent(event.content, replyTo) : undefined;
     if (!link && !intent) return;
+    registration.log("debug", "inbound.intent_detected");
     if (context.channelId !== "whatsapp" && event.channel !== "whatsapp") return;
     const denied = { handled: true, text: link ? messages.failed : mediaMessages.failed };
     if (event.channel !== "whatsapp" || context.channelId !== "whatsapp" || event.isGroup !== !link
       || !event.messageId || event.messageId !== context.messageId || event.messageId.length > 512
       || !Number.isSafeInteger(event.timestamp) || event.timestamp! < Date.now() - 900_000 || event.timestamp! > Date.now() + 5000
-      || !canonicalPhone(event.senderId) || canonicalPhone(event.senderId) !== canonicalPhone(context.senderId)) return denied;
+      || !canonicalPhone(event.senderId) || canonicalPhone(event.senderId) !== canonicalPhone(context.senderId)) { registration.log("warn", "inbound.rejected", { reason: "event_context_invalid" }); return denied; }
     const identity = actor(context.channelId, context.accountId, context.senderId, context.conversationId);
-    if (!identity || (link ? identity.kind !== "direct" : identity.kind !== "group")) return denied;
+    if (!identity || (link ? identity.kind !== "direct" : identity.kind !== "group")) { registration.log("warn", "inbound.rejected", { reason: "actor_context_invalid" }); return denied; }
     if (!link && identity.conversation !== options.pilotGroup) return;
-    if (!link && (replyTo !== context.replyToId || (replyTo !== undefined && (!replyTo || replyTo.length > 512 || event.replyToIsQuote !== true || context.replyToIsQuote !== true)))) return intent?.requiresQuote ? undefined : denied;
+    if (!link && (replyTo !== context.replyToId || (replyTo !== undefined && (!replyTo || replyTo.length > 512 || event.replyToIsQuote !== true || context.replyToIsQuote !== true)))) { registration.log("warn", "inbound.rejected", { reason: "quote_context_invalid" }); return intent?.requiresQuote ? undefined : denied; }
     let active = true;
     try {
       if (!link) {
         const result = await runMedia({ ...identity, signal: lifecycle, assertCurrent: () => { if (!active) throw new Error(); assertLive(); } }, api.config,
-          (connector, current) => connector.confirmMediaMessage({ ...current, eventId: event.messageId!, eventTime: event.timestamp!, ...(replyTo ? { replyTo } : {}) }, event.content));
+          (connector, current) => connector.confirmMediaMessage({ ...current, eventId: event.messageId!, eventTime: event.timestamp!, ...(replyTo ? { replyTo } : {}) }, event.content), "media_confirm_request");
         if (!result || result.status === "unclaimed" || (intent?.requiresQuote && result.status === "failed")) return;
         return { handled: true, text: result.status === "ok" ? mediaMessages.failed : mediaMessages[result.status] };
       }

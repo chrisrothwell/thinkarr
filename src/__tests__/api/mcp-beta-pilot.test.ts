@@ -31,7 +31,7 @@ beforeEach(async () => {
 });
 afterEach(async () => { sqlite.close(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); await rm(directory, { recursive: true, force: true }); });
 
-async function fixture(link = true) {
+async function fixture(link = true, debug = false) {
   const f = await delegatedLinkFixture(db, adminId);
   updateIntegration(f.principal.id, { allowedOperations: [...SERVICE_OPERATIONS], pilotGroup: group, enabled: true }, adminId);
   db.update(schema.users).set({ plexId: "101", plexToken: "SECRET-actor-token" }).where(eq(schema.users.id, f.userA)).run();
@@ -78,6 +78,8 @@ async function fixture(link = true) {
   });
   vi.stubGlobal("fetch", fetchRequest);
   const factories = new Map<string, Parameters<OpenClawHost<object>["registerTool"]>[0]>();
+  const logLines: string[] = [];
+  const logger = { info: (line: string) => { logLines.push(line); }, warn: (line: string) => { logLines.push(line); }, error: (line: string) => { logLines.push(line); } };
   let hook: ((event: DispatchEvent, ctx: DispatchContext) => Promise<DispatchResult | void>) | undefined;
   const sends: Array<{ text: string; to: string; messageId: string }> = [];
   const outbound: Outbound<object> = {
@@ -89,8 +91,8 @@ async function fixture(link = true) {
       return { channel: "whatsapp", messageId, toJid: state.wrongReceipt ? "another-group@g.us" : params.to };
     },
   };
-  const api: OpenClawHost<object> = { registrationMode: "full", config: {},
-    pluginConfig: { credentialsFile, accounts: { "account-A": "+15555550100" }, pilotGroup: group }, lifecycle: { signal: new AbortController().signal },
+  const api: OpenClawHost<object> = { registrationMode: "full", config: {}, logger,
+    pluginConfig: { credentialsFile, accounts: { "account-A": "+15555550100" }, pilotGroup: group, debug }, lifecycle: { signal: new AbortController().signal },
     runtime: { version: "2026.10.4", channel: { outbound: { loadAdapter: async () => outbound } } },
     registerTool: (factory, options) => { for (const name of options.names) factories.set(name, factory); },
     on: (_name, handler) => { hook = handler; },
@@ -107,7 +109,7 @@ async function fixture(link = true) {
     expect(await hook!({ content: `Link account ${code}`, channel: "whatsapp", senderId: sender, messageId: "link-event", timestamp: Date.now(), isGroup: false },
       { channelId: "whatsapp", accountId: "account-A", conversationId: sender, senderId: canonical, messageId: "link-event" })).toEqual({ handled: true, text: "Your Plex account is linked." });
   }
-  return { f, state, sends, fetchRequest, tool, dispatch, factories,
+  return { f, state, sends, fetchRequest, tool, dispatch, factories, logs: () => logLines.map((line) => JSON.parse(line.slice("[thinkarr] ".length))),
     select: (args: unknown = { id: 123, mediaType: "movie" }) => tool("thinkarr_media_select", args),
     raw: (name: string, args: Record<string, unknown> = {}, patch = {}) => f.signedRequest({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }, { sender: canonical, conversation: group, ...patch }).then(POST),
   };
@@ -115,7 +117,7 @@ async function fixture(link = true) {
 
 describe("minimal beta pilot: real plugin, signed SDK, SQLite, mocked Seerr", () => {
   it("links privately, searches safe existing catalog facts, presents a real prompt and submits only after native confirmation", async () => {
-    const h = await fixture();
+    const h = await fixture(true, true);
     const search = await h.tool("thinkarr_media_search", { query: "Movie" });
     expect(search.details).toMatchObject({ status: "ok", items: [{ id: 123, title: "Movie 123" }, { id: 222, title: "Show 222" }] });
     expect(JSON.stringify(search)).not.toMatch(/SECRET|poster|requests|account|mediaInfo|availability/);
@@ -127,6 +129,11 @@ describe("minimal beta pilot: real plugin, signed SDK, SQLite, mocked Seerr", ()
     expect(h.state.writes[0].body).not.toHaveProperty("userId");
     expect(db.select().from(schema.mcpMediaSelections).get()).toMatchObject({ state: "completed", outcome: "pending_approval" });
     expect(executeTool).not.toHaveBeenCalled();
+    const stages = h.logs().map((r) => r.stage);
+    for (const stage of ["media.presentation_validate", "outbound.prompt_adapter", "outbound.prompt_dispatch", "outbound.prompt_receipt", "media.presentation_acknowledge", "media.outcome_validate"]) expect(stages).toContain(stage);
+    expect(h.logs().find((r) => r.operation === "media_confirm_request" && r.stage === "operation.completed")).toMatchObject({ outcome: "pending_approval" });
+    const rawLogs = JSON.stringify(h.logs());
+    for (const value of ["SECRET", "Movie 123", "request it", sender, canonical, group, h.f.credential.token, h.f.privateKeyPem, ...h.sends.map((s) => s.text)]) expect(rawLogs).not.toContain(value);
   });
 
   it("preserves Seerr automatic approval and submits only the explicit validated TV season subset", async () => {

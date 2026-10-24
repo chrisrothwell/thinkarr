@@ -42,7 +42,7 @@ beforeEach(async () => {
 });
 afterEach(async () => { sqlite.close(); vi.useRealTimers(); vi.unstubAllGlobals(); await rm(directory, { recursive: true, force: true }); });
 
-async function fixture() {
+async function fixture(debug = false) {
   const f = await delegatedLinkFixture(db, adminId);
   const credentialsFile = join(directory, "credentials.json");
   await writeFile(credentialsFile, JSON.stringify({
@@ -51,6 +51,9 @@ async function fixture() {
     keyId: f.key.keyId, bearer: f.credential.token, privateKeyPem: f.privateKeyPem,
   }), { mode: 0o600 });
   const lifecycle = new AbortController();
+  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  const logs = () => [...logger.info.mock.calls, ...logger.warn.mock.calls, ...logger.error.mock.calls]
+    .map(([line]) => JSON.parse(line.slice("[thinkarr] ".length)));
   let factory: Parameters<OpenClawHost<object>["registerTool"]>[0] | undefined;
   let hook: ((event: DispatchEvent, context: DispatchContext) => Promise<DispatchResult | void>) | undefined;
   const sends: Array<Parameters<NonNullable<Outbound<object>["sendText"]>>[0]> = [];
@@ -64,20 +67,76 @@ async function fixture() {
   };
   const api: OpenClawHost<object> = {
     registrationMode: "full", config: {},
-    pluginConfig: { credentialsFile, accounts: { "account-A": "+15555550100" } },
+    pluginConfig: { credentialsFile, accounts: { "account-A": "+15555550100" }, debug }, logger,
     lifecycle: { signal: lifecycle.signal },
     runtime: { version: "2026.10.4", channel: { outbound: { loadAdapter: vi.fn(async () => outbound) } } },
     registerTool: vi.fn((tool) => { factory = tool; }),
     on: vi.fn((_name, handler) => { hook = handler; }),
   };
   return {
-    f, api, outbound, sends, credentialsFile, lifecycle,
+    f, api, outbound, sends, credentialsFile, lifecycle, logger, logs,
     create: (ctx = toolContext()) => factory!.create(ctx),
     dispatch: (event: DispatchEvent, context: DispatchContext) => hook!(event, context),
   };
 }
 
 describe("OpenClaw linking adapter", () => {
+  it("traces linking end-to-end in debug mode without logging URLs, credentials, codes, message IDs or participant identity", async () => {
+    const h = await fixture(true); register(h.api);
+    expect((await h.create()!.execute("debug", {})).details.status).toBe("private_link_sent");
+    const stages = h.logs().map((r) => r.stage);
+    for (const stage of ["registration.ready", "factory.link_admitted", "credentials.legacy_file", "connector.signing_key", "mcp.connect", "mcp.http.sign", "mcp.http.response", "mcp.tool_result", "link.delivery_validate", "outbound.private_adapter", "outbound.private_resolve", "outbound.private_dispatch", "outbound.private_receipt", "mcp.close", "operation.completed"]) expect(stages).toContain(stage);
+    const invocation = h.logs().filter((r) => r.operation === "link_start");
+    expect(new Set(invocation.map((r) => r.traceId)).size).toBe(1);
+    expect(invocation.find((r) => r.stage === "mcp.http.response")).toMatchObject({ httpStatus: 200 });
+    const url = h.sends[0].text.split(" ").at(-1)!;
+    const code = prepareAccountLink(new URL(url).hash.slice(7), h.f.sessionA, h.f.userA).completionCode;
+    await h.dispatch({ content: `Link account ${code}`, channel: "whatsapp", senderId: sender, messageId: "secret-inbound-id", timestamp: Date.now(), isGroup: false },
+      { channelId: "whatsapp", accountId: "account-A", conversationId: sender, senderId: sender, messageId: "secret-inbound-id" });
+    const raw = JSON.stringify(h.logs());
+    for (const value of [url, code, new URL(url).hash.slice(7), h.f.credential.token, h.f.privateKeyPem, sender, canonicalPhone(sender)!, group, "account-A", "provider-message", "secret-inbound-id", "Link account", "Bearer ", "Thinkarr-Delegation"]) expect(raw).not.toContain(value);
+    expect(h.logs().find((r) => r.operation === "link_complete" && r.stage === "operation.completed")).toMatchObject({ outcome: "linked" });
+  });
+  it("logs actionable failure stages and reason codes with debug disabled", async () => {
+    const h = await fixture(); h.outbound.resolveTarget = () => ({ ok: true, to: group }); register(h.api);
+    expect((await h.create()!.execute("failed", {})).details.status).toBe("failed");
+    expect(h.logs().some((r) => r.level === "debug")).toBe(false);
+    expect(h.logs().find((r) => r.stage === "outbound.private_resolve")).toMatchObject({ level: "error", reason: "private_target_mismatch" });
+    expect(h.logs().find((r) => r.stage === "operation.completed")).toMatchObject({ outcome: "failed" });
+  });
+  it("turns detailed logging off when debug=false is applied to a replacement registration", async () => {
+    const h = await fixture(true); register(h.api);
+    expect((await h.create()!.execute("debug-on", {})).details.status).toBe("private_link_sent");
+    expect(h.logs().some((r) => r.level === "debug")).toBe(true);
+    h.logger.info.mockClear(); h.logger.warn.mockClear(); h.logger.error.mockClear();
+    h.api.pluginConfig = { ...h.api.pluginConfig, debug: false }; register(h.api);
+    expect((await h.create()!.execute("debug-off", {})).details.status).toBe("private_link_sent");
+    expect(h.logs().some((r) => r.level === "debug")).toBe(false);
+    expect(h.logs().find((r) => r.stage === "registration.ready")).toMatchObject({ debugEnabled: false });
+    expect(h.logs().find((r) => r.stage === "operation.completed")).toMatchObject({ outcome: "private_link_sent" });
+  });
+  it("distinguishes missing SDK imports from signing-key parsing and reports neither raw exception", async () => {
+    const h = await fixture(true); const connection = JSON.parse(await readFile(h.credentialsFile, "utf8"));
+    h.api.pluginConfig = { accounts: { "account-A": "+15555550100" }, debug: true, connection: { ...connection,
+      bearer: { source: "store", provider: "default", id: "SECRET_REF_TOKEN" }, privateKeyPem: { source: "store", provider: "default", id: "SECRET_REF_KEY" },
+    } };
+    vi.mocked(loadPreparedSecretReader).mockRejectedValue(Object.assign(new Error(`SECRET ${connection.privateKeyPem}`), { code: "ERR_MODULE_NOT_FOUND" }));
+    register(h.api); expect((await h.create()!.execute("sdk", {})).details.status).toBe("failed");
+    expect(h.logs().find((r) => r.stage === "credentials.load" && r.level === "error")).toMatchObject({ errorCode: "ERR_MODULE_NOT_FOUND" });
+    const other = h;
+    other.api.pluginConfig = { credentialsFile: h.credentialsFile, accounts: { "account-A": "+15555550100" }, debug: true };
+    await writeFile(other.credentialsFile, JSON.stringify({ ...connection, privateKeyPem: "SECRET_MALFORMED_PRIVATE_KEY" }), { mode: 0o600 });
+    register(other.api); expect((await other.create()!.execute("key", {})).details.status).toBe("failed");
+    expect(other.logs().find((r) => r.stage === "connector.signing_key" && r.level === "error")).toBeDefined();
+    for (const text of [JSON.stringify(h.logs()), JSON.stringify(other.logs())]) {
+      expect(text).not.toContain("SECRET"); expect(text).not.toContain(connection.privateKeyPem); expect(text).not.toContain(connection.bearer);
+    }
+  });
+  it("keeps delivery working if the host logger fails", async () => {
+    const h = await fixture(true); const fail = () => { throw new Error("LOGGER SECRET"); };
+    h.api.logger = { info: fail, warn: fail, error: fail }; register(h.api);
+    expect((await h.create()!.execute("logger-failed", {})).details.status).toBe("private_link_sent"); expect(h.sends).toHaveLength(1);
+  });
   it("declares every registered optional tool for manifest-first loading and activates the inbound hook at startup", async () => {
     const h = await fixture(); h.api.pluginConfig = { ...h.api.pluginConfig, pilotGroup: group }; register(h.api);
     const registrations = vi.mocked(h.api.registerTool).mock.calls;
@@ -102,6 +161,9 @@ describe("OpenClaw linking adapter", () => {
       privateKeyPem: { source: "store", provider: "default", id: "THINKARR_PRIVATE_KEY" },
     } };
     expect(validate(source)).toBe(true);
+    expect(validate({ ...source, debug: true })).toBe(true);
+    expect(validate({ ...source, debug: false })).toBe(true);
+    expect(validate({ ...source, debug: "true" })).toBe(false);
     expect(validate({ ...source, connection })).toBe(false);
     expect(manifest.configContracts.secretInputs.paths.map((p) => p.path)).toEqual(["connection.bearer", "connection.privateKeyPem"]);
   });
@@ -148,6 +210,10 @@ describe("OpenClaw linking adapter", () => {
     register(h.api);
     expect((await h.create()!.execute("denied", {})).details.status).toBe("failed");
     expect(fetch).not.toHaveBeenCalled(); expect(h.sends).toHaveLength(0);
+    if (mode === "unavailable") {
+      expect(h.logs().find((r) => r.stage === "secrets.prepared_status")).toMatchObject({ level: "error", bearerAvailable: false, keyAvailable: false });
+      expect(h.logs().find((r) => r.stage === "credentials.load" && r.level === "error")).toMatchObject({ reason: "prepared_bearer_unavailable" });
+    }
   });
   it.each(["revision", "unavailable"])("fences a native secret %s change before private delivery", async (mode) => {
     const h = await fixture(); const connection = JSON.parse(await readFile(h.credentialsFile, "utf8"));

@@ -7,6 +7,7 @@ import * as schema from "@/lib/db/schema";
 import { createTestDb, seedUser, type TestDb } from "../helpers/db";
 import { delegatedLinkFixture } from "../helpers/delegated-link";
 import { createLinkingConnector, type LinkingConnectorConfig, type PrivateLinkDelivery, type TrustedLinkInvocation } from "../../../connectors/delegated-mcp/linking";
+import { createDiagnosticTrace } from "../../../connectors/delegated-mcp/diagnostics";
 
 let db: TestDb;
 let sqlite: Database.Database;
@@ -48,6 +49,39 @@ async function fixture() {
 }
 
 describe("trusted linking connector core", () => {
+  it.each([401, 403, 500])("logs HTTP %s without leaking response bodies or auth headers", async (status) => {
+    const { config } = await fixture(); const lines: string[] = [];
+    const trace = createDiagnosticTrace({ info: (s) => lines.push(s), warn: (s) => lines.push(s), error: (s) => lines.push(s) }, false, "link_start");
+    const connector = await createLinkingConnector(config, { diagnostics: trace.log, sendPrivate: async (d) => receipt(d),
+      fetch: async () => new Response(`SECRET BODY ${config.bearer}`, { status }),
+    });
+    expect(await connector.startLink(actor())).toEqual({ status: "failed" });
+    expect(lines.some((line) => line.includes('"stage":"mcp.http.response"') && line.includes(`"httpStatus":${status}`))).toBe(true);
+    expect(lines.join()).not.toContain(config.bearer); expect(lines.join()).not.toContain("SECRET BODY");
+  });
+  it("classifies network failures without copying exception messages, URLs or causes", async () => {
+    const { config } = await fixture(); const lines: string[] = [];
+    const trace = createDiagnosticTrace({ info: (s) => lines.push(s), warn: (s) => lines.push(s), error: (s) => lines.push(s) }, true, "link_start");
+    const connector = await createLinkingConnector(config, { diagnostics: trace.log, sendPrivate: async (d) => receipt(d), fetch: async () => {
+      throw new TypeError(`SECRET URL ${config.endpoint}`, { cause: Object.assign(new Error(config.bearer), { code: "ECONNREFUSED" }) });
+    } });
+    expect(await connector.startLink(actor())).toEqual({ status: "failed" });
+    expect(lines.some((line) => line.includes('"stage":"mcp.http.fetch"') && line.includes('"errorCode":"ECONNREFUSED"'))).toBe(true);
+    expect(lines.join()).not.toContain("SECRET URL"); expect(lines.join()).not.toContain(config.endpoint); expect(lines.join()).not.toContain(config.bearer);
+  });
+  it.each(["known", "untrusted"])("logs bounded remote tool errors (%s)", async (kind) => {
+    const { config } = await fixture(); const lines: string[] = [];
+    const trace = createDiagnosticTrace({ info: (s) => lines.push(s), warn: (s) => lines.push(s), error: (s) => lines.push(s) }, true, "link_start");
+    const connector = await createLinkingConnector(config, { diagnostics: trace.log, sendPrivate: async (d) => receipt(d), fetch: async (input, init) => {
+      const body = JSON.parse(String(init?.body));
+      if (body.method !== "tools/call") return routeFetch(input, init);
+      return Response.json({ jsonrpc: "2.0", id: body.id, result: { isError: true, content: [{ type: "text", text: JSON.stringify({ error: kind === "known"
+        ? "Configure the public linking origin and WhatsApp bot number before linking" : `SECRET REMOTE ${config.privateKeyPem}` }) }] } });
+    } });
+    expect(await connector.startLink(actor())).toEqual({ status: "failed" });
+    expect(lines.join()).toContain(kind === "known" ? "remote_link_configuration_required" : "remote_tool_error");
+    expect(lines.join()).not.toContain("SECRET REMOTE"); expect(lines.join()).not.toContain(config.privateKeyPem);
+  });
   it("signs real SDK requests, privately delivers the handoff and completes browser verification", async () => {
     const { f, config } = await fixture();
     const captured: Array<{ method: string; claims: ReturnType<typeof decodeJwt> }> = [];

@@ -34,6 +34,7 @@ export type Outbound<C extends object> = {
 };
 export type OpenClawHost<C extends object> = {
   registrationMode: string; config: C; pluginConfig?: Record<string, unknown>;
+  logger?: { info: (message: string) => void; warn: (message: string) => void; error: (message: string) => void };
   lifecycle: { readonly signal?: AbortSignal };
   runtime: { version: string; channel: { outbound: { loadAdapter: (channel: "whatsapp") => Promise<Outbound<C> | undefined> } } };
   registerTool: (factory: { contextVersion: 2; create: (ctx: ToolContext<C>) => LinkTool | null }, opts: { names: string[]; optional: boolean }) => void;
