@@ -25,6 +25,7 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 ├── connectors/
 │   ├── delegated-mcp/
 │   │   ├── linking.ts                # Harness-neutral signed MCP client, private link and prompt receipt boundaries
+│   │   ├── diagnostics.ts            # Value-free structured operation traces, safe error classification and debug gating
 │   │   ├── media-contract.ts         # Strict pilot media inputs/results and deterministic confirmation grammar
 │   │   └── README.md                 # Trusted host contract and OpenClaw adapter requirements
 │   └── openclaw/
@@ -426,6 +427,8 @@ The release-matched OpenClaw tool context lacks an explicit direct/group field; 
 
 ### Version-Pinned OpenClaw Plugin
 The manifest declares the exact four optional tool names in `contracts.tools` with matching tool metadata. Explicit `activation.onStartup: true` is required because the admitted `before_dispatch` hook must exist before any model tool call. OpenClaw's manifest-first selection otherwise excludes the runtime regardless of reloads or runtime `registerTool` calls. Startup activation does not grant tool use or bypass host/group/actor policy.
+
+The permanent plugin-local `debug` boolean defaults to false and is exposed in the manifest configuration/UI. Errors, rejections, registration and operation summaries use the host logger in normal mode. Debug adds detailed stage transitions under the same random per-operation trace ID and elapsed timer, including prepared-secret availability, MCP HTTP status and recognized error codes. Debug records deliberately use the host info sink with a `level: "debug"` field so enabling this plugin setting does not require global Gateway debug logging; changes take effect on normal config apply/reload. The portable connector accepts the same optional diagnostic sink. Logging explicitly projects bounded metadata and known reason/error classifications, never upstream exception text/stacks, config values, credentials, URLs, message/receipt contents or actor identities. Logger failures are isolated from delivery and request semantics; model-facing outcomes remain unchanged.
 
 `connectors/openclaw` packages a native plugin for OpenClaw `2026.10.4`, with an optional zero-argument `thinkarr_account_link` version-2 tool factory and an admitted `before_dispatch` hook. An optional native `pilotGroup` exposes three additive `thinkarr_media_*` read/selection tools only for that group and enables deterministic message confirmation. Native quote IDs/quote flags must agree between event/context; bare yes and unrelated finance text remain unclaimed. Registration is synchronous and version/lifecycle checked. Prepared native secrets are obtained through the host SDK during admitted invocations, not registration/discovery; credentials/errors never enter tool metadata/results. Legacy file mode reads only within a current invocation and requires an owned regular no-symlink file of at most 16 KiB with mode 0600. Source configuration contains public connection metadata, native SecretRefs, receiving-account/self-identity map and optional group restriction, not participant admission rules. Host channel policy governs human admission; self identities, missing metadata and conflicting route/event facts fail closed.
 
