@@ -24,6 +24,7 @@ import type { DisplayTitle } from "@/types/titles";
 import type { McpExecutionContext, PersonalMcpContext, ServiceMcpContext } from "@/lib/mcp/auth-context";
 import { authenticateServiceMcpToken, isServiceMcpToken, recordServiceMcpDenial } from "@/lib/mcp/service-principals";
 import { handleServiceLinkPost } from "@/lib/mcp/link-dispatch";
+import { createMcpRequestTiming, type McpRequestTiming } from "@/lib/mcp/request-timing";
 
 type McpPermission = "admin" | "user";
 
@@ -409,7 +410,17 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const baseAuth = authenticateMcp(request);
+  const bearer = request.headers.get("authorization");
+  const timing = (bearer?.startsWith("Bearer ") && isServiceMcpToken(bearer.slice(7))) || request.headers.has("Thinkarr-Delegation")
+    ? createMcpRequestTiming(request) : undefined;
+  try {
+    const response = await handleMcpPost(request, timing);
+    return timing ? timing.finish(response) : response;
+  } catch (error) { timing?.fail(); throw error; }
+}
+
+async function handleMcpPost(request: Request, timing?: McpRequestTiming) {
+  const baseAuth = timing ? timing.spanSync("authentication", () => authenticateMcp(request)) : authenticateMcp(request);
   if (!baseAuth) {
     logger.warn("MCP_AUTH_FAILURE", { ip: getClientIp(request), path: "POST /api/mcp" });
     return NextResponse.json(
@@ -419,7 +430,7 @@ export async function POST(request: Request) {
   }
   if (baseAuth.kind === "service") {
     if (!baseAuth.enabled) return serviceAccessUnavailable(baseAuth);
-    return handleServiceLinkPost(request, baseAuth);
+    return handleServiceLinkPost(request, baseAuth, timing);
   }
 
   initializeTools();

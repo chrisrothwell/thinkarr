@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { parseMcpRequestId } from "./http-diagnostics.js";
 
 export type DiagnosticLevel = "debug" | "info" | "warn" | "error";
 export type DiagnosticFields = {
@@ -21,6 +22,13 @@ export type DiagnosticFields = {
   receiptDestinationMatches?: boolean;
   protocolPhase?: "initialize" | "initialized" | "tool_call" | "other";
   receiptDestinationKind?: "pn_jid" | "e164" | "lid" | "group" | "missing" | "other";
+  requestId?: string;
+  responseRequestId?: string;
+  httpDurationMs?: number;
+  serverDurationMs?: number;
+  outsideHandlerMs?: number;
+  bodyDurationMs?: number;
+  serverTimingAvailable?: boolean;
 };
 export type DiagnosticSink = (level: DiagnosticLevel, stage: string, fields?: DiagnosticFields) => void;
 export type DiagnosticLogger = { info: (message: string) => void; warn: (message: string) => void; error: (message: string) => void };
@@ -92,6 +100,7 @@ export function createDiagnosticTrace(logger: DiagnosticLogger | undefined, debu
       const validationIssues = projectValidationIssues(details?.validationIssues);
       const record = {
         component: "thinkarr", traceId, operation: safeCode(operation) ?? "operation", level,
+        timestampUtc: new Date().toISOString(),
         stage: /^[a-z][a-z0-9_.]{0,99}$/.test(stage) ? stage : "operation",
         elapsedMs: Math.max(0, Math.round(performance.now() - started)),
         ...(reason ? { reason } : {}),
@@ -100,11 +109,17 @@ export function createDiagnosticTrace(logger: DiagnosticLogger | undefined, debu
         ...(details?.errorCode && errorCodes.has(details.errorCode) ? { errorCode: details.errorCode } : {}),
         ...(Number.isSafeInteger(details?.rpcCode) && details.rpcCode! <= -32000 && details.rpcCode! >= -32768 ? { rpcCode: details.rpcCode } : {}),
         ...(validationIssues.length ? { validationIssues } : {}),
-        ...Object.fromEntries((["bearerAvailable", "keyAvailable", "revisionMatches", "debugEnabled", "mediaEnabled", "acknowledgementConfirmed", "receiptChannelMatches", "receiptMessageIdPresent", "receiptDestinationSupported", "receiptDestinationMatches"] as const)
+        ...Object.fromEntries((["bearerAvailable", "keyAvailable", "revisionMatches", "debugEnabled", "mediaEnabled", "acknowledgementConfirmed", "receiptChannelMatches", "receiptMessageIdPresent", "receiptDestinationSupported", "receiptDestinationMatches", "serverTimingAvailable"] as const)
           .filter((key) => typeof fields[key] === "boolean").map((key) => [key, fields[key]])),
         ...(typeof fields.outcome === "string" && outcomes.has(fields.outcome) ? { outcome: fields.outcome } : {}),
         ...(fields.protocolPhase && ["initialize", "initialized", "tool_call", "other"].includes(fields.protocolPhase) ? { protocolPhase: fields.protocolPhase } : {}),
         ...(fields.receiptDestinationKind && ["pn_jid", "e164", "lid", "group", "missing", "other"].includes(fields.receiptDestinationKind) ? { receiptDestinationKind: fields.receiptDestinationKind } : {}),
+        ...Object.fromEntries((["requestId", "responseRequestId"] as const).flatMap((key) => {
+          const value = parseMcpRequestId(fields[key]); return value ? [[key, value]] : [];
+        })),
+        ...Object.fromEntries((["httpDurationMs", "serverDurationMs", "outsideHandlerMs", "bodyDurationMs"] as const)
+          .filter((key) => typeof fields[key] === "number" && Number.isFinite(fields[key]) && fields[key]! >= 0 && fields[key]! <= 86_400_000)
+          .map((key) => [key, Math.round(fields[key]! * 1000) / 1000])),
       };
       // Detailed records use info so the plugin switch works without changing
       // the Gateway's global log threshold; the record still says level=debug.

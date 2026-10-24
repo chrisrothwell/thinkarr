@@ -16,6 +16,8 @@ Call `handlePrivateLinkMessage` only from an admitted human inbound hook. The ex
 
 Connection/timeouts before the linking tool call return `unavailable`; after it starts they return `unknown` because a response can be lost after a real commit. These classifications do not retry operations or infer binding state. Check the account-link status before retrying an uncertain tool outcome.
 
+Every physical POST carries an independent UUID `X-Thinkarr-Request-Id`, not a replay nonce. Updated app builds echo it and return `Server-Timing: mcp_total;dur=...` plus phase durations. Trusted hosts may set `debugTimings: true` to request detailed app timing logs via `X-Thinkarr-Debug-Timing: 1`; this header never changes authentication/authorization. Client diagnostics correlate request/response IDs, fetch-to-headers duration, app total, and headers-to-body completion/cancellation without logging headers or body contents. The residual outside app timing includes network, proxy/framework and client scheduling, so it is not an isolated wire-time measurement. The SDK response observer preserves native metadata and consumption semantics without cloning/eagerly draining bodies.
+
 ## OpenClaw adapter boundary
 
 Source inspected at `openclaw/openclaw` tag `v2026.10.4`:

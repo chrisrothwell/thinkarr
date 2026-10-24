@@ -240,7 +240,7 @@ export function register<C extends object>(api: OpenClawHost<C>) {
       assertSecretsCurrent = prepared.assertSecretsCurrent;
       assertCurrent();
       step("connector.create");
-      const connector = await createLinkingConnector(prepared.credentials, { sendPrivate: (d) => sendPrivate(cfg, d, trace.log), diagnostics: trace.log });
+      const connector = await createLinkingConnector(prepared.credentials, { sendPrivate: (d) => sendPrivate(cfg, d, trace.log), diagnostics: trace.log, debugTimings: options.debug });
       assertCurrent();
       const current = { ...invocation, signal, assertCurrent };
       step("connector.invoke");
@@ -270,6 +270,7 @@ export function register<C extends object>(api: OpenClawHost<C>) {
       step("connector.create");
       const connector = await createLinkingConnector(prepared.credentials, {
         diagnostics: trace.log,
+        debugTimings: options.debug,
         sendPrivate: (d) => sendPrivate(cfg, d, trace.log),
         async sendPrompt(delivery) {
           const guard = () => { delivery.assertCurrent(); assertCurrent(); };

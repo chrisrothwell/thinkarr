@@ -5,6 +5,7 @@ import { z } from "zod";
 import { getDb, schema } from "@/lib/db";
 import type { ServiceMcpContext } from "./auth-context";
 import { SERVICE_OPERATIONS } from "./service-principals";
+import type { McpRequestTiming } from "./request-timing";
 
 export const DELEGATION_CLOCK_SKEW_SECONDS = 5;
 export const DELEGATION_MAX_LIFETIME_SECONDS = 60;
@@ -104,35 +105,39 @@ export function requireCurrentDelegation(context: VerifiedServiceMcpContext, tra
 /** Verify authenticated metadata and durably consume this HTTP request's nonce.
  * This does not resolve a human binding or authorize a media operation.
  */
-export async function verifyDelegatedRequest(request: Request, body: Uint8Array, caller: ServiceMcpContext): Promise<VerifiedServiceMcpContext> {
+export async function verifyDelegatedRequest(request: Request, body: Uint8Array, caller: ServiceMcpContext, timing?: McpRequestTiming): Promise<VerifiedServiceMcpContext> {
   const assertion = request.headers.get("Thinkarr-Delegation");
   if (!assertion || assertion.length > 16384) throw new DelegationError("INVALID_ASSERTION");
   const db = getDb();
   let claims: DelegationClaims;
   let key: typeof schema.mcpServiceKeys.$inferSelect;
   try {
-    const protectedHeader = headerSchema.parse(decodeProtectedHeader(assertion));
-    const untrusted = claimsSchema.parse(decodeJwt(assertion));
-    if (untrusted.service !== caller.principalId) throw new Error();
-    const found = db.select().from(schema.mcpServiceKeys).where(and(
-      eq(schema.mcpServiceKeys.principalId, caller.principalId),
-      eq(schema.mcpServiceKeys.issuer, untrusted.iss), eq(schema.mcpServiceKeys.keyId, protectedHeader.kid),
-    )).get();
-    if (!found || found.revokedAt) throw new Error();
-    key = found;
-    requireActive(db, caller, key.id, new Date());
-    const result = await jwtVerify(assertion, await importSPKI(key.publicKeyPem, "EdDSA"), {
+    const lookupKey = () => {
+      const protectedHeader = headerSchema.parse(decodeProtectedHeader(assertion));
+      const untrusted = claimsSchema.parse(decodeJwt(assertion));
+      if (untrusted.service !== caller.principalId) throw new Error();
+      const found = db.select().from(schema.mcpServiceKeys).where(and(
+        eq(schema.mcpServiceKeys.principalId, caller.principalId),
+        eq(schema.mcpServiceKeys.issuer, untrusted.iss), eq(schema.mcpServiceKeys.keyId, protectedHeader.kid),
+      )).get();
+      if (!found || found.revokedAt) throw new Error();
+      requireActive(db, caller, found.id, new Date());
+      return found;
+    };
+    key = timing ? timing.spanSync("delegation_key", lookupKey) : lookupKey();
+    const verifySignature = async () => jwtVerify(assertion, await importSPKI(key.publicKeyPem, "EdDSA"), {
       algorithms: ["EdDSA"], typ: "thinkarr-delegation+jwt", issuer: key.issuer,
       audience: getDelegationAudience(), clockTolerance: DELEGATION_CLOCK_SKEW_SECONDS,
       requiredClaims: ["iat", "exp", "jti"],
     });
+    const result = await (timing ? timing.span("signature_verify", verifySignature) : verifySignature());
     claims = claimsSchema.parse(result.payload);
     if (claims.iat > Math.floor(Date.now() / 1000) + DELEGATION_CLOCK_SKEW_SECONDS) throw new Error();
   } catch { throw new DelegationError("INVALID_ASSERTION"); }
   const url = new URL(request.url);
   if (claims.method !== request.method || claims.target !== url.pathname + url.search
     || claims.bodyHash !== createHash("sha256").update(body).digest("hex")) throw new DelegationError("INVALID_REQUEST_BINDING");
-  return db.transaction((tx) => {
+  const claimNonce = () => db.transaction((tx) => {
     const now = new Date();
     const seconds = Math.floor(now.getTime() / 1000);
     const active = requireActive(tx, caller, key.id, now);
@@ -148,6 +153,7 @@ export async function verifyDelegatedRequest(request: Request, body: Uint8Array,
       delegation: Object.freeze(claims), verificationKeyId: key.id, [verified]: true as const,
     });
   }, { behavior: "immediate" });
+  return timing ? timing.spanSync("nonce_claim", claimNonce) : claimNonce();
 }
 
 /** Mutating operations consume provider events separately from HTTP nonce replay.

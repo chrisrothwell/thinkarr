@@ -23,10 +23,10 @@ npm run build:openclaw
 npm pack ./connectors/openclaw
 ```
 
-Install the resulting `thinkarr-openclaw-0.3.6.tgz` through the supported local archive mechanism:
+Install the resulting `thinkarr-openclaw-0.3.7.tgz` through the supported local archive mechanism:
 
 ```bash
-openclaw plugins install npm-pack:/path/to/thinkarr-openclaw-0.3.6.tgz --no-enable
+openclaw plugins install npm-pack:/path/to/thinkarr-openclaw-0.3.7.tgz --no-enable
 ```
 
 The Control UI can configure, enable and reload an installed plugin. Its catalog installer does not accept arbitrary local archives; a CLI or the browser's operator Terminal is needed for this archive installation. The package is not currently advertised as a published npm/ClawHub release.
@@ -92,6 +92,20 @@ Useful failure signals:
 | `prepared_secret_revision_changed` / `invocation_not_current` | A rotation, reload or superseding invocation closed the attempt; do not blindly retry uncertain sends/writes |
 
 Both modes exclude credential values, SecretRef IDs, config/file paths, URLs, JWTs, raw exceptions/stacks, request/response bodies, titles, message/verification text, provider receipt IDs and participant identities. Logging failures cannot change request or delivery behavior.
+
+### Measuring handshake latency on both sides
+
+Each physical signed POST has an independent random `requestId`, sent as `X-Thinkarr-Request-Id`; this is separate from JWT replay nonces and carries no authority. Updated Thinkarr app builds validate that ID (or generate one), echo it in the response and log `MCP_HTTP_TIMING` request-received/completed/aborted events. Client and server records include UTC timestamps and monotonic elapsed times.
+
+With the plugin's `debug: true`, the connector also sends `X-Thinkarr-Debug-Timing: 1`. This enables server phase start/end records for authentication, body reading, delegation key lookup, signature verification, nonce claim, envelope validation, SDK connect/dispatch, tool handling, response buffering and awaited cleanup. A stalled phase has a start but no end; client cancellation produces `request_aborted` when it reaches the app. The server's `request_completed` is emitted only after handler processing and SDK cleanup, not before cleanup starts. Normal mode retains concise request totals without detailed phase logs.
+
+The response includes `Server-Timing` metrics, especially `mcp_total`, measured inside the app. Client `mcp.http.response` records `httpDurationMs` (fetch-to-headers), `serverDurationMs`, and their nonnegative difference `outsideHandlerMs`. This comparison does not require synchronized clocks. The difference includes time outside the measured handler span: network, proxy/framework queuing/output, and client scheduling. It is **not** a pure network measurement and cannot separate those causes without further infrastructure evidence. Nested server subphase durations overlap; do not sum them to calculate total time.
+
+Client `mcp.http.body_start` and `mcp.http.body_complete` / `body_error` / `body_cancelled` distinguish received headers from SDK body consumption. `bodyDurationMs` is elapsed time since headers were received. The observer does not clone, eagerly drain, retain or log response chunks, and preserves streaming/cancellation behavior.
+
+Correlate one client's `requestId` with server `MCP_HTTP_TIMING` records. The client also records the echoed `responseRequestId`. A server phase that dominates `mcp_total` localizes app processing; a fast server total with a large client remainder points outside the measured app span. A missing server entry can mean the request never reached the handler, the app build lacks this instrumentation, or the inspected log window omitted it. `serverTimingAvailable: false` means that response has no usable metrics, for example an older app, a proxy response or a failure before the app could return headers.
+
+**Deploy both the updated Thinkarr app and companion 0.3.7 for two-sided measurements.** Updating the plugin alone adds client observations but cannot add server timing to an older app. No enrollment or key rotation is required.
 
 ## Runtime behavior
 

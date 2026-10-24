@@ -6,6 +6,7 @@ import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { confirmationIntent, mediaOutcome, mediaToolArguments, presentation, type MediaOutcome, type MediaTool } from "./media-contract.js";
 import { ConnectorDiagnosticError, diagnosticErrorFields, safeDiagnosticSink, type DiagnosticSink } from "./diagnostics.js";
+import { MCP_REQUEST_ID_HEADER, MCP_TIMING_DEBUG_HEADER, observeMcpResponse, parseMcpRequestId, readMcpServerDuration } from "./http-diagnostics.js";
 
 const identity = z.string().min(1).max(512);
 const actorSchema = z.object({
@@ -53,6 +54,7 @@ export type LinkingConnectorHost = {
   sendPrompt?: (delivery: { channel: "whatsapp"; account: string; conversation: string; text: string; signal: AbortSignal; assertCurrent: () => void }) => Promise<{ accepted: true; messageId: string; conversation: string }>;
   fetch?: typeof globalThis.fetch;
   diagnostics?: DiagnosticSink;
+  debugTimings?: boolean;
 };
 
 function safeUrl(raw: string) {
@@ -121,6 +123,7 @@ export async function createLinkingConnector(config: LinkingConnectorConfig, hos
   // Capture host capabilities once; never share mutable per-session headers.
   const sendPrivate = host.sendPrivate.bind(host);
   const fetchRequest = host.fetch ?? globalThis.fetch;
+  const debugTimings = host.debugTimings === true;
 
   type MediaCall = { name: string; args: unknown; source?: Record<string, unknown> };
   async function invoke(invocation: TrustedLinkInvocation, code?: string, event?: z.infer<typeof eventSchema>, media?: MediaCall): Promise<LinkOutcome | MediaOutcome> {
@@ -150,9 +153,10 @@ export async function createLinkingConnector(config: LinkingConnectorConfig, hos
       const transport = new StreamableHTTPClientTransport(endpoint, {
         fetch: async (input, init) => {
           let requestStage = "mcp.http.prepare";
+          const requestId = randomUUID();
           let protocolPhase: "initialize" | "initialized" | "tool_call" | "other" = "other";
           try {
-            log("debug", requestStage);
+            log("debug", requestStage, { requestId });
             guard();
             const request = new Request(input, init);
             const requestSignal = AbortSignal.any([signal, request.signal]);
@@ -160,7 +164,7 @@ export async function createLinkingConnector(config: LinkingConnectorConfig, hos
             if (request.url !== endpoint.href) throw new ConnectorDiagnosticError("connector_request_target_invalid");
             // The SDK probes optional standalone SSE after initialized. This
             // connector is POST-only: reject locally without auth or network I/O.
-            if (request.method === "GET") { log("debug", "mcp.sse_unsupported"); return new Response(null, { status: 405 }); }
+            if (request.method === "GET") { log("debug", "mcp.sse_unsupported", { requestId }); return new Response(null, { status: 405 }); }
             if (request.method !== "POST") throw new ConnectorDiagnosticError("connector_request_target_invalid");
             const body = new Uint8Array(await request.arrayBuffer());
             if (body.byteLength > 65536) throw new ConnectorDiagnosticError("connector_request_too_large");
@@ -168,7 +172,7 @@ export async function createLinkingConnector(config: LinkingConnectorConfig, hos
             protocolPhase = method === "initialize" ? "initialize" : method === "notifications/initialized" ? "initialized" : method === "tools/call" ? "tool_call" : "other";
             guard();
             const now = Math.floor(Date.now() / 1000);
-            requestStage = "mcp.http.sign"; log("debug", requestStage, { protocolPhase });
+            requestStage = "mcp.http.sign"; log("debug", requestStage, { requestId, protocolPhase });
             const assertion = await new SignJWT({
               v: 1, iss: settings.issuer, aud: settings.audience, service: settings.service,
               ...actor, ...source, iat: now, exp: now + 60, jti: randomUUID(),
@@ -179,19 +183,29 @@ export async function createLinkingConnector(config: LinkingConnectorConfig, hos
               Authorization: `Bearer ${settings.bearer}`, "Thinkarr-Delegation": assertion,
               "Content-Type": "application/json", Accept: "application/json, text/event-stream",
             });
+            headers.set(MCP_REQUEST_ID_HEADER, requestId);
+            if (debugTimings) headers.set(MCP_TIMING_DEBUG_HEADER, "1");
             const version = request.headers.get("mcp-protocol-version");
             if (version) headers.set("mcp-protocol-version", version);
             guard();
             requestSignal.throwIfAborted();
-            requestStage = "mcp.http.fetch"; log("debug", requestStage, { protocolPhase });
+            requestStage = "mcp.http.fetch"; log("debug", requestStage, { requestId, protocolPhase });
+            const fetchStarted = performance.now();
             const response = await fetchRequest(endpoint.href, {
               method: "POST", body: Buffer.from(body), headers, redirect: "error", credentials: "omit", signal: requestSignal,
             });
+            const httpDurationMs = Math.max(0, performance.now() - fetchStarted);
             guard();
-            log(response.ok ? "debug" : "error", "mcp.http.response", { protocolPhase, httpStatus: response.status, ...(!response.ok ? { reason: "http_request_rejected" } : {}) });
+            const serverDurationMs = readMcpServerDuration(response.headers.get("Server-Timing"));
+            const responseRequestId = parseMcpRequestId(response.headers.get(MCP_REQUEST_ID_HEADER));
+            const fields = { requestId, responseRequestId, protocolPhase, httpDurationMs, serverDurationMs,
+              serverTimingAvailable: serverDurationMs !== undefined,
+              ...(serverDurationMs !== undefined ? { outsideHandlerMs: Math.max(0, httpDurationMs - serverDurationMs) } : {}),
+            };
+            log(response.ok ? "debug" : "error", "mcp.http.response", { ...fields, httpStatus: response.status, ...(!response.ok ? { reason: "http_request_rejected" } : {}) });
             if (response.redirected || (response.status >= 300 && response.status < 400)) throw new ConnectorDiagnosticError("connector_redirect_refused");
-            return response;
-          } catch (error) { log("error", requestStage, { ...diagnosticErrorFields(error), protocolPhase }); throw error; }
+            return observeMcpResponse(response, log, fields);
+          } catch (error) { log("error", requestStage, { ...diagnosticErrorFields(error), requestId, protocolPhase }); throw error; }
         },
       });
       client = new Client({ name: "thinkarr-linking-connector", version: "1" });
