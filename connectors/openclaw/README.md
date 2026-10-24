@@ -60,7 +60,7 @@ Registration accepts references without reading secrets. During an admitted invo
 
 ## Diagnostics and debug mode
 
-Structured diagnostics are a permanent plugin feature. Normal mode (`debug: false`, the default) logs registration, operation start/completion, rejected operations and errors. Each operation has a random `traceId`, stage and elapsed time. Errors identify the stage/reason and, when available, HTTP status, MCP error code or a recognized network/module error code. Known Thinkarr tool errors are mapped to fixed reasons; unknown upstream text is never copied into logs. Chat/tool replies retain their safe outcome messages.
+Structured diagnostics are a permanent plugin feature. Normal mode (`debug: false`, the default) logs registration, operation start/completion, rejected operations and errors. Each operation has a random `traceId`, stage and elapsed time. Errors identify the stage/reason and, when available, HTTP status, MCP error code or a recognized network/module error code. Validation failures include bounded schema-field/code pairs (for example `bearer: invalid_format`), never rejected values or validator messages. Known Thinkarr tool errors are mapped to fixed reasons; unknown upstream text is never copied into logs. Chat/tool replies retain their safe outcome messages.
 
 Enable **Debug logs** in the Thinkarr plugin's OpenClaw settings, or set the single option locally:
 

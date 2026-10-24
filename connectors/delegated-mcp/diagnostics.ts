@@ -7,6 +7,7 @@ export type DiagnosticFields = {
   rpcCode?: number;
   errorType?: string;
   errorCode?: string;
+  validationIssues?: Array<{ field: string; code: string }>;
   bearerAvailable?: boolean;
   keyAvailable?: boolean;
   revisionMatches?: boolean;
@@ -30,6 +31,17 @@ const errorCodes = new Set([
 ]);
 const errorNames = new Set(["AbortError", "TimeoutError", "TypeError", "SyntaxError", "ZodError", "McpError", "StreamableHTTPError", "DOMException"]);
 const safeCode = (value: unknown) => typeof value === "string" && /^[a-z][a-z0-9_]{0,79}$/.test(value) ? value : undefined;
+const validationFields = new Set(["config", "connection", "debug", "accounts", "pilotGroup", "credentialsFile", "endpoint", "publicLinkOrigin", "service", "issuer", "audience", "keyId", "bearer", "privateKeyPem", "status", "content", "_meta", "channel", "account", "recipient", "messageId", "conversation", "accepted", "expiresAt", "url", "version", "linked", "privateDeliveryRequired"]);
+const validationCodes = new Set(["invalid_type", "invalid_format", "too_small", "too_big", "unrecognized_keys", "invalid_value", "invalid_union", "custom", "not_multiple_of"]);
+function projectValidationIssues(value: unknown): NonNullable<DiagnosticFields["validationIssues"]> {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 12).flatMap((issue) => {
+    if (!issue || typeof issue !== "object" || !validationCodes.has(issue.code)) return [];
+    const root = typeof issue.field === "string" ? issue.field : Array.isArray(issue.path) ? issue.path[0] : undefined;
+    const field = typeof root === "string" && validationFields.has(root) ? root : "config";
+    return [{ field, code: issue.code as string }];
+  });
+}
 
 /** Exact classifications, not regex-based redaction of arbitrary exception text. */
 function classifyError(error: unknown): DiagnosticFields & { errorType: string; errorCode?: string } {
@@ -43,10 +55,12 @@ function classifyError(error: unknown): DiagnosticFields & { errorType: string; 
     current = Reflect.get(current, "cause");
   }
   const name = error && typeof error === "object" ? Reflect.get(error, "name") : undefined;
+  const validationIssues = name === "ZodError" ? projectValidationIssues(Reflect.get(error as object, "issues")) : [];
   return {
-    reason: error instanceof ConnectorDiagnosticError ? safeCode(error.reason) ?? "operation_failed" : "operation_failed",
+    reason: error instanceof ConnectorDiagnosticError ? safeCode(error.reason) ?? "operation_failed" : name === "ZodError" ? "validation_failed" : "operation_failed",
     errorType: typeof name === "string" && errorNames.has(name) ? name : "Error",
     ...(errorCode ? { errorCode } : {}), ...(rpcCode !== undefined ? { rpcCode } : {}),
+    ...(validationIssues.length ? { validationIssues } : {}),
   };
 }
 
@@ -68,6 +82,7 @@ export function createDiagnosticTrace(logger: DiagnosticLogger | undefined, debu
     try {
       const details = error === undefined ? fields : diagnosticErrorFields(error);
       const reason = safeCode(fields.reason ?? details?.reason);
+      const validationIssues = projectValidationIssues(details?.validationIssues);
       const record = {
         component: "thinkarr", traceId, operation: safeCode(operation) ?? "operation", level,
         stage: /^[a-z][a-z0-9_.]{0,99}$/.test(stage) ? stage : "operation",
@@ -77,6 +92,7 @@ export function createDiagnosticTrace(logger: DiagnosticLogger | undefined, debu
         ...(details?.errorType && (details.errorType === "Error" || errorNames.has(details.errorType)) ? { errorType: details.errorType } : {}),
         ...(details?.errorCode && errorCodes.has(details.errorCode) ? { errorCode: details.errorCode } : {}),
         ...(Number.isSafeInteger(details?.rpcCode) && details.rpcCode! <= -32000 && details.rpcCode! >= -32768 ? { rpcCode: details.rpcCode } : {}),
+        ...(validationIssues.length ? { validationIssues } : {}),
         ...Object.fromEntries((["bearerAvailable", "keyAvailable", "revisionMatches", "debugEnabled", "mediaEnabled"] as const)
           .filter((key) => typeof fields[key] === "boolean").map((key) => [key, fields[key]])),
         ...(typeof fields.outcome === "string" && outcomes.has(fields.outcome) ? { outcome: fields.outcome } : {}),

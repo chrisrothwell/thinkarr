@@ -105,7 +105,7 @@ export function register<C extends object>(api: OpenClawHost<C>) {
   if (!["full", "tool-discovery"].includes(api.registrationMode)) return;
   if (api.runtime.version !== "2026.10.4") { registration.error("registration.version", new ConnectorDiagnosticError("host_version_unsupported")); throw new Error("Thinkarr requires OpenClaw 2026.10.4"); }
   const parsed = optionsSchema.safeParse(api.pluginConfig);
-  if (!parsed.success) { registration.error("registration.config", new ConnectorDiagnosticError("configuration_invalid")); throw configurationError(api.pluginConfig); }
+  if (!parsed.success) { registration.log("error", "registration.config", { ...diagnosticErrorFields(parsed.error), reason: "configuration_invalid" }); throw configurationError(api.pluginConfig); }
   const options = parsed.data;
   const lifecycle = api.lifecycle.signal;
   if (!lifecycle) { registration.error("registration.lifecycle", new ConnectorDiagnosticError("plugin_lifetime_missing")); throw new Error("Thinkarr requires plugin lifecycle admission"); }

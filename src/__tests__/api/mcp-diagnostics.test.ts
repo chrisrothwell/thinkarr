@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { ConnectorDiagnosticError, createDiagnosticTrace, diagnosticErrorFields, safeDiagnosticSink } from "../../../connectors/delegated-mcp/diagnostics";
 
 const logger = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() });
@@ -34,6 +35,11 @@ describe("value-free companion diagnostics", () => {
     expect(JSON.stringify(records(log))).not.toContain(secret);
     expect(diagnosticErrorFields(Object.assign(new Error(secret), { code: secret, name: secret }))).toEqual({ reason: "operation_failed", errorType: "Error" });
     expect(diagnosticErrorFields(new Proxy({}, { get() { throw error; } }))).toEqual({ reason: "operation_failed", errorType: "Error" });
+    const validation = z.object({ bearer: z.string().regex(/^valid$/) }).strict().safeParse({ bearer: secret, [secret]: secret });
+    if (validation.success) throw new Error("Expected validation failure");
+    trace.error("credentials.load", validation.error);
+    expect(records(log).find((r) => r.stage === "credentials.load")).toMatchObject({ reason: "validation_failed", validationIssues: expect.arrayContaining([{ field: "bearer", code: "invalid_format" }]) });
+    expect(JSON.stringify(records(log))).not.toContain(secret);
   });
 
   it("does not let logger/sink failures escape into application or delivery paths", () => {
