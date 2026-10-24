@@ -80,7 +80,97 @@ async function fixture(debug = false) {
   };
 }
 
+async function prepareVerification(h: Awaited<ReturnType<typeof fixture>>) {
+  expect((await h.create()!.execute("prepare", {})).details.status).toBe("private_link_sent");
+  const url = h.sends[0].text.split(" ").at(-1)!;
+  const code = prepareAccountLink(new URL(url).hash.slice(7), h.f.sessionA, h.f.userA).completionCode;
+  const event: DispatchEvent = { content: `Link account ${code}`, channel: "whatsapp", senderId: sender, messageId: "private-verification", timestamp: Date.now(), isGroup: false };
+  // Pinned WhatsApp hook mapper selects the receiving bot address as the DM
+  // conversation, while the authenticated SenderId is the human participant.
+  const context: DispatchContext = { channelId: "whatsapp", accountId: "account-A", conversationId: "+15555550100", senderId: canonicalPhone(sender), messageId: event.messageId };
+  return { event, context, code };
+}
+
 describe("OpenClaw linking adapter", () => {
+  it.each(["+15555550100", "15555550100@s.whatsapp.net", sender, "15555550101@s.whatsapp.net"])("completes private verification with a host-shaped conversation and sends one explicit acknowledgement (%s)", async (nativeConversation) => {
+    const h = await fixture(true); register(h.api);
+    const { event, context, code } = await prepareVerification(h);
+    expect(await h.dispatch(event, { ...context, conversationId: nativeConversation })).toEqual({ handled: true });
+    expect(resolveServiceActor(await h.f.context({ sender: canonicalPhone(sender)!, conversation: group })).actorUserId).toBe(h.f.userA);
+    expect(h.sends).toHaveLength(2);
+    expect(h.sends[1]).toMatchObject({ to: canonicalPhone(sender), accountId: "account-A", text: "Your Plex account is linked." });
+    expect(db.select().from(schema.mcpActorBindings).all()).toHaveLength(1);
+    expect(db.select().from(schema.mcpLinkChallenges).get()).toMatchObject({ completionCodeHash: null, consumedAt: expect.any(Date) });
+    expect(h.logs().find((r) => r.stage === "verification.reply_delivered")).toMatchObject({ outcome: "linked" });
+    expect(h.logs().find((r) => r.operation === "link_complete" && r.stage === "operation.completed")).toMatchObject({ outcome: "linked", acknowledgementConfirmed: true });
+    for (const secret of [code, sender, "15555550100@s.whatsapp.net", h.f.credential.token, h.f.privateKeyPem]) expect(JSON.stringify(h.logs())).not.toContain(secret);
+    // The receiving-bot exception is not available to model-created tools.
+    expect(h.create(toolContext({ nativeChannelId: "+15555550100" }))).toBeNull();
+  });
+  it.each([false, true])("does not rely on automatic handled-text delivery and avoids duplicate replies (suppressed=%s)", async (suppressed) => {
+    const h = await fixture(); register(h.api); const { event, context } = await prepareVerification(h);
+    const automaticReply = vi.fn();
+    const result = await h.dispatch(event, context);
+    // Mirror the pinned host branch: only result.text can be automatically sent.
+    if (result?.handled && result.text && !suppressed) automaticReply(result.text);
+    expect(automaticReply).not.toHaveBeenCalled();
+    expect(h.sends.filter((send) => send.text === "Your Plex account is linked.")).toHaveLength(1);
+  });
+  it.each([
+    [undefined, "actor_conversation_unsupported"], ["999@lid", "actor_conversation_unsupported"],
+    ["session:private:guessed", "actor_conversation_unsupported"], [group, "verification_conversation_not_private"],
+    ["+15555550999", "actor_conversation_sender_mismatch"],
+  ])("rejects an unsupported or unrelated private conversation without verifying or sending (%s)", async (nativeConversation, reason) => {
+    const h = await fixture(true); register(h.api); const { event, context } = await prepareVerification(h);
+    vi.mocked(fetch).mockClear(); vi.mocked(h.outbound.sendText!).mockClear();
+    expect(await h.dispatch(event, { ...context, conversationId: nativeConversation })).toMatchObject({ handled: true });
+    expect(fetch).not.toHaveBeenCalled(); expect(h.outbound.sendText).not.toHaveBeenCalled();
+    expect(db.select().from(schema.mcpActorBindings).all()).toHaveLength(0);
+    expect(h.logs().find((r) => r.stage === "inbound.actor_rejected" && r.reason === reason)).toBeDefined();
+  });
+  it.each(["self", "account", "other-account-recipient"])("retains private sender/account isolation (%s)", async (mode) => {
+    const h = await fixture(true);
+    h.api.pluginConfig = { ...h.api.pluginConfig, accounts: { "account-A": "+15555550100", "account-B": "+15555550200" } }; register(h.api);
+    const { event, context } = await prepareVerification(h); vi.mocked(fetch).mockClear();
+    const result = await h.dispatch(mode === "self" ? { ...event, senderId: "+15555550100" } : event,
+      mode === "self" ? { ...context, senderId: "+15555550100" } : mode === "account" ? { ...context, accountId: "unknown" } : { ...context, conversationId: "+15555550200" });
+    expect(result).toMatchObject({ handled: true }); expect(fetch).not.toHaveBeenCalled(); expect(h.sends).toHaveLength(1);
+    expect(db.select().from(schema.mcpActorBindings).all()).toHaveLength(0);
+    expect(h.logs().find((r) => r.stage === "inbound.actor_rejected")).toMatchObject({ reason: mode === "self" ? "actor_self_sender" : mode === "account" ? "actor_account_unconfigured" : "actor_conversation_sender_mismatch" });
+  });
+  it("does not let a forwarded verification code bind a different admitted sender", async () => {
+    const h = await fixture(true); register(h.api); const { event, context } = await prepareVerification(h);
+    const other = "+15555550102";
+    expect(await h.dispatch({ ...event, senderId: other }, { ...context, senderId: other })).toEqual({ handled: true });
+    expect(db.select().from(schema.mcpActorBindings).all()).toHaveLength(0);
+    expect(h.sends.at(-1)).toMatchObject({ to: canonicalPhone(other), text: "Account linking could not be completed. Please ask for a new private link." });
+    expect(h.logs().find((r) => r.stage === "operation.completed" && r.operation === "link_complete")).toMatchObject({ outcome: "failed", acknowledgementConfirmed: true });
+  });
+  it("privately acknowledges an expired verification without creating a binding or replacement challenge", async () => {
+    const h = await fixture(true); register(h.api); const { event, context } = await prepareVerification(h);
+    vi.setSystemTime(new Date(Date.now() + 300_001));
+    expect(await h.dispatch({ ...event, timestamp: Date.now() }, context)).toEqual({ handled: true });
+    expect(db.select().from(schema.mcpActorBindings).all()).toHaveLength(0);
+    expect(db.select().from(schema.mcpLinkChallenges).all()).toHaveLength(1);
+    expect(h.sends).toHaveLength(2);
+    expect(h.sends[1]).toMatchObject({ to: canonicalPhone(sender), text: "Account linking could not be completed. Please ask for a new private link." });
+    expect(h.logs().find((r) => r.stage === "verification.reply_delivered")).toMatchObject({ outcome: "failed" });
+  });
+  it.each(["throw-after-send", "wrong-receipt", "closed-before-send"])("keeps the committed binding and never retries an unconfirmed acknowledgement (%s)", async (mode) => {
+    const h = await fixture(true); register(h.api); const { event, context } = await prepareVerification(h);
+    h.outbound.sendText = vi.fn(async (params) => {
+      await params.onPlatformSendDispatch(); h.sends.push(params);
+      if (mode === "throw-after-send") throw new Error(params.text);
+      return { channel: "whatsapp", messageId: "ack-receipt", toJid: group };
+    });
+    if (mode === "closed-before-send") h.api.runtime.channel.outbound.loadAdapter = async () => { h.lifecycle.abort(); return h.outbound; };
+    expect(await h.dispatch(event, context)).toEqual({ handled: true });
+    expect(resolveServiceActor(await h.f.context({ sender: canonicalPhone(sender)!, conversation: group })).actorUserId).toBe(h.f.userA);
+    expect(h.outbound.sendText).toHaveBeenCalledTimes(mode === "closed-before-send" ? 0 : 1);
+    expect(h.sends).toHaveLength(mode === "closed-before-send" ? 1 : 2);
+    expect(h.logs().find((r) => r.stage === "verification.reply_unconfirmed")).toBeDefined();
+    expect(h.logs().find((r) => r.stage === "operation.completed" && r.operation === "link_complete")).toMatchObject({ outcome: "linked", acknowledgementConfirmed: false });
+  });
   it("traces linking end-to-end in debug mode without logging URLs, credentials, codes, message IDs or participant identity", async () => {
     const h = await fixture(true); register(h.api);
     expect((await h.create()!.execute("debug", {})).details.status).toBe("private_link_sent");
@@ -194,7 +284,7 @@ describe("OpenClaw linking adapter", () => {
     expect(await h.dispatch({ content: `Link account ${code}`, channel: "whatsapp", senderId: sender,
       messageId: "native-verification", timestamp: Date.now(), isGroup: false,
     }, { channelId: "whatsapp", accountId: "account-A", conversationId: sender, senderId: sender, messageId: "native-verification" }))
-      .toEqual({ handled: true, text: "Your Plex account is linked." });
+      .toEqual({ handled: true });
     expect(JSON.stringify(result)).not.toContain(connection.bearer); expect(JSON.stringify(result)).not.toContain(connection.privateKeyPem);
   });
   it.each(["unavailable", "mismatched-revisions", "malformed-value", "reader-denied"])("fails closed for prepared secrets: %s", async (mode) => {
@@ -264,7 +354,9 @@ describe("OpenClaw linking adapter", () => {
     const completed = await h.dispatch({
       content: `Link account ${code}`, channel: "whatsapp", senderId: sender, messageId: "incoming-verification", timestamp: Date.now(), isGroup: false,
     }, { channelId: "whatsapp", accountId: "account-A", conversationId: sender, senderId: "15555550101@s.whatsapp.net", messageId: "incoming-verification" });
-    expect(completed).toEqual({ handled: true, text: "Your Plex account is linked." });
+    expect(completed).toEqual({ handled: true });
+    expect(h.sends).toHaveLength(2);
+    expect(h.sends[1]).toMatchObject({ to: canonicalPhone(sender), text: "Your Plex account is linked." });
     expect(resolveServiceActor(await h.f.context({ sender: "15555550101@s.whatsapp.net", conversation: group })).actorUserId).toBe(h.f.userA);
     for (const value of [url, code, h.f.credential.token, h.f.privateKeyPem, "provider-message", sender]) {
       expect(JSON.stringify([result, completed])).not.toContain(value);

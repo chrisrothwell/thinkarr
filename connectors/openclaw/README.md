@@ -23,10 +23,10 @@ npm run build:openclaw
 npm pack ./connectors/openclaw
 ```
 
-Install the resulting `thinkarr-openclaw-0.3.4.tgz` through the supported local archive mechanism:
+Install the resulting `thinkarr-openclaw-0.3.5.tgz` through the supported local archive mechanism:
 
 ```bash
-openclaw plugins install npm-pack:/path/to/thinkarr-openclaw-0.3.4.tgz --no-enable
+openclaw plugins install npm-pack:/path/to/thinkarr-openclaw-0.3.5.tgz --no-enable
 ```
 
 The Control UI can configure, enable and reload an installed plugin. Its catalog installer does not accept arbitrary local archives; a CLI or the browser's operator Terminal is needed for this archive installation. The package is not currently advertised as a published npm/ClawHub release.
@@ -99,6 +99,8 @@ Both modes exclude credential values, SecretRef IDs, config/file paths, URLs, JW
 - Optional tools: `thinkarr_account_link`, `thinkarr_media_search`, `thinkarr_media_details`, `thinkarr_media_select`. Read/selection tools do not submit requests.
 - Tool factories capture host-owned sender/account/native conversation and current-invocation guards. There is no latest-sender cache or session-key authority inference.
 - The adapter supports canonical E.164/PN-JID identities and validated native group addresses. Unresolved LID, hosted/device and ambiguous identities fail closed.
+- A verified private inbound event may identify its conversation by the human peer or by this receiving account's bot address. Only after channel, private-kind, message-ID, timestamp and sender agreement checks does the adapter normalize that bot-recipient form to the authenticated sender. Other accounts' bot addresses, other peers and self echoes remain rejected; model tool contexts do not receive this exception.
+- Private verification sends one explicit, fixed-text acknowledgement to the verified sender through the checked WhatsApp outbound adapter. The hook returns handled with no automatic text, so success/failure replies do not depend on automatic-reply policy and cannot be duplicated by it. Binding completion and acknowledgement confirmation are logged separately; an unconfirmed acknowledgement is never blindly retried and does not undo a committed binding.
 - Private links and request prompts require checked physical-send fences and actual provider destination/message receipts. No public-link fallback or automatic send retry.
 - Native `request it`/`request 1` confirms the one presented title/season choice. The prompt lasts two minutes. Replaced/old prompts require the exact current quote; generic yes only matches that prompt. Unrelated messages stay with their normal router.
 - Thinkarr owns the durable actor/binding/event/selection claim and verifies effective Seerr identity, permissions, quotas and returned attribution. Pending approval is preserved. Unknown outcomes are checked in Seerr rather than blindly retried; Seerr owns completion emails.

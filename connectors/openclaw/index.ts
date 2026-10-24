@@ -144,52 +144,76 @@ export function register<C extends object>(api: OpenClawHost<C>) {
     return { credentials: linkingConnectorConfigSchema.parse({ ...connection, bearer: bearer.value, privateKeyPem: key.value }), assertSecretsCurrent };
   }
 
-  function actor(channel: unknown, account: unknown, sender: unknown, nativeConversation: unknown) {
-    if (channel !== "whatsapp" || typeof account !== "string" || !Object.hasOwn(options.accounts, account)) return;
+  function actor(channel: unknown, account: unknown, sender: unknown, nativeConversation: unknown, verifiedPrivateReply = false) {
+    const reject = (reason: string) => { registration.log(verifiedPrivateReply ? "warn" : "debug", verifiedPrivateReply ? "inbound.actor_rejected" : "factory.actor_rejected", { reason }); return undefined; };
+    if (channel !== "whatsapp") return reject("actor_channel_invalid");
+    if (typeof account !== "string" || !Object.hasOwn(options.accounts, account)) return reject("actor_account_unconfigured");
     const canonical = canonicalPhone(sender);
-    const origin = conversation(nativeConversation);
-    if (!canonical || !origin || canonical === canonicalPhone(options.accounts[account])) return;
-    if (origin.kind === "direct" && origin.id !== canonical) return;
+    const self = canonicalPhone(options.accounts[account]);
+    let origin = conversation(nativeConversation);
+    if (!canonical) return reject("actor_sender_unsupported");
+    if (canonical === self) return reject("actor_self_sender");
+    if (!origin) return reject("actor_conversation_unsupported");
+    if (verifiedPrivateReply) {
+      if (origin.kind !== "direct") return reject("verification_conversation_not_private");
+      // The pinned hook mapper can expose the receiving bot (To) rather than
+      // the peer (OriginatingTo). This allowance is ONLY for a fresh, matching
+      // private event already checked by the hook, never model tool metadata.
+      if (origin.id === self) {
+        registration.log("debug", "inbound.private_context", { reason: "receiving_bot_context_normalized" });
+        origin = { kind: "direct", id: canonical };
+      } else if (origin.id === canonical) {
+        registration.log("debug", "inbound.private_context", { reason: "sender_context_verified" });
+      }
+    }
+    if (origin.kind === "direct" && origin.id !== canonical) return reject("actor_conversation_sender_mismatch");
     return { channel: "whatsapp" as const, account, sender: canonical, kind: origin.kind, conversation: origin.id };
   }
 
-  async function sendPrivate(cfg: C, delivery: PrivateLinkDelivery, log: DiagnosticSink) {
-    let stage = "outbound.private_validate";
+  async function sendPrivateText(cfg: C, delivery: Pick<PrivateLinkDelivery, "account" | "recipient" | "assertCurrent" | "signal">, text: string, log: DiagnosticSink, kind: "private" | "ack" = "private") {
+    let stage = `outbound.${kind}_validate`;
     const step = (next: string) => { stage = next; log("debug", stage); };
     try {
       step(stage);
       delivery.assertCurrent(); assertLive();
       const recipient = canonicalPhone(delivery.recipient);
       if (!recipient || !Object.hasOwn(options.accounts, delivery.account)) throw new ConnectorDiagnosticError("private_target_invalid");
-      step("outbound.private_adapter");
+      step(`outbound.${kind}_adapter`);
       const outbound = await api.runtime.channel.outbound.loadAdapter("whatsapp");
       delivery.assertCurrent(); assertLive();
       if (!outbound?.resolveTarget || !outbound.sendText) throw new ConnectorDiagnosticError("whatsapp_outbound_unavailable");
-      step("outbound.private_resolve");
+      step(`outbound.${kind}_resolve`);
       const resolved = outbound.resolveTarget({ cfg, to: recipient, accountId: delivery.account, mode: "explicit", allowFrom: [recipient] });
       if (!resolved.ok || canonicalPhone(resolved.to) !== recipient) throw new ConnectorDiagnosticError("private_target_mismatch");
       let dispatches = 0;
       const guard = () => { delivery.assertCurrent(); assertLive(); };
       guard();
-      step("outbound.private_send");
+      step(`outbound.${kind}_send`);
       const result = await outbound.sendText({
         cfg, to: resolved.to, accountId: delivery.account,
-        text: `Link your Plex account privately: ${delivery.url}`,
+        text,
         signal: delivery.signal, assertDirectAdapterHandoff: guard,
         // The pinned WhatsApp implementation awaits this before each physical
         // send (including chunks); it does not forward assertDirectAdapterHandoff.
-        onPlatformSendDispatch: async () => { guard(); log("debug", "outbound.private_dispatch"); dispatches++; },
+        onPlatformSendDispatch: async () => { guard(); log("debug", `outbound.${kind}_dispatch`); dispatches++; },
       });
       guard();
-      step("outbound.private_receipt");
+      step(`outbound.${kind}_receipt`);
       if (dispatches === 0) throw new ConnectorDiagnosticError("private_dispatch_fence_missing");
+      const receiptChecks = {
+        receiptChannelMatches: result.channel === "whatsapp", receiptMessageIdPresent: !!result.messageId?.trim(),
+        receiptDestinationSupported: !!canonicalPhone(result.toJid), receiptDestinationMatches: canonicalPhone(result.toJid) === recipient,
+      };
+      log(Object.values(receiptChecks).every(Boolean) ? "debug" : "warn", `outbound.${kind}_receipt_checks`, receiptChecks);
       if (result.channel !== "whatsapp" || !result.messageId?.trim() || canonicalPhone(result.toJid) !== recipient) throw new ConnectorDiagnosticError("private_receipt_invalid");
       return { accepted: true as const, channel: "whatsapp" as const, account: delivery.account, recipient, messageId: result.messageId };
     } catch (error) { log("error", stage, diagnosticErrorFields(error)); throw error; }
   }
 
-  async function run(invocation: TrustedLinkInvocation, cfg: C, completion?: { content: string; eventId: string; eventTime: number }): Promise<LinkOutcome> {
-    const trace = createDiagnosticTrace(api.logger, options.debug, completion ? "link_complete" : "link_start");
+  const sendPrivate = (cfg: C, delivery: PrivateLinkDelivery, log: DiagnosticSink) =>
+    sendPrivateText(cfg, delivery, `Link your Plex account privately: ${delivery.url}`, log);
+
+  async function run(invocation: TrustedLinkInvocation, cfg: C, completion?: { content: string; eventId: string; eventTime: number }, trace = createDiagnosticTrace(api.logger, options.debug, completion ? "link_complete" : "link_start")): Promise<LinkOutcome> {
     let stage = "invocation.admission";
     const step = (next: string) => { stage = next; trace.log("debug", stage); };
     trace.log("info", "operation.started");
@@ -210,9 +234,9 @@ export function register<C extends object>(api: OpenClawHost<C>) {
       const result = completion
         ? (await connector.handlePrivateLinkMessage({ ...current, eventId: completion.eventId, eventTime: completion.eventTime }, completion.content)) ?? failure
         : await connector.startLink(current);
-      trace.log(result.status === "failed" ? "warn" : "info", "operation.completed", { outcome: result.status });
+      trace.log(result.status === "failed" ? "warn" : "info", completion ? "verification.result" : "operation.completed", { outcome: result.status });
       return result;
-    } catch (error) { trace.error(stage, error); trace.log("warn", "operation.completed", { outcome: "failed" }); return failure; }
+    } catch (error) { trace.error(stage, error); trace.log("warn", completion ? "verification.result" : "operation.completed", { outcome: "failed" }); return failure; }
   }
 
   async function runMedia(invocation: TrustedLinkInvocation, cfg: C, action: (connector: Awaited<ReturnType<typeof createLinkingConnector>>, current: TrustedLinkInvocation) => Promise<MediaOutcome | undefined>, operation = "media_operation"): Promise<MediaOutcome | undefined> {
@@ -337,11 +361,13 @@ export function register<C extends object>(api: OpenClawHost<C>) {
     registration.log("debug", "inbound.intent_detected");
     if (context.channelId !== "whatsapp" && event.channel !== "whatsapp") return;
     const denied = { handled: true, text: link ? messages.failed : mediaMessages.failed };
-    if (event.channel !== "whatsapp" || context.channelId !== "whatsapp" || event.isGroup !== !link
-      || !event.messageId || event.messageId !== context.messageId || event.messageId.length > 512
-      || !Number.isSafeInteger(event.timestamp) || event.timestamp! < Date.now() - 900_000 || event.timestamp! > Date.now() + 5000
-      || !canonicalPhone(event.senderId) || canonicalPhone(event.senderId) !== canonicalPhone(context.senderId)) { registration.log("warn", "inbound.rejected", { reason: "event_context_invalid" }); return denied; }
-    const identity = actor(context.channelId, context.accountId, context.senderId, context.conversationId);
+    const eventFailure = event.channel !== "whatsapp" || context.channelId !== "whatsapp" ? "event_channel_mismatch"
+      : event.isGroup !== !link ? "event_chat_kind_mismatch"
+      : !event.messageId || event.messageId !== context.messageId || event.messageId.length > 512 ? "event_identity_mismatch"
+      : !Number.isSafeInteger(event.timestamp) || event.timestamp! < Date.now() - 900_000 || event.timestamp! > Date.now() + 5000 ? "event_time_invalid"
+      : !canonicalPhone(event.senderId) || canonicalPhone(event.senderId) !== canonicalPhone(context.senderId) ? "event_sender_mismatch" : undefined;
+    if (eventFailure) { registration.log("warn", "inbound.rejected", { reason: eventFailure }); return denied; }
+    const identity = actor(context.channelId, context.accountId, context.senderId, context.conversationId, link);
     if (!identity || (link ? identity.kind !== "direct" : identity.kind !== "group")) { registration.log("warn", "inbound.rejected", { reason: "actor_context_invalid" }); return denied; }
     if (!link && identity.conversation !== options.pilotGroup) return;
     if (!link && (replyTo !== context.replyToId || (replyTo !== undefined && (!replyTo || replyTo.length > 512 || event.replyToIsQuote !== true || context.replyToIsQuote !== true)))) { registration.log("warn", "inbound.rejected", { reason: "quote_context_invalid" }); return intent?.requiresQuote ? undefined : denied; }
@@ -353,9 +379,24 @@ export function register<C extends object>(api: OpenClawHost<C>) {
         if (!result || result.status === "unclaimed" || (intent?.requiresQuote && result.status === "failed")) return;
         return { handled: true, text: result.status === "ok" ? mediaMessages.failed : mediaMessages[result.status] };
       }
-      const outcome = await run({ ...identity, signal: lifecycle, assertCurrent: () => { if (!active) throw new Error(); assertLive(); } }, api.config,
-        { content: event.content, eventId: event.messageId, eventTime: event.timestamp! });
-      return { handled: true, text: messages[outcome.status] };
+      const trace = createDiagnosticTrace(api.logger, options.debug, "link_complete");
+      const signal = AbortSignal.any([lifecycle, AbortSignal.timeout(18_000)]);
+      const assertCurrent = () => { signal.throwIfAborted(); if (!active) throw new ConnectorDiagnosticError("verification_handler_closed"); assertLive(); };
+      const outcome = await run({ ...identity, signal, assertCurrent }, api.config,
+        { content: event.content, eventId: event.messageId!, eventTime: event.timestamp! }, trace);
+      let acknowledgementConfirmed = false;
+      try {
+        assertCurrent();
+        await sendPrivateText(api.config, { account: identity.account, recipient: identity.sender, signal, assertCurrent }, messages[outcome.status], trace.log, "ack");
+        acknowledgementConfirmed = true;
+        trace.log("info", "verification.reply_delivered", { outcome: outcome.status });
+      } catch (error) {
+        // The binding may already be committed. Do not retry a possibly-sent
+        // acknowledgement or return automatic reply text that could duplicate it.
+        trace.error("verification.reply_unconfirmed", error);
+      }
+      trace.log(acknowledgementConfirmed ? "info" : "warn", "operation.completed", { outcome: outcome.status, acknowledgementConfirmed });
+      return { handled: true };
     } finally { active = false; }
   }, { timeoutMs: options.pilotGroup ? 30_000 : 20_000 });
 }

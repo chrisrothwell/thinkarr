@@ -14,6 +14,11 @@ export type DiagnosticFields = {
   debugEnabled?: boolean;
   mediaEnabled?: boolean;
   outcome?: string;
+  acknowledgementConfirmed?: boolean;
+  receiptChannelMatches?: boolean;
+  receiptMessageIdPresent?: boolean;
+  receiptDestinationSupported?: boolean;
+  receiptDestinationMatches?: boolean;
 };
 export type DiagnosticSink = (level: DiagnosticLevel, stage: string, fields?: DiagnosticFields) => void;
 export type DiagnosticLogger = { info: (message: string) => void; warn: (message: string) => void; error: (message: string) => void };
@@ -93,7 +98,7 @@ export function createDiagnosticTrace(logger: DiagnosticLogger | undefined, debu
         ...(details?.errorCode && errorCodes.has(details.errorCode) ? { errorCode: details.errorCode } : {}),
         ...(Number.isSafeInteger(details?.rpcCode) && details.rpcCode! <= -32000 && details.rpcCode! >= -32768 ? { rpcCode: details.rpcCode } : {}),
         ...(validationIssues.length ? { validationIssues } : {}),
-        ...Object.fromEntries((["bearerAvailable", "keyAvailable", "revisionMatches", "debugEnabled", "mediaEnabled"] as const)
+        ...Object.fromEntries((["bearerAvailable", "keyAvailable", "revisionMatches", "debugEnabled", "mediaEnabled", "acknowledgementConfirmed", "receiptChannelMatches", "receiptMessageIdPresent", "receiptDestinationSupported", "receiptDestinationMatches"] as const)
           .filter((key) => typeof fields[key] === "boolean").map((key) => [key, fields[key]])),
         ...(typeof fields.outcome === "string" && outcomes.has(fields.outcome) ? { outcome: fields.outcome } : {}),
       };

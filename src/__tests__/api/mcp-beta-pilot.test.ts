@@ -107,7 +107,8 @@ async function fixture(link = true, debug = false) {
     const url = sends[0].text.split(" ").at(-1)!;
     const code = prepareAccountLink(new URL(url).hash.slice(7), f.sessionA, f.userA).completionCode;
     expect(await hook!({ content: `Link account ${code}`, channel: "whatsapp", senderId: sender, messageId: "link-event", timestamp: Date.now(), isGroup: false },
-      { channelId: "whatsapp", accountId: "account-A", conversationId: sender, senderId: canonical, messageId: "link-event" })).toEqual({ handled: true, text: "Your Plex account is linked." });
+      { channelId: "whatsapp", accountId: "account-A", conversationId: "+15555550100", senderId: canonical, messageId: "link-event" })).toEqual({ handled: true });
+    expect(sends.at(-1)).toMatchObject({ to: canonical, text: "Your Plex account is linked." });
   }
   return { f, state, sends, fetchRequest, tool, dispatch, factories, logs: () => logLines.map((line) => JSON.parse(line.slice("[thinkarr] ".length))),
     select: (args: unknown = { id: 123, mediaType: "movie" }) => tool("thinkarr_media_select", args),
