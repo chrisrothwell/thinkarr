@@ -74,7 +74,7 @@ export async function callMediaTool(context: VerifiedServiceMcpContext, name: st
       }).run();
     }, { behavior: "immediate" });
     const title = item.title.replace(/\s+/g, " ");
-    const text = `Request ${title}${item.year ? ` (${item.year})` : ""}${selection.mediaType === "tv" ? ` — seasons ${selection.seasons.join(", ")}` : ""}? Reply “request it” within two minutes. If you changed your choice, reply directly to this message.`;
+    const text = `Request ${title}${item.year ? ` (${item.year})` : ""}${selection.mediaType === "tv" ? ` — seasons ${selection.seasons.join(", ")}` : ""}? Reply directly to this message with “request it” within two minutes.`;
     return { content: [{ type: "text", text: JSON.stringify({ status: "draft" }) }], _meta: { "thinkarr/presentation": { selectionId: id, text } } };
   }
   if (name === "media_select") {

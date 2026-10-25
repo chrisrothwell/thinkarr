@@ -8,6 +8,7 @@ import { createTestDb, seedUser, type TestDb } from "../helpers/db";
 import { delegatedLinkFixture } from "../helpers/delegated-link";
 import { createLinkingConnector, type LinkingConnectorConfig, type PrivateLinkDelivery, type TrustedLinkInvocation } from "../../../connectors/delegated-mcp/linking";
 import { createDiagnosticTrace } from "../../../connectors/delegated-mcp/diagnostics";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 
 let db: TestDb;
 let sqlite: Database.Database;
@@ -63,6 +64,43 @@ async function fixture() {
 }
 
 describe("trusted linking connector core", () => {
+  it("reports slow client/transport cleanup without returning early or changing a delivered outcome", async () => {
+    const { config } = await fixture(); vi.useFakeTimers();
+    const started = Promise.withResolvers<void>(); const release = Promise.withResolvers<void>();
+    const original = Client.prototype.close;
+    const close = vi.spyOn(Client.prototype, "close").mockImplementation(async function (this: Client) {
+      await original.call(this); started.resolve(); await release.promise;
+    });
+    const diagnostics = vi.fn(); const requestSignals: AbortSignal[] = [];
+    try {
+      const connector = await createLinkingConnector(config, { diagnostics, sendPrivate: async (d) => receipt(d), fetch: async (input, init) => {
+        requestSignals.push(init!.signal!); return routeFetch(input, init);
+      } });
+      let settled = false;
+      const pending = connector.startLink(actor()).then((result) => { settled = true; return result; });
+      await started.promise;
+      expect(requestSignals.every((signal) => signal.aborted)).toBe(true);
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(settled).toBe(false);
+      expect(diagnostics.mock.calls.find(([, stage]) => stage === "mcp.close_pending")?.[2]).toMatchObject({ cleanupDurationMs: 2000, pendingHttpCount: 0, pendingBodyCount: 0 });
+      release.resolve(); expect(await pending).toEqual({ status: "private_link_sent" });
+      const completed = diagnostics.mock.calls.find(([, stage]) => stage === "mcp.close_completed")?.[2];
+      const beginning = diagnostics.mock.calls.find(([, stage]) => stage === "mcp.close")?.[2];
+      expect(completed).toMatchObject({ exchangeId: beginning.exchangeId, cleanupDurationMs: 2000, pendingHttpCount: 0, pendingBodyCount: 0 });
+      expect(close).toHaveBeenCalledOnce();
+    } finally { release.resolve(); close.mockRestore(); }
+  });
+  it("logs cleanup failure without exposing its exception or relabelling a delivered outcome", async () => {
+    const { config } = await fixture(); const diagnostics = vi.fn();
+    const original = Client.prototype.close;
+    const close = vi.spyOn(Client.prototype, "close").mockImplementation(async function (this: Client) { await original.call(this); throw new Error("SECRET cleanup details"); });
+    try {
+      const connector = await createLinkingConnector(config, { diagnostics, sendPrivate: async (d) => receipt(d), fetch: routeFetch });
+      expect(await connector.startLink(actor())).toEqual({ status: "private_link_sent" });
+      expect(diagnostics.mock.calls.find(([, stage]) => stage === "mcp.close_failed")?.[2]).toMatchObject({ reason: "operation_failed", pendingHttpCount: 0, pendingBodyCount: 0 });
+      expect(JSON.stringify(diagnostics.mock.calls)).not.toContain("SECRET");
+    } finally { close.mockRestore(); }
+  });
   it.each([401, 403, 500])("logs HTTP %s without leaking response bodies or auth headers", async (status) => {
     const { config } = await fixture(); const lines: string[] = [];
     const trace = createDiagnosticTrace({ info: (s) => lines.push(s), warn: (s) => lines.push(s), error: (s) => lines.push(s) }, false, "link_start");
@@ -131,6 +169,8 @@ describe("trusted linking connector core", () => {
       expect(diagnostics.mock.calls.find(([level, stage]) => level === "error" && stage === "mcp.http.fetch")?.[2])
         .toMatchObject({ protocolPhase: "initialized", httpDurationMs: 45_000, requestId: expect.any(String) });
       expect(db.select().from(schema.mcpActorBindings).all()).toHaveLength(0);
+      expect(diagnostics.mock.calls.find(([, stage]) => stage === "mcp.http.cancel_requested")?.[2]).toMatchObject({ protocolPhase: "initialized", pendingHttpCount: 1 });
+      expect(diagnostics.mock.calls.find(([, stage]) => stage === "mcp.close_completed")?.[2]).toMatchObject({ pendingHttpCount: 0, pendingBodyCount: 0 });
     } finally { timeout.mockRestore(); }
   });
   it("preserves an uncertain committed verification outcome and cancels the underlying HTTP request without retrying", async () => {

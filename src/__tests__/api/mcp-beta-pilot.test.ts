@@ -8,7 +8,7 @@ import * as schema from "@/lib/db/schema";
 import { createTestDb, seedUser, type TestDb } from "../helpers/db";
 import { delegatedLinkFixture } from "../helpers/delegated-link";
 import { register } from "../../../connectors/openclaw/index";
-import type { DispatchContext, DispatchEvent, DispatchResult, OpenClawHost, Outbound } from "../../../connectors/openclaw/host";
+import type { DispatchContext, DispatchEvent, DispatchResult, GroupReplyContext, GroupReplyEvent, GroupReplyResult, OpenClawHost, Outbound } from "../../../connectors/openclaw/host";
 
 let db: TestDb; let sqlite: Database.Database; let directory: string; let adminId: number;
 vi.mock("@/lib/db", () => ({ getDb: () => db, schema }));
@@ -41,7 +41,7 @@ async function fixture(link = true, debug = false) {
     bearer: f.credential.token, privateKeyPem: f.privateKeyPem }), { mode: 0o600 });
   const state = { writes: [] as Array<{ body: Record<string, unknown>; headers: Headers }>, permissions: 32, missingUser: false,
     remaining: 5, resultStatus: 1, mediaStatus: 1, writeMode: "normal", failDelivery: false, wrongReceipt: false,
-    afterMe: undefined as (() => void) | undefined };
+    afterMe: undefined as (() => void) | undefined, afterWrite: undefined as (() => void) | undefined, loseConfirmationResponse: false };
   const catalog = (id: number, mediaType: "movie" | "tv") => ({ id, mediaType, title: `Movie ${id}`, name: `Show ${id}`,
     releaseDate: "2024-01-01", firstAirDate: "2024-01-01", overview: "A title synopsis.", voteAverage: 7.5,
     genres: [{ name: "Drama", email: "SECRET" }], credits: { cast: [{ name: "An Actor", profilePath: "SECRET" }] },
@@ -50,7 +50,12 @@ async function fixture(link = true, debug = false) {
     posterPath: "SECRET", account: { token: "SECRET" } });
   const fetchRequest = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input)); const headers = new Headers(init?.headers);
-    if (url.origin === "https://thinkarr.invalid") return POST(new Request(input, init));
+    if (url.origin === "https://thinkarr.invalid") {
+      const response = await POST(new Request(input, init));
+      const request = JSON.parse(String(init?.body));
+      if (state.loseConfirmationResponse && request.method === "tools/call" && request.params?.name === "media_confirm_request") throw new DOMException("SECRET lost response after commit", "TimeoutError");
+      return response;
+    }
     expect(init?.redirect).toBe("error"); expect(init?.credentials).toBe("omit");
     if (url.origin === "https://plex.invalid" && url.pathname === "/api/v2/user") {
       expect(headers.get("X-Plex-Token")).toBe("SECRET-actor-token"); return Response.json({ id: 101 });
@@ -63,6 +68,7 @@ async function fixture(link = true, debug = false) {
       if (state.writeMode === "timeout") throw new Error("SECRET transport failure after submission");
       if (state.writeMode === "http") return new Response("SECRET upstream diagnostic", { status: 500 });
       state.mediaStatus = 2;
+      state.afterWrite?.();
       return Response.json({ id: 900, type: body.mediaType, status: state.resultStatus,
         requestedBy: { id: state.writeMode === "attribution" ? 1 : 7, displayName: "SECRET" }, media: { tmdbId: body.mediaId },
         ...(body.seasons ? { seasons: (body.seasons as number[]).map((seasonNumber) => ({ seasonNumber })) } : {}) });
@@ -81,6 +87,7 @@ async function fixture(link = true, debug = false) {
   const logLines: string[] = [];
   const logger = { info: (line: string) => { logLines.push(line); }, warn: (line: string) => { logLines.push(line); }, error: (line: string) => { logLines.push(line); } };
   let hook: ((event: DispatchEvent, ctx: DispatchContext) => Promise<DispatchResult | void>) | undefined;
+  let groupHook: ((event: GroupReplyEvent, ctx: GroupReplyContext<object>) => Promise<GroupReplyResult | void>) | undefined;
   const sends: Array<{ text: string; to: string; messageId: string }> = [];
   const outbound: Outbound<object> = {
     resolveTarget: ({ to }) => ({ ok: true, to }),
@@ -95,13 +102,26 @@ async function fixture(link = true, debug = false) {
     pluginConfig: { credentialsFile, accounts: { "account-A": "+15555550100" }, pilotGroup: group, debug }, lifecycle: { signal: new AbortController().signal },
     runtime: { version: "2026.10.4", channel: { outbound: { loadAdapter: async () => outbound } } },
     registerTool: (factory, options) => { for (const name of options.names) factories.set(name, factory); },
-    on: (_name, handler) => { hook = handler; },
+    on: (name, handler) => { if (name === "before_dispatch") hook = handler as NonNullable<typeof hook>; else groupHook = handler as NonNullable<typeof groupHook>; },
   };
   register(api);
   const tool = (name: string, args: unknown, conversation = group) => factories.get(name)!.create({ messageChannel: "whatsapp", agentAccountId: "account-A", requesterSenderId: sender, nativeChannelId: conversation, assertInvocationCurrent: () => {} })!.execute("call", args);
-  const dispatch = (text: string, id = "confirmation", time = Date.now(), replyTo?: string) => hook!({ content: text, channel: "whatsapp", senderId: sender, messageId: id, timestamp: time, isGroup: true,
-    ...(replyTo ? { replyToId: replyTo, replyToIsQuote: true } : {}) }, { channelId: "whatsapp", accountId: "account-A", conversationId: group, senderId: canonical, messageId: id,
-    ...(replyTo ? { replyToId: replyTo, replyToIsQuote: true } : {}) });
+  const nativeEvent = (text: string, id = "confirmation", time = Date.now(), replyTo?: string): GroupReplyEvent => ({
+    ctx: { RawBody: text, Provider: "whatsapp", Surface: "whatsapp", OriginatingChannel: "whatsapp", AccountId: "account-A",
+      From: group, ChatId: group, OriginatingTo: group, To: "+15555550100", ChatType: "group", SenderId: canonical,
+      MessageSid: id, Timestamp: time, InboundAccessAuthorized: true, InboundEventKind: "user_request",
+      ...(replyTo ? { ReplyToId: replyTo, SupplementalContext: { quote: { id: replyTo } } } : {}),
+    }, sendPolicy: "allow", sourceReplyDeliveryMode: "message_tool_only", suppressUserDelivery: true,
+    originatingChannel: "whatsapp", originatingTo: group, originatingAccountId: "account-A", originatingChatType: "group",
+  });
+  const recordProcessed = vi.fn(); const markIdle = vi.fn();
+  const dispatchNative = (event: GroupReplyEvent, context: Partial<GroupReplyContext<object>> = {}) => groupHook!(event, { cfg: {}, dispatchKind: "agent", recordProcessed, markIdle, ...context });
+  const dispatch = async (text: string, id = "confirmation", time = Date.now(), replyTo?: string) => {
+    const before = sends.length; const result = await dispatchNative(nativeEvent(text, id, time, replyTo));
+    // Existing user-facing assertions now inspect real, receipt-checked outbound
+    // status text rather than automatic text returned by a mocked legacy hook.
+    return result ? { handled: result.handled, ...(result.queuedFinal && sends.length > before ? { text: sends.at(-1)!.text } : {}) } : undefined;
+  };
   if (link) {
     expect((await tool("thinkarr_account_link", {})).details.status).toBe("private_link_sent");
     const url = sends[0].text.split(" ").at(-1)!;
@@ -110,13 +130,113 @@ async function fixture(link = true, debug = false) {
       { channelId: "whatsapp", accountId: "account-A", conversationId: "+15555550100", senderId: canonical, messageId: "link-event" })).toEqual({ handled: true });
     expect(sends.at(-1)).toMatchObject({ to: canonical, text: "Your Plex account is linked." });
   }
-  return { f, state, sends, fetchRequest, tool, dispatch, factories, logs: () => logLines.map((line) => JSON.parse(line.slice("[thinkarr] ".length))),
+  return { f, state, sends, fetchRequest, tool, dispatch, dispatchNative, nativeEvent, recordProcessed, markIdle, factories, logs: () => logLines.map((line) => JSON.parse(line.slice("[thinkarr] ".length))),
     select: (args: unknown = { id: 123, mediaType: "movie" }) => tool("thinkarr_media_select", args),
     raw: (name: string, args: Record<string, unknown> = {}, patch = {}) => f.signedRequest({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }, { sender: canonical, conversation: group, ...patch }).then(POST),
   };
 }
 
 describe("minimal beta pilot: real plugin, signed SDK, SQLite, mocked Seerr", () => {
+  it("sends one self-contained prompt, then uses admitted native group facts despite a bot-address legacy conversation", async () => {
+    const h = await fixture(true, true); const before = h.sends.length;
+    const selected = await h.select();
+    expect(selected.details.status).toBe("prompt_sent"); expect(selected.content[0].text).toContain("End this turn with NO_REPLY");
+    expect(h.sends).toHaveLength(before + 1);
+    const prompt = h.sends.at(-1)!;
+    expect(prompt.text).toContain("Reply directly to this message with “request it” within two minutes");
+    const result = await h.dispatchNative(h.nativeEvent("request it", "native-confirmation", Date.now(), prompt.messageId));
+    expect(result).toEqual({ handled: true, queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } });
+    expect(h.sends).toHaveLength(before + 2); expect(h.state.writes).toHaveLength(1);
+    expect(h.sends.at(-1)).toMatchObject({ to: group, text: "Your request was submitted and is awaiting approval in Seerr." });
+    expect(h.state.writes[0].headers.get("X-Api-User")).toBe("7");
+    expect(h.state.writes[0].body).not.toHaveProperty("userId");
+    expect(h.recordProcessed).toHaveBeenCalledExactlyOnceWith("completed", { reason: "thinkarr_confirmation_handled" });
+    expect(h.markIdle).toHaveBeenCalledExactlyOnceWith("message_completed");
+    expect(h.logs().some((r) => r.stage === "confirmation.native_context_verified")).toBe(true);
+    expect(h.logs().find((r) => r.stage === "confirmation.result")).toMatchObject({ outcome: "pending_approval" });
+    expect(h.logs().find((r) => r.stage === "lifecycle.work_settled" && r.workKind === "group_hook")).toMatchObject({ trackedWorkCount: 0, workStage: "operation.completed" });
+    for (const secret of [group, canonical, sender, prompt.messageId, prompt.text, h.f.credential.token, h.f.privateKeyPem]) expect(JSON.stringify(h.logs())).not.toContain(secret);
+  });
+  it.each([
+    ["missing-native-group", { From: undefined, ChatId: undefined, OriginatingTo: undefined, SessionKey: `agent:thinkarr:whatsapp:group:${group}` }, {}],
+    ["other-group", { From: "120300000001@g.us" }, {}],
+    ["chat-mismatch", { ChatId: "120300000001@g.us" }, {}],
+    ["origin-mismatch", { OriginatingTo: "120300000001@g.us" }, {}],
+    ["receiver-mismatch", { To: "+15555550200" }, {}],
+    ["unknown-account", { AccountId: "other" }, {}],
+    ["route-account", {}, { originatingAccountId: "other" }],
+    ["route-target", {}, { originatingTo: "120300000001@g.us" }],
+    ["not-admitted", { InboundAccessAuthorized: false }, {}],
+    ["observed-room", { InboundEventKind: "room_event" }, {}],
+    ["denied-delivery", {}, { sendPolicy: "deny" }],
+    ["suppressed-delivery", {}, { sourceReplyDeliveryMode: "automatic", suppressUserDelivery: true }],
+    ["unknown-suppressed-delivery", {}, { sourceReplyDeliveryMode: undefined, suppressUserDelivery: true }],
+    ["synthetic-input", { InputProvenance: { kind: "progress-card-refresh" } }, {}],
+    ["internal-turn", { InternalTurnSource: "automation" }, {}],
+    ["self", { SenderIsSelf: true }, {}],
+    ["bot", { SenderIsBot: true }, {}],
+    ["unsupported-sender", { SenderId: "12345@lid" }, {}],
+    ["stale-event", { Timestamp: 0 }, {}],
+    ["missing-event", { MessageSid: undefined }, {}],
+    ["tail", {}, { isTailDispatch: true }],
+  ] as const)("does not submit or reply from unsafe native confirmation context: %s", async (_name, nativePatch, eventPatch) => {
+    const h = await fixture(); await h.select(); const before = h.sends.length;
+    const source = h.nativeEvent("request it");
+    // Evaluate timestamps inside the fake-clock fixture, not at file import.
+    const patch = _name === "stale-event" ? { ...nativePatch, Timestamp: Date.now() - 901_000 } : nativePatch;
+    const event = { ...source, ...eventPatch, ctx: { ...source.ctx, ...patch } } as GroupReplyEvent;
+    expect(await h.dispatchNative(event)).toBeUndefined();
+    expect(h.state.writes).toHaveLength(0); expect(h.sends).toHaveLength(before);
+    expect(h.recordProcessed).not.toHaveBeenCalled(); expect(h.markIdle).not.toHaveBeenCalled();
+    expect(db.select().from(schema.mcpMediaSelections).get()).toMatchObject({ state: "pending" });
+  });
+  it("accepts only matching channel-prefixed native group facts and exact native quotes", async () => {
+    const h = await fixture(); await h.select(); const prompt = h.sends.at(-1)!;
+    const source = h.nativeEvent("yes", "quote", Date.now(), prompt.messageId);
+    const event: GroupReplyEvent = { ...source, originatingTo: `whatsapp:${group}`, ctx: { ...source.ctx,
+      From: `whatsapp:${group}`, ChatId: `whatsapp:${group}`, OriginatingTo: `whatsapp:${group}`, To: group,
+    } };
+    const noProof = { ...event, ctx: { ...event.ctx, SupplementalContext: undefined } };
+    expect(await h.dispatchNative(noProof)).toBeUndefined(); expect(h.state.writes).toHaveLength(0);
+    const conflicting = { ...event, ctx: { ...event.ctx, ReplyToIsQuote: true, SupplementalContext: { quote: { id: "other-prompt" } } } };
+    expect(await h.dispatchNative(conflicting)).toBeUndefined(); expect(h.state.writes).toHaveLength(0);
+    expect(await h.dispatchNative(event)).toMatchObject({ handled: true, queuedFinal: true }); expect(h.state.writes).toHaveLength(1);
+  });
+  it("cancels a closed native turn before any request or result delivery", async () => {
+    const h = await fixture(); await h.select(); const before = h.sends.length;
+    expect(await h.dispatchNative(h.nativeEvent("request it"), { cfg: {}, abortSignal: AbortSignal.abort() })).toMatchObject({ handled: true, queuedFinal: false });
+    expect(h.state.writes).toHaveLength(0); expect(h.sends).toHaveLength(before);
+  });
+  it.each(["acp", undefined] as const)("does not take over an ACP/background or unknown dispatch owner (%s)", async (dispatchKind) => {
+    const h = await fixture(); await h.select(); const before = h.sends.length;
+    expect(await h.dispatchNative(h.nativeEvent("request it"), { dispatchKind })).toBeUndefined();
+    expect(h.state.writes).toHaveLength(0); expect(h.sends).toHaveLength(before);
+    expect(h.recordProcessed).not.toHaveBeenCalled();
+  });
+  it("reports a lost confirmation response as unknown after one real request without retrying", async () => {
+    const h = await fixture(true, true); await h.select(); h.state.loseConfirmationResponse = true;
+    expect(await h.dispatch("request it")).toMatchObject({ handled: true, text: expect.stringContaining("could not verify") });
+    expect(h.state.writes).toHaveLength(1);
+    expect(db.select().from(schema.mcpMediaSelections).get()).toMatchObject({ state: "completed", outcome: "pending_approval" });
+    expect(h.logs().find((r) => r.stage === "confirmation.result")).toMatchObject({ outcome: "unknown" });
+  });
+  it("does not fall through or send a duplicate result if host bookkeeping fails after a real submission", async () => {
+    const h = await fixture(true, true); await h.select(); const before = h.sends.length; const idle = vi.fn();
+    const result = await h.dispatchNative(h.nativeEvent("request it"), { cfg: {}, recordProcessed: () => { throw new Error("SECRET bookkeeping failure"); }, markIdle: idle });
+    expect(result).toMatchObject({ handled: true, queuedFinal: true, counts: { final: 1 } });
+    expect(h.state.writes).toHaveLength(1); expect(h.sends).toHaveLength(before + 1);
+    expect(idle).toHaveBeenCalledExactlyOnceWith("message_completed");
+    expect(h.logs().some((r) => r.stage === "confirmation.record_unconfirmed")).toBe(true);
+    expect(JSON.stringify(h.logs())).not.toContain("SECRET bookkeeping failure");
+  });
+  it("does not label an accepted request as failed or retry when the native turn closes after dispatch", async () => {
+    const h = await fixture(true, true); await h.select(); const before = h.sends.length; const abort = new AbortController();
+    h.state.afterWrite = () => abort.abort();
+    expect(await h.dispatchNative(h.nativeEvent("request it"), { cfg: {}, abortSignal: abort.signal })).toMatchObject({ handled: true, queuedFinal: false });
+    expect(h.state.writes).toHaveLength(1); expect(h.sends).toHaveLength(before);
+    expect(h.logs().find((r) => r.stage === "confirmation.result")).toMatchObject({ outcome: "unknown" });
+    expect(h.logs().find((r) => r.stage === "confirmation.reply_unconfirmed")).toBeDefined();
+  });
   it("links privately, searches safe existing catalog facts, presents a real prompt and submits only after native confirmation", async () => {
     const h = await fixture(true, true);
     const search = await h.tool("thinkarr_media_search", { query: "Movie" });
