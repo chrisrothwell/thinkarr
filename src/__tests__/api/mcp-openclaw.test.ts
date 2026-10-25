@@ -8,7 +8,7 @@ import * as schema from "@/lib/db/schema";
 import { createTestDb, seedUser, type TestDb } from "../helpers/db";
 import { delegatedLinkFixture } from "../helpers/delegated-link";
 import { canonicalPhone, register } from "../../../connectors/openclaw/index";
-import type { DispatchContext, DispatchEvent, DispatchResult, OpenClawHost, Outbound, ToolContext } from "../../../connectors/openclaw/host";
+import type { DispatchContext, DispatchEvent, DispatchResult, GroupReplyContext, GroupReplyEvent, GroupReplyResult, OpenClawHost, Outbound, ToolContext } from "../../../connectors/openclaw/host";
 import manifest from "../../../connectors/openclaw/openclaw.plugin.json";
 import { loadPreparedSecretReader } from "../../../connectors/openclaw/secrets";
 
@@ -56,6 +56,7 @@ async function fixture(debug = false) {
     .map(([line]) => JSON.parse(line.slice("[thinkarr] ".length)));
   let factory: Parameters<OpenClawHost<object>["registerTool"]>[0] | undefined;
   let hook: ((event: DispatchEvent, context: DispatchContext) => Promise<DispatchResult | void>) | undefined;
+  let groupHook: ((event: GroupReplyEvent, context: GroupReplyContext<object>) => Promise<GroupReplyResult | void>) | undefined;
   const sends: Array<Parameters<NonNullable<Outbound<object>["sendText"]>>[0]> = [];
   const outbound: Outbound<object> = {
     resolveTarget: vi.fn(({ to }: { to: string }) => ({ ok: true as const, to })),
@@ -71,12 +72,13 @@ async function fixture(debug = false) {
     lifecycle: { signal: lifecycle.signal },
     runtime: { version: "2026.10.4", channel: { outbound: { loadAdapter: vi.fn(async () => outbound) } } },
     registerTool: vi.fn((tool) => { factory = tool; }),
-    on: vi.fn((_name, handler) => { hook = handler; }),
+    on: vi.fn((name, handler) => { if (name === "before_dispatch") hook = handler as NonNullable<typeof hook>; else groupHook = handler as NonNullable<typeof groupHook>; }),
   };
   return {
     f, api, outbound, sends, credentialsFile, lifecycle, logger, logs,
     create: (ctx = toolContext()) => factory!.create(ctx),
     dispatch: (event: DispatchEvent, context: DispatchContext) => hook!(event, context),
+    dispatchGroup: (event: GroupReplyEvent, context: Partial<GroupReplyContext<object>> = {}) => groupHook!(event, { cfg: {}, dispatchKind: "agent", recordProcessed: vi.fn(), markIdle: vi.fn(), ...context }),
   };
 }
 
@@ -101,8 +103,8 @@ describe("OpenClaw linking adapter", () => {
     });
     register(h.api); const result = await h.create()!.execute("ambiguous-delivery", {});
     expect(result.details.status).toBe("private_delivery_unconfirmed");
-    expect(result.content[0].text).toContain("check your private WhatsApp chat");
-    expect(result.content[0].text).toContain("rather than requesting another one");
+    expect(result.content[0].text.toLowerCase()).toContain("check your private whatsapp chat");
+    expect(result.content[0].text).toContain("If no message arrived");
     expect(h.outbound.sendText).toHaveBeenCalledTimes(1); expect(h.sends).toHaveLength(1);
     expect(db.select().from(schema.mcpLinkChallenges).all()).toHaveLength(1);
     expect(JSON.stringify(result)).not.toContain(h.sends[0].text.split(" ").at(-1)!);

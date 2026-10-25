@@ -19,6 +19,7 @@ export function observeMcpResponse(response: Response, log: DiagnosticSink, fiel
   const receivedAt = performance.now();
   let finished = false;
   let begun = false;
+  let cancelling = false;
   const begin = () => {
     if (begun || finished) return;
     begun = true;
@@ -37,14 +38,18 @@ export function observeMcpResponse(response: Response, log: DiagnosticSink, fiel
         begin();
         reader ??= response.body!.getReader();
         const next = await reader.read();
-        if (next.done) { reader.releaseLock(); controller.close(); finish("mcp.http.body_complete"); }
+        if (next.done) { if (!cancelling) { reader.releaseLock(); controller.close(); finish("mcp.http.body_complete"); } }
         else controller.enqueue(next.value);
       } catch (error) { finish("mcp.http.body_error"); controller.error(error); }
     },
     async cancel(reason) {
-      finish("mcp.http.body_cancelled");
-      if (reader) { try { await reader.cancel(reason); } finally { reader.releaseLock(); } }
-      else await response.body!.cancel(reason);
+      cancelling = true;
+      try { log("debug", "mcp.http.body_cancel_start", fields); } catch { /* preserve cancellation */ }
+      try {
+        if (reader) { try { await reader.cancel(reason); } finally { reader.releaseLock(); } }
+        else await response.body!.cancel(reason);
+        finish("mcp.http.body_cancelled");
+      } catch (error) { finish("mcp.http.body_error"); throw error; }
     },
   }, { highWaterMark: 0 });
   const readers = new Set(["text", "json", "arrayBuffer", "blob", "formData", "bytes"]);

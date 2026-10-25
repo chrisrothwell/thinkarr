@@ -43,6 +43,22 @@ describe("MCP response timing observer", () => {
     expect(log).toHaveBeenCalledWith("debug", "mcp.http.body_cancelled", expect.any(Object));
     expect(JSON.stringify(log.mock.calls)).not.toContain("SECRET_STREAM_CANCEL");
   });
+  it.each([false, true])("does not report cancellation complete before the underlying body settles (failure=%s)", async (fail) => {
+    const log = vi.fn(); const started = Promise.withResolvers<void>(); const release = Promise.withResolvers<void>();
+    const error = new Error("SECRET cancellation failure");
+    const response = observeMcpResponse(new Response(new ReadableStream({
+      pull() { started.resolve(); },
+      async cancel() { await release.promise; if (fail) throw error; },
+    }, { highWaterMark: 0 })), log, {});
+    const reader = response.body!.getReader(); const read = reader.read(); await started.promise;
+    const cancelled = reader.cancel("SECRET cancellation"); const result = cancelled.catch((e) => e);
+    await read; await Promise.resolve();
+    expect(log).toHaveBeenCalledWith("debug", "mcp.http.body_cancel_start", expect.any(Object));
+    expect(log.mock.calls.some(([, stage]) => ["mcp.http.body_complete", "mcp.http.body_cancelled", "mcp.http.body_error"].includes(stage))).toBe(false);
+    release.resolve(); expect(await result).toBe(fail ? error : undefined);
+    expect(log).toHaveBeenCalledWith(fail ? "error" : "debug", fail ? "mcp.http.body_error" : "mcp.http.body_cancelled", expect.any(Object));
+    expect(JSON.stringify(log.mock.calls)).not.toContain("SECRET");
+  });
   it("distinguishes received headers from a response body that finishes later", async () => {
     let clock = 10; const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
     const log = vi.fn(); let controller!: ReadableStreamDefaultController<Uint8Array>;

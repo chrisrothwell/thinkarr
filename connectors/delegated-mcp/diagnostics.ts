@@ -29,6 +29,22 @@ export type DiagnosticFields = {
   outsideHandlerMs?: number;
   bodyDurationMs?: number;
   serverTimingAvailable?: boolean;
+  instanceId?: string;
+  workId?: string;
+  exchangeId?: string;
+  companionVersion?: string;
+  registrationMode?: "full" | "tool-discovery";
+  workKind?: "link_tool" | "private_hook" | "media_tool" | "group_hook";
+  workStage?: string;
+  trackedWorkCount?: number;
+  pendingHttpCount?: number;
+  pendingBodyCount?: number;
+  workAgeMs?: number;
+  oldestWorkMs?: number;
+  cleanupDurationMs?: number;
+  invocationAborted?: boolean;
+  lifecycleAborted?: boolean;
+  backgroundDiagnosticsAvailable?: boolean;
 };
 export type DiagnosticSink = (level: DiagnosticLevel, stage: string, fields?: DiagnosticFields) => void;
 export type DiagnosticLogger = { info: (message: string) => void; warn: (message: string) => void; error: (message: string) => void };
@@ -88,7 +104,7 @@ export function safeDiagnosticSink(sink?: DiagnosticSink): DiagnosticSink {
   return (level, stage, fields) => { try { sink?.(level, stage, fields); } catch { /* logging is best effort */ } };
 }
 
-export function createDiagnosticTrace(logger: DiagnosticLogger | undefined, debug: boolean, operation: string) {
+export function createDiagnosticTrace(logger: DiagnosticLogger | undefined, debug: boolean, operation: string, context: Pick<DiagnosticFields, "instanceId" | "companionVersion" | "registrationMode"> = {}) {
   const traceId = randomUUID();
   const started = performance.now();
   // Metadata is projected explicitly. No spreading inputs, errors or config.
@@ -109,15 +125,22 @@ export function createDiagnosticTrace(logger: DiagnosticLogger | undefined, debu
         ...(details?.errorCode && errorCodes.has(details.errorCode) ? { errorCode: details.errorCode } : {}),
         ...(Number.isSafeInteger(details?.rpcCode) && details.rpcCode! <= -32000 && details.rpcCode! >= -32768 ? { rpcCode: details.rpcCode } : {}),
         ...(validationIssues.length ? { validationIssues } : {}),
-        ...Object.fromEntries((["bearerAvailable", "keyAvailable", "revisionMatches", "debugEnabled", "mediaEnabled", "acknowledgementConfirmed", "receiptChannelMatches", "receiptMessageIdPresent", "receiptDestinationSupported", "receiptDestinationMatches", "serverTimingAvailable"] as const)
+        ...Object.fromEntries((["bearerAvailable", "keyAvailable", "revisionMatches", "debugEnabled", "mediaEnabled", "acknowledgementConfirmed", "receiptChannelMatches", "receiptMessageIdPresent", "receiptDestinationSupported", "receiptDestinationMatches", "serverTimingAvailable", "invocationAborted", "lifecycleAborted", "backgroundDiagnosticsAvailable"] as const)
           .filter((key) => typeof fields[key] === "boolean").map((key) => [key, fields[key]])),
         ...(typeof fields.outcome === "string" && outcomes.has(fields.outcome) ? { outcome: fields.outcome } : {}),
         ...(fields.protocolPhase && ["initialize", "initialized", "tool_call", "other"].includes(fields.protocolPhase) ? { protocolPhase: fields.protocolPhase } : {}),
         ...(fields.receiptDestinationKind && ["pn_jid", "e164", "lid", "group", "missing", "other"].includes(fields.receiptDestinationKind) ? { receiptDestinationKind: fields.receiptDestinationKind } : {}),
-        ...Object.fromEntries((["requestId", "responseRequestId"] as const).flatMap((key) => {
+        ...(fields.companionVersion && /^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$/.test(fields.companionVersion) ? { companionVersion: fields.companionVersion } : {}),
+        ...(fields.registrationMode && ["full", "tool-discovery"].includes(fields.registrationMode) ? { registrationMode: fields.registrationMode } : {}),
+        ...(fields.workKind && ["link_tool", "private_hook", "media_tool", "group_hook"].includes(fields.workKind) ? { workKind: fields.workKind } : {}),
+        ...(fields.workStage && /^[a-z][a-z0-9_.]{0,99}$/.test(fields.workStage) ? { workStage: fields.workStage } : {}),
+        ...(Number.isSafeInteger(fields.trackedWorkCount) && fields.trackedWorkCount! >= 0 ? { trackedWorkCount: fields.trackedWorkCount } : {}),
+        ...Object.fromEntries((["pendingHttpCount", "pendingBodyCount"] as const)
+          .filter((key) => Number.isSafeInteger(fields[key]) && fields[key]! >= 0).map((key) => [key, fields[key]])),
+        ...Object.fromEntries((["requestId", "responseRequestId", "instanceId", "workId", "exchangeId"] as const).flatMap((key) => {
           const value = parseMcpRequestId(fields[key]); return value ? [[key, value]] : [];
         })),
-        ...Object.fromEntries((["httpDurationMs", "serverDurationMs", "outsideHandlerMs", "bodyDurationMs"] as const)
+        ...Object.fromEntries((["httpDurationMs", "serverDurationMs", "outsideHandlerMs", "bodyDurationMs", "cleanupDurationMs", "workAgeMs", "oldestWorkMs"] as const)
           .filter((key) => typeof fields[key] === "number" && Number.isFinite(fields[key]) && fields[key]! >= 0 && fields[key]! <= 86_400_000)
           .map((key) => [key, Math.round(fields[key]! * 1000) / 1000])),
       };
@@ -127,7 +150,8 @@ export function createDiagnosticTrace(logger: DiagnosticLogger | undefined, debu
     } catch { /* do not propagate logger faults or serialize their exceptions */ }
   };
   return {
-    log: ((level, stage, fields?: DiagnosticFields) => emit(level, stage, fields)) satisfies DiagnosticSink,
-    error: (stage: string, error: unknown) => emit("error", stage, {}, error),
+    traceId,
+    log: ((level, stage, fields?: DiagnosticFields) => emit(level, stage, { ...fields, ...context })) satisfies DiagnosticSink,
+    error: (stage: string, error: unknown) => emit("error", stage, context, error),
   };
 }
