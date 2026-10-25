@@ -8,6 +8,7 @@ import { loadPreparedSecretReader } from "./secrets.js";
 import { confirmationIntent, mediaTools, mediaInputSchema, type MediaOutcome } from "../delegated-mcp/media-contract.js";
 import { ConnectorDiagnosticError, createDiagnosticTrace, diagnosticErrorFields, type DiagnosticSink } from "../delegated-mcp/diagnostics.js";
 import { createLifecycleDiagnostics } from "./lifecycle.js";
+import { createPromptReplyGuard } from "./reply-guard.js";
 
 const routingOptions = {
   debug: z.boolean().default(false),
@@ -116,6 +117,7 @@ export function register<C extends object>(api: OpenClawHost<C>) {
   if (!lifecycle) { registration.error("registration.lifecycle", new ConnectorDiagnosticError("plugin_lifetime_missing")); throw new Error("Thinkarr requires plugin lifecycle admission"); }
   const diagnostics = createLifecycleDiagnostics(api.lifecycle, api.logger, options.debug, api.registrationMode as "full" | "tool-discovery");
   registration = diagnostics.trace("registration");
+  const promptReplies = createPromptReplyGuard(api, options.pilotGroup, registration.log);
   const assertLive = () => { if (lifecycle.aborted) throw new ConnectorDiagnosticError("plugin_lifetime_closed"); };
   registration.log("info", "registration.ready", { debugEnabled: options.debug, mediaEnabled: !!options.pilotGroup });
   lifecycle.addEventListener("abort", () => registration.log("info", "registration.disposed"), { once: true });
@@ -360,6 +362,7 @@ export function register<C extends object>(api: OpenClawHost<C>) {
       const assertCurrent = ctx.assertInvocationCurrent;
       return {
         name: `thinkarr_${name}`, label: "Thinkarr media pilot",
+        catalogMode: "direct-only",
         description: name === "media_select" ? "Send the one native confirmation prompt for the exact title and explicit TV seasons after search/details. This tool already delivers the message and its reply instructions. After prompt_sent, end the turn with NO_REPLY and wait; do not send an extra confirmation or instruction message. Does not submit."
           : "Find title facts using the existing Seerr catalog. No library availability or personal activity is returned; do not infer availability. Link Plex with thinkarr_account_link first.",
         parameters: mediaInputSchema(name),
@@ -367,6 +370,7 @@ export function register<C extends object>(api: OpenClawHost<C>) {
           const currentSignal = signal ? AbortSignal.any([signal, lifecycle]) : lifecycle;
           const result = await diagnostics.run("media_tool", name, currentSignal, (trace) => runMedia({ ...identity, signal: currentSignal,
             assertCurrent: () => { assertLive(); assertCurrent(); } }, ctx.runtimeConfig ?? ctx.config ?? api.config, (connector, current) => connector.mediaTool(current, name, args), name, trace)) ?? { status: "failed" as const };
+          if (name === "media_select" && result.status === "prompt_sent") promptReplies.presented(_id, ctx.sessionKey, identity.account);
           return { content: [{ type: "text" as const, text: result.status === "ok" ? JSON.stringify(result) : mediaMessages[result.status] }], details: result };
         },
       };
@@ -413,8 +417,15 @@ export function register<C extends object>(api: OpenClawHost<C>) {
     const quote = supplemental && typeof supplemental === "object" ? Reflect.get(supplemental, "quote") : undefined;
     const quotedId = quote && typeof quote === "object" ? Reflect.get(quote, "id") : undefined;
     if (quotedId !== undefined && quotedId !== replyTo) return reject("confirmation_quote_mismatch");
-    const quoteVerified = native.ReplyToIsQuote === true || (!!replyTo && quotedId === replyTo);
+    // In this pinned WhatsApp adapter ReplyToId is populated from the visible
+    // native provider quote. Supplemental quote *body* may subsequently be
+    // removed by context-visibility policy, without removing the route ID.
+    // Do not demand an optional flag/body as a second authorization source.
+    // All group/account/admission checks above and server exact-prompt checks
+    // still apply; explicitly non-quote/conflicting evidence remains rejected.
+    const quoteVerified = native.ReplyToIsQuote !== false && !!replyTo;
     if (native.ReplyToId !== undefined && (!replyTo || replyTo.length > 512 || !quoteVerified)) return reject("confirmation_quote_unverified");
+    if (replyTo) trace.log("debug", "confirmation.quote_verified", { reason: quotedId === replyTo ? "matching_supplemental_quote" : "native_reply_id" });
     const identity = actor("whatsapp", account, sender, from.id);
     if (!identity) return reject("confirmation_actor_invalid");
     const signal = AbortSignal.any([lifecycle, AbortSignal.timeout(28_000), ...(context.abortSignal ? [context.abortSignal] : [])]);
