@@ -154,6 +154,7 @@ export async function createLinkingConnector(config: LinkingConnectorConfig, hos
         fetch: async (input, init) => {
           let requestStage = "mcp.http.prepare";
           const requestId = randomUUID();
+          let fetchStarted: number | undefined;
           let protocolPhase: "initialize" | "initialized" | "tool_call" | "other" = "other";
           try {
             log("debug", requestStage, { requestId });
@@ -190,7 +191,7 @@ export async function createLinkingConnector(config: LinkingConnectorConfig, hos
             guard();
             requestSignal.throwIfAborted();
             requestStage = "mcp.http.fetch"; log("debug", requestStage, { requestId, protocolPhase });
-            const fetchStarted = performance.now();
+            fetchStarted = performance.now();
             const response = await fetchRequest(endpoint.href, {
               method: "POST", body: Buffer.from(body), headers, redirect: "error", credentials: "omit", signal: requestSignal,
             });
@@ -205,7 +206,12 @@ export async function createLinkingConnector(config: LinkingConnectorConfig, hos
             log(response.ok ? "debug" : "error", "mcp.http.response", { ...fields, httpStatus: response.status, ...(!response.ok ? { reason: "http_request_rejected" } : {}) });
             if (response.redirected || (response.status >= 300 && response.status < 400)) throw new ConnectorDiagnosticError("connector_redirect_refused");
             return observeMcpResponse(response, log, fields);
-          } catch (error) { log("error", requestStage, { ...diagnosticErrorFields(error), requestId, protocolPhase }); throw error; }
+          } catch (error) {
+            log("error", requestStage, { ...diagnosticErrorFields(error), requestId, protocolPhase,
+              ...(fetchStarted !== undefined ? { httpDurationMs: Math.max(0, performance.now() - fetchStarted) } : {}),
+            });
+            throw error;
+          }
         },
       });
       client = new Client({ name: "thinkarr-linking-connector", version: "1" });

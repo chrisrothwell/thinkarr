@@ -116,8 +116,9 @@ describe("trusted linking connector core", () => {
   });
   it("reports an unavailable handshake without submitting verification or creating a binding", async () => {
     const { config } = await fixture(); const timeout = fakeDeadlineSignals(); const notification = Promise.withResolvers<void>();
+    const diagnostics = vi.fn();
     let toolCalls = 0; let aborted = false;
-    const connector = await createLinkingConnector(config, { sendPrivate: async (d) => receipt(d), fetch: async (input, init) => {
+    const connector = await createLinkingConnector(config, { diagnostics, sendPrivate: async (d) => receipt(d), fetch: async (input, init) => {
       const body = JSON.parse(String(init?.body));
       if (body.method === "tools/call") toolCalls++;
       if (body.method === "notifications/initialized") { notification.resolve(); return untilAborted(init!.signal!, () => { aborted = true; }); }
@@ -127,6 +128,8 @@ describe("trusted linking connector core", () => {
       const pending = connector.handlePrivateLinkMessage({ ...actor({ kind: "direct" }), eventId: "verification", eventTime: Date.now() }, `Link account ${"a".repeat(64)}`);
       await notification.promise; await vi.advanceTimersByTimeAsync(45_001);
       expect(await pending).toEqual({ status: "unavailable" }); expect(aborted).toBe(true); expect(toolCalls).toBe(0);
+      expect(diagnostics.mock.calls.find(([level, stage]) => level === "error" && stage === "mcp.http.fetch")?.[2])
+        .toMatchObject({ protocolPhase: "initialized", httpDurationMs: 45_000, requestId: expect.any(String) });
       expect(db.select().from(schema.mcpActorBindings).all()).toHaveLength(0);
     } finally { timeout.mockRestore(); }
   });
