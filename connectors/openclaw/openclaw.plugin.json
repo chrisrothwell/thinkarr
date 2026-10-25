@@ -21,6 +21,7 @@
     }
   },
   "uiHints": {
+    "debug": { "label": "Debug logs", "help": "Detailed value-free Thinkarr stage logs. Apply/reload the plugin after changing. Errors are always logged." },
     "connection.bearer": { "label": "Service credential", "sensitive": true },
     "connection.privateKeyPem": { "label": "Signing key", "sensitive": true },
     "credentialsFile": { "label": "Legacy credentials file (migrate to native secrets)" }
@@ -45,6 +46,7 @@
       }
     },
     "properties": {
+      "debug": { "type": "boolean", "default": false, "description": "Emit detailed structured Thinkarr diagnostics to Gateway logs; never includes secrets, messages or participant IDs" },
       "credentialsFile": { "type": "string", "minLength": 1 },
       "connection": {
         "type": "object", "additionalProperties": false,

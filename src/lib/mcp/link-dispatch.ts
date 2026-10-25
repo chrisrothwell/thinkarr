@@ -12,6 +12,7 @@ import { DelegationError, requireCurrentDelegation, verifyDelegatedRequest, type
 import { AccountLinkError, completeAccountLink, initiateAccountLink } from "./account-linking";
 import { recordServiceMcpDenial } from "./service-principals";
 import { authorizeMediaCall, callMediaTool, serviceMediaTools } from "./media-dispatch";
+import type { McpRequestTiming } from "./request-timing";
 
 const privacyHeaders = { "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" };
 const startArguments = z.object({}).strict();
@@ -91,35 +92,39 @@ function forbidden(caller: ServiceMcpContext) {
 /** Signed standard MCP, linking plus explicitly configured beta media pilot.
  * Personal/legacy registry handlers never receive a service context.
  */
-export async function handleServiceLinkPost(request: Request, caller: ServiceMcpContext): Promise<Response> {
+export async function handleServiceLinkPost(request: Request, caller: ServiceMcpContext, timing?: McpRequestTiming): Promise<Response> {
   let raw: Uint8Array;
   let context: VerifiedServiceMcpContext;
-  let envelope: { method: string };
   try {
-    raw = new Uint8Array(await request.arrayBuffer());
+    raw = new Uint8Array(await (timing ? timing.span("body_read", () => request.arrayBuffer()) : request.arrayBuffer()));
     if (raw.byteLength > 65536) return NextResponse.json({ error: "MCP request is too large" }, { status: 413, headers: privacyHeaders });
-    context = await verifyDelegatedRequest(request, raw, caller);
-    const body: unknown = JSON.parse(new TextDecoder().decode(raw));
-    if (!body || typeof body !== "object" || Array.isArray(body)) throw new LinkDispatchDenied();
-    const parsed = (Object.hasOwn(body, "id") ? JSONRPCRequestSchema : JSONRPCNotificationSchema).safeParse(body);
-    if (!parsed.success) throw new LinkDispatchDenied();
-    envelope = parsed.data;
-    if (envelope.method === "notifications/initialized") {
-      if (Object.hasOwn(body, "id")) throw new LinkDispatchDenied();
-    } else {
-      if (!Object.hasOwn(body, "id")) throw new LinkDispatchDenied();
-      if (envelope.method === "initialize") {
-        if (!InitializeRequestSchema.safeParse(body).success) throw new LinkDispatchDenied();
-      } else if (envelope.method === "tools/list") {
-        if (!ListToolsRequestSchema.safeParse(body).success) throw new LinkDispatchDenied();
-      } else if (envelope.method === "tools/call") {
-        const call = CallToolRequestSchema.safeParse(body);
-        if (!call.success) throw new LinkDispatchDenied();
-        authorizeCall(context, call.data.params.name, call.data.params.arguments);
-      } else if (envelope.method !== "ping") throw new LinkDispatchDenied();
-    }
-    // Recheck principal/key/time/channel for every protocol operation as well.
-    serviceLinkTools(context);
+    const verify = () => verifyDelegatedRequest(request, raw, caller, timing);
+    context = await (timing ? timing.span("delegation", verify) : verify());
+    const validateEnvelope = () => {
+      const body: unknown = JSON.parse(new TextDecoder().decode(raw));
+      if (!body || typeof body !== "object" || Array.isArray(body)) throw new LinkDispatchDenied();
+      const parsed = (Object.hasOwn(body, "id") ? JSONRPCRequestSchema : JSONRPCNotificationSchema).safeParse(body);
+      if (!parsed.success) throw new LinkDispatchDenied();
+      const envelope = parsed.data;
+      timing?.setProtocolPhase(envelope.method);
+      if (envelope.method === "notifications/initialized") {
+        if (Object.hasOwn(body, "id")) throw new LinkDispatchDenied();
+      } else {
+        if (!Object.hasOwn(body, "id")) throw new LinkDispatchDenied();
+        if (envelope.method === "initialize") {
+          if (!InitializeRequestSchema.safeParse(body).success) throw new LinkDispatchDenied();
+        } else if (envelope.method === "tools/list") {
+          if (!ListToolsRequestSchema.safeParse(body).success) throw new LinkDispatchDenied();
+        } else if (envelope.method === "tools/call") {
+          const call = CallToolRequestSchema.safeParse(body);
+          if (!call.success) throw new LinkDispatchDenied();
+          authorizeCall(context, call.data.params.name, call.data.params.arguments);
+        } else if (envelope.method !== "ping") throw new LinkDispatchDenied();
+      }
+      // Recheck principal/key/time/channel for every protocol operation as well.
+      serviceLinkTools(context);
+    };
+    if (timing) timing.spanSync("envelope", validateEnvelope); else validateEnvelope();
   } catch (error) {
     if (error instanceof DelegationError || error instanceof LinkDispatchDenied || error instanceof SyntaxError) return forbidden(caller);
     logger.error("MCP_LINK_DISPATCH_FAILURE", { principalId: caller.principalId, credentialId: caller.credentialId });
@@ -133,7 +138,10 @@ export async function handleServiceLinkPost(request: Request, caller: ServiceMcp
     catch { deniedDuringDispatch = true; throw new McpError(ErrorCode.InvalidParams, "Delegated MCP operation is not permitted."); }
   });
   server.setRequestHandler(CallToolRequestSchema, async (call) => {
-    try { return await callLinkTool(context, call.params.name, call.params.arguments, request.signal); }
+    try {
+      const execute = () => callLinkTool(context, call.params.name, call.params.arguments, request.signal);
+      return await (timing ? timing.span("tool_handler", execute) : execute());
+    }
     catch (error) {
       if (error instanceof DelegationError || error instanceof LinkDispatchDenied || (error instanceof AccountLinkError && error.status === 403)) {
         deniedDuringDispatch = true;
@@ -147,13 +155,14 @@ export async function handleServiceLinkPost(request: Request, caller: ServiceMcp
   });
   const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
   try {
-    await server.connect(transport);
-    const response = await transport.handleRequest(new Request(request.url, { method: "POST", headers: request.headers, body: Buffer.from(raw) }), {
+    if (timing) await timing.span("sdk_connect", () => server.connect(transport)); else await server.connect(transport);
+    const dispatch = () => transport.handleRequest(new Request(request.url, { method: "POST", headers: request.headers, body: Buffer.from(raw) }), {
       authInfo: { token: request.headers.get("authorization")!.slice(7), clientId: caller.principalId, scopes: serviceLinkTools(context).map((tool) => tool.name) },
     });
+    const response = await (timing ? timing.span("sdk_dispatch", dispatch) : dispatch());
     // The stateless transport uses JSON responses; await its body so a revoked
     // policy discovered inside the SDK handler still becomes HTTP 403.
-    const body = await response.arrayBuffer();
+    const body = await (timing ? timing.span("response_body", () => response.arrayBuffer()) : response.arrayBuffer());
     if (deniedDuringDispatch) return forbidden(caller);
     const headers = new Headers(response.headers);
     for (const [key, value] of Object.entries(privacyHeaders)) headers.set(key, value);
@@ -163,6 +172,7 @@ export async function handleServiceLinkPost(request: Request, caller: ServiceMcp
     logger.error("MCP_LINK_TRANSPORT_FAILURE", { principalId: caller.principalId, credentialId: caller.credentialId });
     return NextResponse.json({ error: "Delegated MCP request failed" }, { status: 500, headers: privacyHeaders });
   } finally {
-    await server.close().catch(() => {});
+    const close = () => server.close();
+    await (timing ? timing.span("cleanup", close) : close()).catch(() => {});
   }
 }
