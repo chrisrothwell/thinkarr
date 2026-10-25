@@ -49,4 +49,13 @@ describe("value-free companion diagnostics", () => {
     expect(() => trace.error("credentials.load", new Error("SECRET"))).not.toThrow();
     expect(() => safeDiagnosticSink(fail)("error", "mcp.connect")).not.toThrow();
   });
+  it("projects lifecycle metadata without accepting arbitrary versions, identities or resource objects", () => {
+    const log = logger(); const id = "12345678-1234-1234-1234-123456789abc";
+    const trace = createDiagnosticTrace(log, true, "lifecycle", { instanceId: id, companionVersion: "0.3.8", registrationMode: "full" });
+    trace.log("info", "lifecycle.work_pending", { workId: id, exchangeId: id, workKind: "private_hook", workStage: "outbound.ack_send", workAgeMs: 20, trackedWorkCount: 1, pendingHttpCount: 0, pendingBodyCount: 1, invocationAborted: true });
+    expect(records(log)[0]).toMatchObject({ instanceId: id, companionVersion: "0.3.8", workId: id, exchangeId: id, workKind: "private_hook", workStage: "outbound.ack_send", trackedWorkCount: 1, pendingHttpCount: 0, pendingBodyCount: 1, invocationAborted: true });
+    trace.log("info", "lifecycle.snapshot", { workId: "SECRET", workKind: "SECRET", workStage: "SECRET", trackedWorkCount: -1, pendingHttpCount: NaN, pendingBodyCount: 1.5, workAgeMs: Infinity, invocationAborted: "SECRET", resources: { key: "SECRET" } } as never);
+    expect(JSON.stringify(records(log))).not.toContain("SECRET");
+    for (const field of ["workId", "workKind", "workStage", "trackedWorkCount", "pendingHttpCount", "pendingBodyCount", "workAgeMs", "invocationAborted", "resources"]) expect(records(log)[1]).not.toHaveProperty(field);
+  });
 });

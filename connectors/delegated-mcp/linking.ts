@@ -118,8 +118,8 @@ async function loadSettings(config: LinkingConnectorConfig, log: DiagnosticSink)
  * upstream output, private URLs, receipt IDs or account/actor identifiers.
  */
 export async function createLinkingConnector(config: LinkingConnectorConfig, host: LinkingConnectorHost) {
-  const log = safeDiagnosticSink(host.diagnostics);
-  const { settings, endpoint, origin, key } = await loadSettings(config, log);
+  const connectorLog = safeDiagnosticSink(host.diagnostics);
+  const { settings, endpoint, origin, key } = await loadSettings(config, connectorLog);
   // Capture host capabilities once; never share mutable per-session headers.
   const sendPrivate = host.sendPrivate.bind(host);
   const fetchRequest = host.fetch ?? globalThis.fetch;
@@ -127,6 +127,13 @@ export async function createLinkingConnector(config: LinkingConnectorConfig, hos
 
   type MediaCall = { name: string; args: unknown; source?: Record<string, unknown> };
   async function invoke(invocation: TrustedLinkInvocation, code?: string, event?: z.infer<typeof eventSchema>, media?: MediaCall): Promise<LinkOutcome | MediaOutcome> {
+    const exchangeId = randomUUID();
+    const pendingHttp = new Set<string>();
+    const pendingBodies = new Set<string>();
+    const log: DiagnosticSink = (level, stage, fields) => {
+      if (fields?.requestId && ["mcp.http.body_complete", "mcp.http.body_error", "mcp.http.body_cancelled"].includes(stage)) pendingBodies.delete(fields.requestId);
+      connectorLog(level, stage, { ...fields, exchangeId, pendingHttpCount: pendingHttp.size, pendingBodyCount: pendingBodies.size });
+    };
     let client: Client | undefined;
     let active = true;
     let toolCallStarted = false;
@@ -192,9 +199,19 @@ export async function createLinkingConnector(config: LinkingConnectorConfig, hos
             requestSignal.throwIfAborted();
             requestStage = "mcp.http.fetch"; log("debug", requestStage, { requestId, protocolPhase });
             fetchStarted = performance.now();
-            const response = await fetchRequest(endpoint.href, {
-              method: "POST", body: Buffer.from(body), headers, redirect: "error", credentials: "omit", signal: requestSignal,
-            });
+            const cancelled = () => log("info", "mcp.http.cancel_requested", { requestId, protocolPhase });
+            pendingHttp.add(requestId);
+            requestSignal.addEventListener("abort", cancelled, { once: true });
+            let response: Response;
+            try {
+              response = await fetchRequest(endpoint.href, {
+                method: "POST", body: Buffer.from(body), headers, redirect: "error", credentials: "omit", signal: requestSignal,
+              });
+            } finally {
+              requestSignal.removeEventListener("abort", cancelled);
+              pendingHttp.delete(requestId);
+              log("debug", "mcp.http.fetch_settled", { requestId, protocolPhase });
+            }
             const httpDurationMs = Math.max(0, performance.now() - fetchStarted);
             guard();
             const serverDurationMs = readMcpServerDuration(response.headers.get("Server-Timing"));
@@ -205,6 +222,7 @@ export async function createLinkingConnector(config: LinkingConnectorConfig, hos
             };
             log(response.ok ? "debug" : "error", "mcp.http.response", { ...fields, httpStatus: response.status, ...(!response.ok ? { reason: "http_request_rejected" } : {}) });
             if (response.redirected || (response.status >= 300 && response.status < 400)) throw new ConnectorDiagnosticError("connector_redirect_refused");
+            if (response.body) pendingBodies.add(requestId);
             return observeMcpResponse(response, log, fields);
           } catch (error) {
             log("error", requestStage, { ...diagnosticErrorFields(error), requestId, protocolPhase,
@@ -286,8 +304,13 @@ export async function createLinkingConnector(config: LinkingConnectorConfig, hos
       let code: unknown;
       try { code = error && typeof error === "object" ? Reflect.get(error, "code") : undefined; } catch { /* retain a safe failed outcome */ }
       const connectivityFailure = details.errorType === "TimeoutError" || code === -32001
+        || (toolCallStarted && (details.errorType === "AbortError" || invocation.signal?.aborted === true))
         || (details.errorCode !== undefined && ["ECONNREFUSED", "ECONNRESET", "ENOTFOUND", "EAI_AGAIN", "ETIMEDOUT", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT"].includes(details.errorCode))
         || (typeof code === "number" && code >= 500 && code <= 599);
+      if (media?.name === "media_confirm_request" && toolCallStarted && connectivityFailure) {
+        log("warn", "media.transport_outcome", { reason: "tool_outcome_unconfirmed", outcome: "unknown" });
+        return { status: "unknown" };
+      }
       if (!media && connectivityFailure) {
         const status = toolCallStarted ? "unknown" : "unavailable";
         log("warn", "link.transport_outcome", { reason: toolCallStarted ? "tool_outcome_unconfirmed" : "handshake_unavailable", outcome: status });
@@ -296,8 +319,15 @@ export async function createLinkingConnector(config: LinkingConnectorConfig, hos
       return failed;
     } finally {
       active = false;
-      log("debug", "mcp.close");
-      await client?.close().catch((error) => { log("warn", "mcp.close", diagnosticErrorFields(error)); });
+      const started = performance.now();
+      log("info", "mcp.close");
+      const slow = setTimeout(() => log("warn", "mcp.close_pending", { cleanupDurationMs: performance.now() - started }), 2000);
+      slow.unref();
+      try {
+        await client?.close();
+        log("info", "mcp.close_completed", { cleanupDurationMs: performance.now() - started });
+      } catch (error) { log("warn", "mcp.close_failed", { ...diagnosticErrorFields(error), cleanupDurationMs: performance.now() - started }); }
+      finally { clearTimeout(slow); }
     }
   }
 
@@ -306,7 +336,7 @@ export async function createLinkingConnector(config: LinkingConnectorConfig, hos
     startLink: (invocation: TrustedLinkInvocation) => invoke(invocation) as Promise<LinkOutcome>,
     async mediaTool(invocation: TrustedLinkInvocation, name: MediaTool, args: unknown): Promise<MediaOutcome> {
       const parsed = mediaToolArguments[name]?.safeParse(args);
-      if (!parsed?.success) { log("warn", "media.arguments", { reason: "tool_arguments_invalid" }); return failed; }
+      if (!parsed?.success) { connectorLog("warn", "media.arguments", { reason: "tool_arguments_invalid" }); return failed; }
       return mediaOutcome.parse(await invoke(invocation, undefined, undefined, { name, args: parsed.data }));
     },
     async confirmMediaMessage(invocation: TrustedLinkMessage & { replyTo?: string }, content: string): Promise<MediaOutcome | undefined> {
@@ -316,14 +346,14 @@ export async function createLinkingConnector(config: LinkingConnectorConfig, hos
         if (invocation.kind !== "group" || (invocation.replyTo !== undefined && !identity.safeParse(invocation.replyTo).success)) throw new ConnectorDiagnosticError("confirmation_context_invalid");
         const proof = eventSchema.parse({ eventId: invocation.eventId, eventTime: invocation.eventTime });
         return mediaOutcome.parse(await invoke(invocation, undefined, undefined, { name: "media_confirm_request", args: {}, source: { ...intent, ...proof } }));
-      } catch (error) { log("error", "media.confirmation", diagnosticErrorFields(error)); return failed; }
+      } catch (error) { connectorLog("error", "media.confirmation", diagnosticErrorFields(error)); return failed; }
     },
     /** Call only from an admitted inbound hook; unrelated content remains unclaimed. */
     async handlePrivateLinkMessage(invocation: TrustedLinkMessage, content: string): Promise<LinkOutcome | undefined> {
       if (typeof content !== "string" || content.length > 100) return undefined;
       const match = /^Link account ([a-f0-9]{64})$/.exec(content.trim());
       if (!match) return undefined;
-      if (invocation.kind !== "direct") { log("warn", "link.verification", { reason: "verification_not_private" }); return failed; }
+      if (invocation.kind !== "direct") { connectorLog("warn", "link.verification", { reason: "verification_not_private" }); return failed; }
       return invoke(invocation, match[1], { eventId: invocation.eventId, eventTime: invocation.eventTime }) as Promise<LinkOutcome>;
     },
   });
