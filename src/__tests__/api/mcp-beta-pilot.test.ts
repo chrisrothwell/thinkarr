@@ -8,7 +8,7 @@ import * as schema from "@/lib/db/schema";
 import { createTestDb, seedUser, type TestDb } from "../helpers/db";
 import { delegatedLinkFixture } from "../helpers/delegated-link";
 import { register } from "../../../connectors/openclaw/index";
-import type { DispatchContext, DispatchEvent, DispatchResult, GroupReplyContext, GroupReplyEvent, GroupReplyResult, OpenClawHost, Outbound } from "../../../connectors/openclaw/host";
+import type { DispatchContext, DispatchEvent, DispatchResult, GroupReplyContext, GroupReplyEvent, GroupReplyResult, OpenClawHost, Outbound, ToolHookContext, ToolHookEvent, ReplyPayloadEvent, MessageHookContext } from "../../../connectors/openclaw/host";
 
 let db: TestDb; let sqlite: Database.Database; let directory: string; let adminId: number;
 vi.mock("@/lib/db", () => ({ getDb: () => db, schema }));
@@ -88,6 +88,8 @@ async function fixture(link = true, debug = false) {
   const logger = { info: (line: string) => { logLines.push(line); }, warn: (line: string) => { logLines.push(line); }, error: (line: string) => { logLines.push(line); } };
   let hook: ((event: DispatchEvent, ctx: DispatchContext) => Promise<DispatchResult | void>) | undefined;
   let groupHook: ((event: GroupReplyEvent, ctx: GroupReplyContext<object>) => Promise<GroupReplyResult | void>) | undefined;
+  let toolGuard: ((event: ToolHookEvent, ctx: ToolHookContext) => Promise<{ block?: boolean } | void>) | undefined;
+  let replyGuard: ((event: ReplyPayloadEvent, ctx: MessageHookContext) => Promise<{ cancel?: boolean } | void>) | undefined;
   const sends: Array<{ text: string; to: string; messageId: string }> = [];
   const outbound: Outbound<object> = {
     resolveTarget: ({ to }) => ({ ok: true, to }),
@@ -102,10 +104,15 @@ async function fixture(link = true, debug = false) {
     pluginConfig: { credentialsFile, accounts: { "account-A": "+15555550100" }, pilotGroup: group, debug }, lifecycle: { signal: new AbortController().signal },
     runtime: { version: "2026.10.4", channel: { outbound: { loadAdapter: async () => outbound } } },
     registerTool: (factory, options) => { for (const name of options.names) factories.set(name, factory); },
-    on: (name, handler) => { if (name === "before_dispatch") hook = handler as NonNullable<typeof hook>; else groupHook = handler as NonNullable<typeof groupHook>; },
+    on: (name, handler) => {
+      if (name === "before_dispatch") hook = handler as NonNullable<typeof hook>;
+      else if (name === "reply_dispatch") groupHook = handler as NonNullable<typeof groupHook>;
+      else if (name === "before_tool_call") toolGuard = handler as NonNullable<typeof toolGuard>;
+      else if (name === "reply_payload_sending") replyGuard = handler as NonNullable<typeof replyGuard>;
+    },
   };
   register(api);
-  const tool = (name: string, args: unknown, conversation = group) => factories.get(name)!.create({ messageChannel: "whatsapp", agentAccountId: "account-A", requesterSenderId: sender, nativeChannelId: conversation, assertInvocationCurrent: () => {} })!.execute("call", args);
+  const tool = (name: string, args: unknown, conversation = group) => factories.get(name)!.create({ sessionKey: "session-pilot", messageChannel: "whatsapp", agentAccountId: "account-A", requesterSenderId: sender, nativeChannelId: conversation, assertInvocationCurrent: () => {} })!.execute("call", args);
   const nativeEvent = (text: string, id = "confirmation", time = Date.now(), replyTo?: string): GroupReplyEvent => ({
     ctx: { RawBody: text, Provider: "whatsapp", Surface: "whatsapp", OriginatingChannel: "whatsapp", AccountId: "account-A",
       From: group, ChatId: group, OriginatingTo: group, To: "+15555550100", ChatType: "group", SenderId: canonical,
@@ -130,7 +137,10 @@ async function fixture(link = true, debug = false) {
       { channelId: "whatsapp", accountId: "account-A", conversationId: "+15555550100", senderId: canonical, messageId: "link-event" })).toEqual({ handled: true });
     expect(sends.at(-1)).toMatchObject({ to: canonical, text: "Your Plex account is linked." });
   }
-  return { f, state, sends, fetchRequest, tool, dispatch, dispatchNative, nativeEvent, recordProcessed, markIdle, factories, logs: () => logLines.map((line) => JSON.parse(line.slice("[thinkarr] ".length))),
+  return { f, state, sends, fetchRequest, tool, dispatch, dispatchNative, nativeEvent, recordProcessed, markIdle, factories,
+    beforeTool: (name: string, params: Record<string, unknown>, runId = "run-pilot") => toolGuard!({ toolName: name, params }, { toolName: name, toolCallId: "call", sessionKey: "session-pilot", channelId: "whatsapp", runId }),
+    guardReply: (event: ReplyPayloadEvent, ctx: MessageHookContext) => replyGuard!(event, ctx),
+    logs: () => logLines.map((line) => JSON.parse(line.slice("[thinkarr] ".length))),
     select: (args: unknown = { id: 123, mediaType: "movie" }) => tool("thinkarr_media_select", args),
     raw: (name: string, args: Record<string, unknown> = {}, patch = {}) => f.signedRequest({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }, { sender: canonical, conversation: group, ...patch }).then(POST),
   };
@@ -196,11 +206,86 @@ describe("minimal beta pilot: real plugin, signed SDK, SQLite, mocked Seerr", ()
     const event: GroupReplyEvent = { ...source, originatingTo: `whatsapp:${group}`, ctx: { ...source.ctx,
       From: `whatsapp:${group}`, ChatId: `whatsapp:${group}`, OriginatingTo: `whatsapp:${group}`, To: group,
     } };
-    const noProof = { ...event, ctx: { ...event.ctx, SupplementalContext: undefined } };
-    expect(await h.dispatchNative(noProof)).toBeUndefined(); expect(h.state.writes).toHaveLength(0);
+    const explicitlyNotQuote = { ...event, ctx: { ...event.ctx, ReplyToIsQuote: false, SupplementalContext: undefined } };
+    expect(await h.dispatchNative(explicitlyNotQuote)).toBeUndefined(); expect(h.state.writes).toHaveLength(0);
     const conflicting = { ...event, ctx: { ...event.ctx, ReplyToIsQuote: true, SupplementalContext: { quote: { id: "other-prompt" } } } };
     expect(await h.dispatchNative(conflicting)).toBeUndefined(); expect(h.state.writes).toHaveLength(0);
     expect(await h.dispatchNative(event)).toMatchObject({ handled: true, queuedFinal: true }); expect(h.state.writes).toHaveLength(1);
+  });
+  it.each(["request it", "yes"])("accepts the pinned native reply ID without optional quote-body/flag metadata (%s)", async (text) => {
+    const h = await fixture(); await h.select(); const prompt = h.sends.at(-1)!;
+    const source = h.nativeEvent(text, "native-id-only", Date.now(), prompt.messageId);
+    expect(await h.dispatchNative({ ...source, ctx: { ...source.ctx, SupplementalContext: undefined, ReplyToIsQuote: undefined } })).toMatchObject({ handled: true, queuedFinal: true });
+    expect(h.state.writes).toHaveLength(1);
+    expect(h.state.writes[0].headers.get("X-Api-User")).toBe("7");
+    expect(h.state.writes[0].body).not.toHaveProperty("userId");
+  });
+  it("keeps an unrelated native reply ID unclaimed without optional quote metadata", async () => {
+    const h = await fixture(); await h.select(); const before = h.sends.length;
+    const source = h.nativeEvent("yes", "finance-native-id", Date.now(), "finance-prompt");
+    expect(await h.dispatchNative({ ...source, ctx: { ...source.ctx, SupplementalContext: undefined } })).toBeUndefined();
+    expect(h.state.writes).toHaveLength(0); expect(h.sends).toHaveLength(before);
+  });
+  it("blocks a model follow-up send only after the real native prompt is acknowledged in the same turn", async () => {
+    const h = await fixture(true, true);
+    const duplicate = { action: "send", target: group, channel: "whatsapp", message: "A confirmation prompt has been sent. Follow that prompt." };
+    await h.beforeTool("thinkarr_media_select", {});
+    expect(await h.beforeTool("message", duplicate)).toBeUndefined();
+    expect((await h.select()).details.status).toBe("prompt_sent");
+    expect(await h.beforeTool("message", duplicate)).toMatchObject({ block: true });
+    expect(await h.beforeTool("message", { ...duplicate, media: "", mediaUrls: [], buttons: [] })).toMatchObject({ block: true });
+    expect(await h.beforeTool("message", duplicate, "next-user-turn")).toBeUndefined();
+    expect(await h.beforeTool("message", { ...duplicate, target: "120300000099@g.us" })).toBeUndefined();
+    await h.beforeTool("splitwise_get_balances", {});
+    expect(await h.beforeTool("message", duplicate)).toBeUndefined();
+    expect(h.state.writes).toHaveLength(0);
+  });
+  it("cancels automatic text for the exact presented turn while preserving other routes, media, errors and later turns", async () => {
+    const h = await fixture(); await h.beforeTool("thinkarr_media_select", {}); await h.select();
+    const event: ReplyPayloadEvent = { runId: "run-pilot", sessionKey: "session-pilot", channel: "whatsapp", kind: "final", payload: { text: "Follow that prompt to submit your request." } };
+    const ctx: MessageHookContext = { channelId: "whatsapp", accountId: "account-A", conversationId: group, sessionKey: "session-pilot" };
+    expect(await h.guardReply(event, ctx)).toMatchObject({ cancel: true });
+    for (const changed of [ { ...event, runId: undefined }, { ...event, runId: "new-turn" }, { ...event, sessionKey: "other-session" },
+      { ...event, payload: { ...event.payload, isError: true } }, { ...event, payload: { ...event.payload, presentation: { title: "Widget" } } },
+      { ...event, payload: { ...event.payload, mediaUrl: "https://media.invalid/item" } } ]) {
+      expect(await h.guardReply(changed, ctx)).toBeUndefined();
+    }
+    expect(await h.guardReply(event, { ...ctx, accountId: "other" })).toBeUndefined();
+    expect(await h.guardReply(event, { ...ctx, conversationId: "120300000099@g.us" })).toBeUndefined();
+    await h.beforeTool("splitwise_get_balances", {});
+    expect(await h.guardReply(event, ctx)).toBeUndefined();
+  });
+  it("does not suppress a failure, an expired presentation guard or a mixed-workflow turn", async () => {
+    const h = await fixture();
+    const send = { action: "send", target: group, channel: "whatsapp", message: "A useful response" };
+    await h.beforeTool("thinkarr_media_select", {}); h.state.failDelivery = true;
+    expect((await h.select()).details.status).toBe("failed");
+    expect(await h.beforeTool("message", send)).toBeUndefined();
+    h.state.failDelivery = false;
+    await h.beforeTool("splitwise_get_balances", {}); await h.beforeTool("thinkarr_media_select", {}); await h.select();
+    expect(await h.beforeTool("message", send)).toBeUndefined();
+    await h.beforeTool("thinkarr_media_select", {}, "media-only-run"); await h.select();
+    expect(await h.beforeTool("message", send, "media-only-run")).toMatchObject({ block: true });
+    vi.setSystemTime(Date.now() + 120_001);
+    expect(await h.beforeTool("message", send, "media-only-run")).toBeUndefined();
+  });
+  it("does not suppress another account, recipient, action or rich message in a presentation turn", async () => {
+    const h = await fixture(); await h.beforeTool("thinkarr_media_select", {}); await h.select();
+    const send = { action: "send", target: group, channel: "whatsapp", message: "Text" };
+    for (const patch of [{ accountId: "other" }, { target: "+15555550200" }, { channel: "telegram" }, { action: "react" },
+      { media: "https://media.invalid/item" }, { filePath: "file" }, { presentation: {} }, { target: undefined }]) {
+      expect(await h.beforeTool("message", { ...send, ...patch })).toBeUndefined();
+    }
+  });
+  it("rejects old native-only quote IDs after a replacement prompt and accepts only the current one", async () => {
+    const h = await fixture(); await h.select(); const old = h.sends.at(-1)!.messageId;
+    await h.select({ id: 124, mediaType: "movie" }); const current = h.sends.at(-1)!.messageId;
+    const source = h.nativeEvent("request it", "old-native-only", Date.now(), old);
+    expect(await h.dispatchNative({ ...source, ctx: { ...source.ctx, SupplementalContext: undefined } })).toMatchObject({ handled: true });
+    expect(h.state.writes).toHaveLength(0);
+    const correct = h.nativeEvent("request it", "current-native-only", Date.now(), current);
+    expect(await h.dispatchNative({ ...correct, ctx: { ...correct.ctx, SupplementalContext: undefined } })).toMatchObject({ handled: true });
+    expect(h.state.writes).toHaveLength(1); expect(h.state.writes[0].body.mediaId).toBe(124);
   });
   it("cancels a closed native turn before any request or result delivery", async () => {
     const h = await fixture(); await h.select(); const before = h.sends.length;

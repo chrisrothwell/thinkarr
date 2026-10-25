@@ -5,12 +5,14 @@
 import type { Lifecycle } from "./lifecycle.js";
 export type ToolContext<C extends object> = {
   config?: C; runtimeConfig?: C;
+  sessionKey?: string;
   messageChannel?: string; agentAccountId?: string; nativeChannelId?: string; requesterSenderId?: string;
   deliveryContext?: { channel?: string; accountId?: string; to?: string };
   assertInvocationCurrent: () => void;
 };
 export type LinkTool = {
   name: string; label: string; description: string;
+  catalogMode?: "direct-only";
   parameters: { type: "object"; properties: Record<string, unknown>; additionalProperties: false; required?: string[] };
   execute: (id: string, args: unknown, signal?: AbortSignal) => Promise<{
     content: Array<{ type: "text"; text: string }>; details: { status: string };
@@ -42,6 +44,10 @@ export type GroupReplyContext<C extends object> = {
   markIdle: (reason: string) => void;
 };
 export type GroupReplyResult = { handled: boolean; queuedFinal: boolean; counts: { tool: number; block: number; final: number } };
+export type ToolHookContext = { runId?: string; toolCallId?: string; sessionKey?: string; channelId?: string; toolName: string };
+export type ToolHookEvent = { toolName: string; params: Record<string, unknown>; runId?: string; toolCallId?: string };
+export type ReplyPayloadEvent = { runId?: string; sessionKey?: string; channel?: string; kind: string; payload: { text?: string; isError?: boolean; isReasoning?: boolean; isCompactionNotice?: boolean; mediaUrl?: string; mediaUrls?: string[]; presentation?: unknown; interactive?: unknown; channelData?: unknown } };
+export type MessageHookContext = { channelId: string; accountId?: string; conversationId?: string; sessionKey?: string; runId?: string };
 export type Outbound<C extends object> = {
   resolveTarget?: (params: { cfg: C; to: string; accountId: string; mode: "explicit"; allowFrom: string[] }) =>
     { ok: true; to: string } | { ok: false; error: Error };
@@ -59,5 +65,7 @@ export type OpenClawHost<C extends object> = {
   on: {
     (name: "before_dispatch", handler: (event: DispatchEvent, ctx: DispatchContext) => Promise<DispatchResult | void>, opts: { timeoutMs: number }): void;
     (name: "reply_dispatch", handler: (event: GroupReplyEvent, ctx: GroupReplyContext<C>) => Promise<GroupReplyResult | void>, opts: { timeoutMs: number }): void;
+    (name: "before_tool_call", handler: (event: ToolHookEvent, ctx: ToolHookContext) => Promise<{ block?: boolean; blockReason?: string } | void>, opts: { timeoutMs: number }): void;
+    (name: "reply_payload_sending", handler: (event: ReplyPayloadEvent, ctx: MessageHookContext) => Promise<{ cancel?: boolean; reason?: string } | void>, opts: { timeoutMs: number }): void;
   };
 };
