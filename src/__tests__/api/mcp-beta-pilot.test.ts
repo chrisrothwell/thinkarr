@@ -138,7 +138,7 @@ async function fixture(link = true, debug = false) {
     expect(sends.at(-1)).toMatchObject({ to: canonical, text: "Your Plex account is linked." });
   }
   return { f, state, sends, fetchRequest, tool, dispatch, dispatchNative, nativeEvent, recordProcessed, markIdle, factories,
-    beforeTool: (name: string, params: Record<string, unknown>, runId = "run-pilot") => toolGuard!({ toolName: name, params }, { toolName: name, toolCallId: "call", sessionKey: "session-pilot", channelId: "whatsapp", runId }),
+    beforeTool: (name: string, params: Record<string, unknown>, runId = "run-pilot", toolKind?: "code_mode_exec") => toolGuard!({ toolName: name, params, toolKind }, { toolName: name, toolCallId: "call", sessionKey: "session-pilot", channelId: "whatsapp", runId, toolKind }),
     guardReply: (event: ReplyPayloadEvent, ctx: MessageHookContext) => replyGuard!(event, ctx),
     logs: () => logLines.map((line) => JSON.parse(line.slice("[thinkarr] ".length))),
     select: (args: unknown = { id: 123, mediaType: "movie" }) => tool("thinkarr_media_select", args),
@@ -147,6 +147,32 @@ async function fixture(link = true, debug = false) {
 }
 
 describe("minimal beta pilot: real plugin, signed SDK, SQLite, mocked Seerr", () => {
+  it("keeps admitted media descriptors eligible for the host Code Mode catalog without bypassing actor admission", async () => {
+    const h = await fixture();
+    for (const name of ["thinkarr_media_search", "thinkarr_media_details", "thinkarr_media_select"]) {
+      const create = h.factories.get(name)!.create;
+      const admitted = create({ sessionKey: "session-pilot", messageChannel: "whatsapp", agentAccountId: "account-A", requesterSenderId: sender, nativeChannelId: group, assertInvocationCurrent: () => {} });
+      // The pinned host excludes direct-only descriptors from Code Mode globals
+      // and catalog.search. Descriptor eligibility is part of the adapter contract.
+      expect(admitted?.name).toBe(name); expect(admitted?.catalogMode).not.toBe("direct-only");
+      expect(create({ sessionKey: "session-pilot", assertInvocationCurrent: () => {} })).toBeNull();
+    }
+  });
+  it("guards a real native selection through host-discriminated Code Mode wrappers, while shell/finance work stays unmuted", async () => {
+    const h = await fixture();
+    await h.beforeTool("exec", { code: "native media workflow" }, "run-pilot", "code_mode_exec");
+    await h.beforeTool("thinkarr_media_select", {});
+    expect((await h.select()).details.status).toBe("prompt_sent");
+    await h.beforeTool("exec", { code: "nested message workflow" }, "run-pilot", "code_mode_exec");
+    const duplicate = { action: "send", target: group, channel: "whatsapp", message: "Follow the confirmation prompt." };
+    expect(await h.beforeTool("message", duplicate)).toMatchObject({ block: true });
+    await h.beforeTool("splitwise_get_balances", {});
+    expect(await h.beforeTool("message", duplicate)).toBeUndefined();
+    await h.beforeTool("thinkarr_media_select", {}, "shell-run"); await h.select();
+    await h.beforeTool("exec", { command: "shell workflow" }, "shell-run");
+    expect(await h.beforeTool("message", duplicate, "shell-run")).toBeUndefined();
+    expect(h.state.writes).toHaveLength(0);
+  });
   it("sends one self-contained prompt, then uses admitted native group facts despite a bot-address legacy conversation", async () => {
     const h = await fixture(true, true); const before = h.sends.length;
     const selected = await h.select();

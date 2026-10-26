@@ -23,10 +23,10 @@ npm run build:openclaw
 npm pack ./connectors/openclaw
 ```
 
-Install the resulting `thinkarr-openclaw-0.3.9.tgz` through the supported local archive mechanism:
+Install the resulting `thinkarr-openclaw-0.3.10.tgz` through the supported local archive mechanism:
 
 ```bash
-openclaw plugins install npm-pack:/path/to/thinkarr-openclaw-0.3.9.tgz --no-enable
+openclaw plugins install npm-pack:/path/to/thinkarr-openclaw-0.3.10.tgz --no-enable
 ```
 
 The Control UI can configure, enable and reload an installed plugin. Its catalog installer does not accept arbitrary local archives; a CLI or the browser's operator Terminal is needed for this archive installation. The package is not currently advertised as a published npm/ClawHub release.
@@ -133,7 +133,9 @@ The installed [Thinkarr interaction skill](skills/thinkarr/SKILL.md) is declared
 
 The selection tool sends one self-contained native confirmation message. Its `prompt_sent` result explicitly tells the model to end with the host's `NO_REPLY` marker rather than send a second confirmation/instruction. Reply directly to the delivered prompt with `request it`; the native handler submits and sends one status. Instructions guide model behavior but do not authorize requests or replace the native confirmation checks. Verify model adherence in the live pilot.
 
-Companion 0.3.9 additionally guards duplicate text at the host tool/reply boundaries for a correlated media-only turn, after the native prompt receipt **and** backend presentation acknowledgement succeed. The host's exact run/call/session facts associate that execution with the prompt; neither model text nor a session-wide timeout supplies this association. A subsequent text-only WhatsApp `message` send to the same group/account is blocked with `NO_REPLY` guidance, and an exactly correlated automatic reply is cancelled. New turns, other recipients/accounts, rich/error payloads and mixed workflows (including finance tools) remain unaffected. Missing exact correlation leaves delivery unchanged and logs `presentation.guard_unavailable`; `guard_armed` and `duplicate_tool_blocked` / `duplicate_reply_cancelled` show actual enforcement. State is bounded, expires after two minutes and clears on lifecycle abort; it is never confirmation or submission authority. Native media tools are direct-only so catalog bridges preserve their model-facing result contract.
+Companion 0.3.9 additionally guards duplicate text at the host tool/reply boundaries for a correlated media-only turn, after the native prompt receipt **and** backend presentation acknowledgement succeed. The host's exact run/call/session facts associate that execution with the prompt; neither model text nor a session-wide timeout supplies this association. A subsequent text-only WhatsApp `message` send to the same group/account is blocked with `NO_REPLY` guidance, and an exactly correlated automatic reply is cancelled. New turns, other recipients/accounts, rich/error payloads and mixed workflows (including finance tools) remain unaffected. Missing exact correlation leaves delivery unchanged and logs `presentation.guard_unavailable`; `guard_armed` and `duplicate_tool_blocked` / `duplicate_reply_cancelled` show actual enforcement. State is bounded, expires after two minutes and clears on lifecycle abort; it is never confirmation or submission authority.
+
+Native media tools participate in the host's normal catalog, including Code Mode callable globals and `catalog.search` handles. They must not use `catalogMode: "direct-only"`: that removes them from the pinned host's JavaScript catalog even if a separate direct descriptor is visible. Host-discriminated `code_mode_exec` wrapper calls do not turn a media-only run into a mixed workflow; every nested child still runs normal tool/identity/presentation checks. Shell tools merely named `exec`, and unrelated finance tools, do disable presentation guarding. A missing Code Mode binding is not evidence that a separate model-callable confirmation tool is required. Only an admitted native selection sends the prompt, and the participant's subsequent WhatsApp reply drives native confirmation.
 
 The pinned WhatsApp ingress puts the provider quote ID in post-admission `ReplyToId`, but context-visibility filtering can remove `SupplementalContext.quote` and the optional quote flag may be absent. This native ID is accepted after the full admission/route checks, without demanding a quote body or extra flag. Conflicting supplemental IDs and explicit non-quote flags are rejected. Server-owned exact-current-prompt/replacement/expiry/replay rules still decide whether that native ID authorizes a request; an unrelated finance quote cannot authorize media.
 
@@ -170,4 +172,4 @@ Existing `0.2` credentials-file configurations remain a compatibility path, not 
 
 The SDK compatibility check, offline route tests and package build do not prove live provider admission, identity aliases, receipts or handset behavior. Verify the authorized integration in its intended conversation after provisioning. Context-free tool catalogs can omit these factories because they have no admitted human sender; repeated reloads or broader permissions do not supply that identity. Follow the bounded readiness procedure in SETUP.md.
 
-Companion 0.3.9 remains compatible with the existing signed beta.10/beta.11 API; the quote and duplicate-response fixes require the companion update, not a new backend grant or participant binding. Keep enrollment, native credentials, account bindings and operation grants when upgrading.
+Companion 0.3.10 remains compatible with the existing signed beta.10/beta.11 API; the catalog, quote and duplicate-response fixes require the companion update, not a new backend grant or participant binding. Keep enrollment, native credentials, account bindings and operation grants when upgrading.

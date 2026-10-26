@@ -29,6 +29,10 @@ export function createPromptReplyGuard<C extends object>(api: OpenClawHost<C>, g
       let run = runs.get(runId);
       if (run && run.sessionKey !== sessionKey) return;
       if (!run) { run = { sessionKey, expires: Date.now() + 120_000, mixed: false, armed: false }; runs.set(runId, run); }
+      // Code Mode is a host-discriminated transport for nested calls, not a
+      // separate workflow. Its child tools still run all the checks below.
+      // A shell tool merely named exec does not receive this exception.
+      if (context.toolKind === "code_mode_exec" && event.toolKind === "code_mode_exec") return;
       if (event.toolName === "thinkarr_media_select") {
         calls.set(JSON.stringify([sessionKey, toolCallId]), { runId, sessionKey, expires: run.expires });
         return;
