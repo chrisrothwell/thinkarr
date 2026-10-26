@@ -24,6 +24,7 @@ Use the installed Thinkarr companion tools for the current admitted participant.
 - For `private_delivery_unconfirmed`, use the returned concise check-private-chat guidance once. Do not turn it into "I'm not sure if you got it", claim confirmed delivery, describe provider identifiers/receipts, or immediately generate another link. If the message arrived, the participant should use it.
 - `linked` means the backend confirmed the binding; opening the browser link or generating a code alone does not. The participant follows the browser-generated private reply; keep codes and URLs out of group/model text.
 - For `unavailable`, explain that the current step timed out; preserve an arrived, still-valid link. For `unknown`, have the account-link status checked before another attempt. Never rotate keys or reenroll as an ordinary linking repair.
+- For `permission_required`, use the returned administrator operation-allowlist guidance once. This is a verified missing linking grant, not an invalid verification code or a reason to issue a replacement private link. Keep the current enrollment and keys.
 
 ## Status and operator action
 

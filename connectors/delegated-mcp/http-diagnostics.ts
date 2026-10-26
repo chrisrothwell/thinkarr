@@ -2,6 +2,8 @@ import type { DiagnosticFields, DiagnosticSink } from "./diagnostics.js";
 
 export const MCP_REQUEST_ID_HEADER = "X-Thinkarr-Request-Id";
 export const MCP_TIMING_DEBUG_HEADER = "X-Thinkarr-Debug-Timing";
+export const MCP_ERROR_CODE_HEADER = "X-Thinkarr-Error-Code";
+export const MCP_OPERATION_NOT_ALLOWED = "operation_not_allowed";
 export function parseMcpRequestId(value: unknown): string | undefined {
   return typeof value === "string" && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(value) ? value.toLowerCase() : undefined;
 }

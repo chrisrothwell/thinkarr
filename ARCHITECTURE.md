@@ -22,6 +22,7 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 ├── Dockerfile                       # Multi-stage Alpine/Node build
 ├── entrypoint.sh                    # PUID/PGID user creation + server start
 ├── docker-compose.yml               # Development/example compose
+├── PRODUCTION_RELEASE.md            # Release gates, paired artifacts, owner acceptance, rollback and upgrade cadence
 ├── connectors/
 │   ├── delegated-mcp/
 │   │   ├── linking.ts                # Harness-neutral signed MCP client, private link and prompt receipt boundaries
@@ -44,6 +45,8 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 │       ├── README.md                # Companion plugin overview, compatibility and native-secret configuration
 │       └── SETUP.md                 # Packaged, discoverable agent-led API setup and owner authorization guide
 ├── scripts/check-openclaw-sdk.mjs    # Integrity-pinned SDK declarations-only compatibility check
+├── scripts/package-openclaw.mjs      # Clean-consumer archive audit/smoke, checksum and app/host compatibility metadata
+├── scripts/check-codeql-sarif.mjs     # Fail-closed error-level finding gate for CodeQL's saved SARIF
 ├── drizzle/
 │   ├── 0000_short_gressill.sql      # Initial migration (5 tables)
 │   ├── 0001_add_message_duration.sql
@@ -270,6 +273,7 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 
 | Method | Route | Purpose |
 |--------|-------|---------|
+| GET | `/api/health` | Zero-row probe of all exported schema tables/columns, including delegated MCP; fixed 200/503 status without public database details |
 | GET | `/api/setup` | Check setup status |
 | POST | `/api/setup` | Save initial config |
 | POST | `/api/setup/test-connection` | Test connectivity + capability probe |
@@ -385,7 +389,11 @@ Lifecycle changes and credential replacement occur in SQLite transactions with m
 Chat and realtime event callbacks read current conversation/options/connection values from refs synchronized in `useLayoutEffect`, after React commits and before browser events. Rendering does not mutate these refs, so an abandoned concurrent render cannot publish uncommitted callback state. Conversation-list effects update state from fetch promise callbacks; a missing channel-link token derives the expired view directly rather than scheduling a synchronous effect update.
 
 ### Dependency Audit Scope
-The lockfile is the deployment dependency contract. The CI production audit blocks on every severity and updates must use fixed compatible dependency versions without bypassing the gate. Development-only findings are reported separately. CI uses Node 22 and the Docker image uses Node 26; runtime dependencies must support both.
+The lockfile is the application deployment dependency contract. The CI production audit blocks on every severity and updates must use fixed compatible dependency versions without bypassing the gate. Development-only findings are reported separately. App CI and Docker use Node 26. The companion's declared runtime engine range is checked again during clean-consumer installation of its actual npm archive.
+
+`pack:openclaw` builds and validates the distributable with no borrowed workspace dependencies: archive-file checks, clean production-only installation/audit, packed-runtime import, synchronous registration, lifecycle-version/tool/hook/skill checks and context-free actor rejection. Registration smoke forbids network I/O and does not exercise live provider identity or host upgrades. The same archive is exported with SHA256 and app/companion/pinned-host/source-commit metadata. PR/beta workflows retain it as an artifact; stable tags matching a stable package version on main publish immutable companion assets after image gates pass. Image UI versions come from package.json, including beta iterations. Human-controlled branch promotion and live acceptance remain separate from packaging; PRODUCTION_RELEASE.md defines those gates and rollback.
+
+The required CodeQL job retains `upload: false` and saves SARIF artifacts. An explicit checker enforces effective result/rule-default `error` levels and rejects missing, malformed or failed analysis reports; it does not rely on an unsupported analyze-action input. Report snippets, arbitrary messages and file paths are not printed by the gate. GitHub's default main-branch scanning continues to own Security-tab uploads.
 
 Transitive build-tool refreshes retain the framework's dependency constraints and keep Vitest and its coverage provider on the same release. Browser-target metadata, esbuild platform binaries and PostCSS resolutions are pinned together in the lockfile.
 
@@ -411,6 +419,8 @@ The plugin manifest declares `connection.bearer` and `connection.privateKeyPem` 
 
 ### Signed Service MCP Transport
 `link-dispatch.ts` creates a separate official SDK server and stateless Streamable HTTP transport per request. It accepts at most 64 KiB and only non-batch JSON-RPC initialize, initialized notification, ping, tools/list and tools/call. The same current scope/source/channel policy controls discovery and direct execution, with exact tool names and strict argument schemas. Launch support is WhatsApp: `account_link_start` accepts tool-source calls or the exact `link-start` command; `account_link_confirm` requires a direct-message source and signed `link-confirm:<code>` intent matching its sole code argument. Model-supplied identity, recipient and context selectors are rejected. Authorization failures return sanitized HTTP 403, including denials detected during SDK execution; business failures use safe MCP `isError` results. Responses use no-store/no-referrer headers.
+
+For an authenticated, correctly shaped linking call missing only its integration operation grant, HTTP 403 additionally carries the fixed `operation_not_allowed` JSON code and `X-Thinkarr-Error-Code` header. Other signature/source/argument/policy denials remain generic. The connector recognizes only that exact marker on a linking tool-call 403 and projects `permission_required` with operation-allowlist repair guidance, without parsing upstream error text, creating another challenge or replacing enrollment/keys. Older app responses retain the generic failure behavior. Correcting a linking grant preserves any otherwise valid pending link and existing binding.
 
 An unlinked start returns only `{linked:false, privateDeliveryRequired:true}` in model-facing content. The URL, authenticated channel/account/recipient and expiry are carried separately in `_meta["thinkarr/private-delivery"]` for the trusted connector. MCP metadata is not itself a privacy boundary: the trusted connector consumes this data privately, strips it from model context and confirms delivery before reporting success. Completion returns only `{linked:true}` and atomically deduplicates the provider event independently of the HTTP assertion nonce. Neither handler reaches the personal/raw tool registry.
 
@@ -446,6 +456,8 @@ The plugin manifest declares its packaged Thinkarr interaction skill. Tool descr
 Native media tools remain eligible for normal catalog assembly and Code Mode globals/search; `direct-only` is not used because the pinned host excludes those descriptors from its JavaScript catalog. A bounded two-minute presentation guard correlates host `before_tool_call` run/call/session facts with the actual successful native selection execution. Only after native receipt and backend presentation acknowledgement does it block a redundant text-only `message` send to the same WhatsApp group/account or cancel an exactly correlated automatic reply. Host-discriminated `code_mode_exec` wrappers are transport, not mixed work; all nested child tools still run their normal checks. New turns, missing correlation, other routes/accounts, media/error payloads and mixed-tool workflows remain unmuted; shell `exec` and unrelated finance tools disable guarding for that run. Abort clears ephemeral state; no background timer, session-wide mute, inferred group authority or request permission is introduced. Value-free armed/unavailable/block/cancel diagnostics distinguish enforced presentation from model guidance.
 
 The canonical sender namespace is the WhatsApp PN JID, normalizing exact E.164/PN-JID host aliases. Validated native `@g.us` addresses identify groups; direct addresses must match the sender. Session keys serve only exact-turn presentation correlation, never identity or group authority; latest-sender caches are unused. Unresolved LID, hosted/device-scoped and unknown addresses are rejected rather than guessed; verified provider alias support and reassignment recovery remain launch dependencies.
+
+Presentation correlation respects the pinned hook-specific routing semantics: tool-hook `channelId` is the native conversation (`currentChannelId`), while reply-hook `channelId` is the provider. An armed marker requires native-group tool facts and an actual successful presentation; automatic-reply cancellation additionally requires exact run/session/provider/account and the group or that account's configured receiving-bot alias from the legacy reply mapper. Other peers/groups/bots remain unmuted. The observed legacy `plex_check_availability` and `overseerr_search` context reads (including namespaced forms) do not make the media presentation mixed; this classification neither exposes tools nor grants identity/availability/submission authority. Personal-history, mutation, finance and unknown tools still disable guarding, with value-free mixed/unmatched diagnostics.
 
 Private delivery loads the registered WhatsApp outbound adapter, validates its resolved destination against the captured sender, pins the receiving account and checks returned provider message ID/actual destination. It uses the pinned implementation's `onPlatformSendDispatch` fence before each physical send/chunk to recheck live authority and cancellation; it does not rely on the handoff callback that this WhatsApp implementation does not forward. There is no group/current-route helper or automatic retry/public fallback. The inbound hook checks explicit direct kind, matching sender/message metadata, timestamp and private conversation, returns a safe handled outcome, and leaves finance/unrelated messages unclaimed. Plugin disposal, tool invocation guards and bounded operation signals fence retained work.
 

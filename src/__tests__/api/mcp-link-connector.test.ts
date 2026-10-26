@@ -64,6 +64,28 @@ async function fixture() {
 }
 
 describe("trusted linking connector core", () => {
+  it("projects a confirmed missing linking grant without a private send or credential replacement, then works after repair", async () => {
+    const { f, config } = await fixture(); const sendPrivate = vi.fn(async (d: PrivateLinkDelivery) => receipt(d));
+    db.update(schema.mcpServicePrincipals).set({ allowedOperations: "[]" }).where(eq(schema.mcpServicePrincipals.id, f.principal.id)).run();
+    const connector = await createLinkingConnector(config, { sendPrivate, fetch: routeFetch });
+    expect(await connector.startLink(actor())).toEqual({ status: "permission_required" });
+    expect(sendPrivate).not.toHaveBeenCalled(); expect(db.select().from(schema.mcpLinkChallenges).all()).toHaveLength(0);
+    db.update(schema.mcpServicePrincipals).set({ allowedOperations: JSON.stringify(["account_link_start", "account_link_confirm"]) }).where(eq(schema.mcpServicePrincipals.id, f.principal.id)).run();
+    expect(await connector.startLink(actor())).toEqual({ status: "private_link_sent" });
+    expect(sendPrivate).toHaveBeenCalledOnce();
+  });
+  it.each(["unknown", "initialize-only", "wrong-status"])("does not infer missing grants from an unrecognized or misplaced server marker (%s)", async (kind) => {
+    const { config } = await fixture(); const lines: string[] = [];
+    const trace = createDiagnosticTrace({ info: (s) => lines.push(s), warn: (s) => lines.push(s), error: (s) => lines.push(s) }, true, "link_start");
+    const connector = await createLinkingConnector(config, { diagnostics: trace.log, sendPrivate: async (d) => receipt(d), fetch: async (input, init) => {
+      const method = JSON.parse(String(init?.body)).method;
+      if (kind !== "initialize-only" && method !== "tools/call") return routeFetch(input, init);
+      return new Response("SECRET error body", { status: kind === "wrong-status" ? 401 : 403,
+        headers: { "X-Thinkarr-Error-Code": kind === "unknown" ? "SECRET unknown reason" : "operation_not_allowed" } });
+    } });
+    expect(await connector.startLink(actor())).toEqual({ status: "failed" });
+    expect(lines.join()).not.toContain("SECRET");
+  });
   it("reports slow client/transport cleanup without returning early or changing a delivered outcome", async () => {
     const { config } = await fixture(); vi.useFakeTimers();
     const started = Promise.withResolvers<void>(); const release = Promise.withResolvers<void>();

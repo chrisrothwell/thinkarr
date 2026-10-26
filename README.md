@@ -77,6 +77,8 @@ On first launch, the setup wizard will guide you through configuring:
 
 Configure delegated WhatsApp integrations in **Settings → MCP → Service integrations**, including the group, public linking origin, bot number and enable/disable state. **Create setup code** authorizes one API enrollment; public audience metadata is available without login at `/api/mcp/info`. No container environment changes or restart are required. See the packaged [agent setup guide](connectors/openclaw/SETUP.md) for the companion plugin and native OpenClaw secrets.
 
+Validated companion archives and checksums are attached to stable GitHub Releases; beta/PR builds expose companion workflow artifacts with app/host compatibility metadata. See [production release and upgrade acceptance](PRODUCTION_RELEASE.md) for the matching-image/companion rollout, acceptance and rollback procedure.
+
 ## Setting up LLMs
 
 Depending on your preference and willingness to pay, you can sign up for and configure API keys for any OpenAI-compatible model and endpoint.

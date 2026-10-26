@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type Database from "better-sqlite3";
 import Ajv from "ajv";
+import { eq } from "drizzle-orm";
 import { chmod, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -94,6 +95,14 @@ async function prepareVerification(h: Awaited<ReturnType<typeof fixture>>) {
 }
 
 describe("OpenClaw linking adapter", () => {
+  it("gives actionable operation-allowlist guidance for confirmed missing linking permissions without asking for a replacement link", async () => {
+    const h = await fixture(); db.update(schema.mcpServicePrincipals).set({ allowedOperations: "[]" }).where(eq(schema.mcpServicePrincipals.id, h.f.principal.id)).run();
+    register(h.api); const result = await h.create()!.execute("missing-link-permission", {});
+    expect(result.details.status).toBe("permission_required");
+    expect(result.content[0].text).toContain("Operation allowlist"); expect(result.content[0].text).toContain("account_link_start and account_link_confirm");
+    expect(result.content[0].text).toContain("Keep the existing setup"); expect(result.content[0].text).not.toContain("ask for a new private link");
+    expect(h.sends).toHaveLength(0);
+  });
   it.each(["missing", "lid", "other"])("directs the user to private instructions without claiming verified delivery or retrying an unsupported receipt (%s)", async (kind) => {
     const h = await fixture(true);
     const destination = kind === "missing" ? undefined : kind === "lid" ? "999999@lid" : "unrecognized-provider-target";

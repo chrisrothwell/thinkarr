@@ -138,7 +138,8 @@ async function fixture(link = true, debug = false) {
     expect(sends.at(-1)).toMatchObject({ to: canonical, text: "Your Plex account is linked." });
   }
   return { f, state, sends, fetchRequest, tool, dispatch, dispatchNative, nativeEvent, recordProcessed, markIdle, factories,
-    beforeTool: (name: string, params: Record<string, unknown>, runId = "run-pilot", toolKind?: "code_mode_exec") => toolGuard!({ toolName: name, params, toolKind }, { toolName: name, toolCallId: "call", sessionKey: "session-pilot", channelId: "whatsapp", runId, toolKind }),
+    // Pinned tool hooks carry currentChannelId: the native group, NOT provider.
+    beforeTool: (name: string, params: Record<string, unknown>, runId = "run-pilot", toolKind?: "code_mode_exec", channelId: string | undefined = group) => toolGuard!({ toolName: name, params, toolKind }, { toolName: name, toolCallId: "call", sessionKey: "session-pilot", channelId, runId, toolKind }),
     guardReply: (event: ReplyPayloadEvent, ctx: MessageHookContext) => replyGuard!(event, ctx),
     logs: () => logLines.map((line) => JSON.parse(line.slice("[thinkarr] ".length))),
     select: (args: unknown = { id: 123, mediaType: "movie" }) => tool("thinkarr_media_select", args),
@@ -172,6 +173,56 @@ describe("minimal beta pilot: real plugin, signed SDK, SQLite, mocked Seerr", ()
     await h.beforeTool("exec", { command: "shell workflow" }, "shell-run");
     expect(await h.beforeTool("message", duplicate, "shell-run")).toBeUndefined();
     expect(h.state.writes).toHaveLength(0);
+  });
+  it("cancels the redundant automatic reply after the live-shaped Code Mode media reads and native prompt, then submits once", async () => {
+    const h = await fixture(true, true); const before = h.sends.length;
+    await h.beforeTool("exec", { code: "media lookup" }, "run-pilot", "code_mode_exec");
+    await h.beforeTool("mcp_thinkarr_plex_check_availability", {});
+    await h.beforeTool("exec", { code: "catalog lookup" }, "run-pilot", "code_mode_exec");
+    await h.beforeTool("mcp_thinkarr_overseerr_search", { query: "Movie" });
+    await h.beforeTool("exec", { code: "native selection" }, "run-pilot", "code_mode_exec");
+    await h.beforeTool("thinkarr_media_select", {});
+    expect((await h.select()).details.status).toBe("prompt_sent");
+    expect(h.sends).toHaveLength(before + 1); const prompt = h.sends.at(-1)!;
+    expect(h.logs().some((r) => r.stage === "presentation.guard_armed")).toBe(true);
+    const event: ReplyPayloadEvent = { runId: "run-pilot", sessionKey: "session-pilot", channel: "whatsapp", kind: "final", payload: { text: "Follow the confirmation prompt." } };
+    // Pinned reply hooks use provider channelId and may expose receiving bot To
+    // as conversationId, rather than the native group used by tool hooks.
+    const ctx: MessageHookContext = { channelId: "whatsapp", accountId: "account-A", conversationId: "+15555550100", sessionKey: "session-pilot" };
+    expect(await h.guardReply(event, ctx)).toMatchObject({ cancel: true });
+    expect(await h.guardReply(event, { ...ctx, conversationId: "15555550100@s.whatsapp.net" })).toMatchObject({ cancel: true });
+    expect(h.sends).toHaveLength(before + 1);
+    const native = h.nativeEvent("request it", "live-shaped-confirmation", Date.now(), prompt.messageId);
+    expect(await h.dispatchNative({ ...native, ctx: { ...native.ctx, SupplementalContext: undefined } })).toMatchObject({ handled: true, queuedFinal: true });
+    expect(h.sends).toHaveLength(before + 2); expect(h.state.writes).toHaveLength(1);
+    expect(h.state.writes[0].headers.get("X-Api-User")).toBe("7"); expect(h.state.writes[0].body).not.toHaveProperty("userId");
+  });
+  it.each(["whatsapp", "120300000099@g.us", "", "+15555550100"])("does not arm presentation from a provider label or wrong/missing native group (%s)", async (channelId) => {
+    const h = await fixture(true, true);
+    await h.beforeTool("thinkarr_media_select", {}, "run-pilot", undefined, channelId);
+    await h.select();
+    expect(h.logs().some((r) => r.stage === "presentation.guard_armed")).toBe(false);
+    expect(h.logs().find((r) => r.reason === "host_tool_conversation_mismatch")).toBeDefined();
+    const event: ReplyPayloadEvent = { runId: "run-pilot", sessionKey: "session-pilot", channel: "whatsapp", kind: "final", payload: { text: "Normal reply" } };
+    expect(await h.guardReply(event, { channelId: "whatsapp", accountId: "account-A", conversationId: group, sessionKey: "session-pilot" })).toBeUndefined();
+  });
+  it("accepts a channel-prefixed native tool group but never treats other peers/bots/turns as the receiving-bot reply route", async () => {
+    const h = await fixture(); await h.beforeTool("thinkarr_media_select", {}, "run-pilot", undefined, `whatsapp:${group}`); await h.select();
+    const event: ReplyPayloadEvent = { runId: "run-pilot", sessionKey: "session-pilot", channel: "whatsapp", kind: "final", payload: { text: "Duplicate reply" } };
+    const ctx: MessageHookContext = { channelId: "whatsapp", accountId: "account-A", conversationId: "+15555550100", sessionKey: "session-pilot" };
+    expect(await h.guardReply(event, ctx)).toMatchObject({ cancel: true });
+    for (const conversationId of [sender, "+15555550200", "12345@lid", "120300000099@g.us", undefined]) {
+      expect(await h.guardReply(event, { ...ctx, conversationId })).toBeUndefined();
+    }
+    expect(await h.guardReply(event, { ...ctx, accountId: "other" })).toBeUndefined();
+    expect(await h.guardReply({ ...event, runId: "later-turn" }, ctx)).toBeUndefined();
+    expect(await h.guardReply({ ...event, sessionKey: "other-session" }, ctx)).toBeUndefined();
+  });
+  it.each(["splitwise_get_balances", "mcp_thinkarr_plex_get_on_deck", "mcp_thinkarr_overseerr_report_issue", "overseerr_search_extra"])("preserves a mixed workflow containing %s", async (name) => {
+    const h = await fixture(true, true); await h.beforeTool(name, {}); await h.beforeTool("thinkarr_media_select", {}); await h.select();
+    const event: ReplyPayloadEvent = { runId: "run-pilot", sessionKey: "session-pilot", channel: "whatsapp", kind: "final", payload: { text: "A useful unrelated response" } };
+    expect(await h.guardReply(event, { channelId: "whatsapp", accountId: "account-A", conversationId: group, sessionKey: "session-pilot" })).toBeUndefined();
+    expect(h.logs().some((r) => r.stage === "presentation.guard_unavailable" && r.reason === "mixed_workflow")).toBe(true);
   });
   it("sends one self-contained prompt, then uses admitted native group facts despite a bot-address legacy conversation", async () => {
     const h = await fixture(true, true); const before = h.sends.length;

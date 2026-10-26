@@ -97,6 +97,7 @@ const messages = {
   linked: "Your Plex account is linked.",
   private_link_sent: "Check your private WhatsApp message to finish linking Plex.",
   private_delivery_unconfirmed: "Check your private WhatsApp chat for the Plex sign-in instructions. If no message arrived, let me know.",
+  permission_required: "Ask the Thinkarr administrator to enable account_link_start and account_link_confirm for this integration in Settings → MCP → Service integrations → Operation allowlist. Keep the existing setup; no new enrollment or key rotation is needed.",
   unavailable: "Thinkarr did not respond in time. Please try this step again while your current private link is valid; keep the link if you already received one.",
   unknown: "I could not confirm the result from Thinkarr. Please check your account-link status before trying again.",
   failed: "Account linking could not be completed. Please ask for a new private link.",
@@ -117,7 +118,8 @@ export function register<C extends object>(api: OpenClawHost<C>) {
   if (!lifecycle) { registration.error("registration.lifecycle", new ConnectorDiagnosticError("plugin_lifetime_missing")); throw new Error("Thinkarr requires plugin lifecycle admission"); }
   const diagnostics = createLifecycleDiagnostics(api.lifecycle, api.logger, options.debug, api.registrationMode as "full" | "tool-discovery");
   registration = diagnostics.trace("registration");
-  const promptReplies = createPromptReplyGuard(api, options.pilotGroup, registration.log);
+  const promptReplies = createPromptReplyGuard(api, options.pilotGroup, registration.log,
+    (account, target) => Object.hasOwn(options.accounts, account) && canonicalPhone(target) === canonicalPhone(options.accounts[account]));
   const assertLive = () => { if (lifecycle.aborted) throw new ConnectorDiagnosticError("plugin_lifetime_closed"); };
   registration.log("info", "registration.ready", { debugEnabled: options.debug, mediaEnabled: !!options.pilotGroup });
   lifecycle.addEventListener("abort", () => registration.log("info", "registration.disposed"), { once: true });

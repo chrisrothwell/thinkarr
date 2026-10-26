@@ -5,7 +5,7 @@ import type { OpenClawHost } from "./host.js";
  * backend presentation acknowledgement must both succeed before it is armed.
  * No session-wide mute, participant identity cache or inference from model text.
  */
-export function createPromptReplyGuard<C extends object>(api: OpenClawHost<C>, group: string | undefined, log: DiagnosticSink) {
+export function createPromptReplyGuard<C extends object>(api: OpenClawHost<C>, group: string | undefined, log: DiagnosticSink, isReceivingBot: (account: string, conversation: unknown) => boolean) {
   const calls = new Map<string, { runId: string; sessionKey: string; expires: number }>();
   const runs = new Map<string, { sessionKey: string; expires: number; mixed: boolean; account?: string; armed: boolean }>();
   const prune = () => {
@@ -20,10 +20,13 @@ export function createPromptReplyGuard<C extends object>(api: OpenClawHost<C>, g
     api.on("before_tool_call", async (event, context) => {
       prune();
       const { runId, toolCallId, sessionKey } = context;
-      if (event.toolName === "thinkarr_media_select" && (!runId || !toolCallId || !sessionKey || context.channelId !== "whatsapp")) {
-        log("warn", "presentation.guard_unavailable", { reason: !runId ? "host_run_id_missing" : !toolCallId ? "host_tool_call_id_missing" : !sessionKey ? "host_session_correlation_missing" : "host_tool_channel_mismatch" });
+      // Tool hooks expose currentChannelId (the native conversation), unlike
+      // message/reply hooks whose channelId is the provider name.
+      const nativeGroupMatches = context.channelId?.replace(/^whatsapp:/, "") === group;
+      if (event.toolName === "thinkarr_media_select" && (!runId || !toolCallId || !sessionKey || !nativeGroupMatches)) {
+        log("warn", "presentation.guard_unavailable", { reason: !runId ? "host_run_id_missing" : !toolCallId ? "host_tool_call_id_missing" : !sessionKey ? "host_session_correlation_missing" : "host_tool_conversation_mismatch" });
       }
-      if (api.lifecycle.signal?.aborted || !runId || !toolCallId || !sessionKey || context.channelId !== "whatsapp"
+      if (api.lifecycle.signal?.aborted || !runId || !toolCallId || !sessionKey || !nativeGroupMatches
         || event.toolName !== context.toolName || (event.runId !== undefined && event.runId !== runId)
         || (event.toolCallId !== undefined && event.toolCallId !== toolCallId)) return;
       let run = runs.get(runId);
@@ -55,17 +58,32 @@ export function createPromptReplyGuard<C extends object>(api: OpenClawHost<C>, g
         }
         return;
       }
-      // Mixed workflows retain their ordinary replies (including finance).
-      // Catalog facts alone do not make this a mixed workflow.
-      if (!["thinkarr_media_search", "thinkarr_media_details"].includes(event.toolName)) { run.mixed = true; run.armed = false; }
+      // The live Code Mode flow performs these two legacy title reads before
+      // native selection. Classifying their *presentation* does not expose or
+      // execute them, infer availability, or grant request/identity authority.
+      const mediaRead = ["thinkarr_media_search", "thinkarr_media_details"].includes(event.toolName)
+        || /(?:^|[:._])(?:plex_check_availability|overseerr_search)$/.test(event.toolName);
+      if (!mediaRead) {
+        run.mixed = true; run.armed = false;
+        log("debug", "presentation.mixed_workflow", { reason: "unrelated_tool_observed" });
+      }
     }, { timeoutMs: 1000 });
     api.on("reply_payload_sending", async (event, context) => {
       prune();
       if (api.lifecycle.signal?.aborted || !event.runId) return;
       const run = runs.get(event.runId);
-      if (!run?.armed || run.mixed || event.sessionKey !== run.sessionKey || context.sessionKey !== run.sessionKey
+      if (!run?.armed || run.mixed) return;
+      // Legacy inbound reply mappers can name the receiving bot here. Only the
+      // exact configured bot on the captured account is accepted, AFTER the
+      // native-group tool execution armed this exact run/session marker.
+      const conversationMatches = context.conversationId?.replace(/^whatsapp:/, "") === group
+        || (!!run.account && isReceivingBot(run.account, context.conversationId));
+      if (event.sessionKey !== run.sessionKey || context.sessionKey !== run.sessionKey
         || context.channelId !== "whatsapp" || event.channel !== "whatsapp" || context.accountId !== run.account
-        || context.conversationId?.replace(/^whatsapp:/, "") !== group || event.payload.isError
+        || !conversationMatches) {
+        log("debug", "presentation.reply_unmatched", { reason: "reply_run_route_mismatch" }); return;
+      }
+      if (event.payload.isError
         || event.payload.isReasoning || event.payload.isCompactionNotice || event.payload.presentation || event.payload.interactive || event.payload.channelData
         || event.payload.mediaUrl || event.payload.mediaUrls?.length || !event.payload.text) return;
       log("info", "presentation.duplicate_reply_cancelled");
@@ -79,7 +97,8 @@ export function createPromptReplyGuard<C extends object>(api: OpenClawHost<C>, g
         log("warn", "presentation.guard_unavailable", { reason: "exact_turn_correlation_missing" }); return;
       }
       const run = runs.get(call.runId);
-      if (!run || run.mixed || run.sessionKey !== sessionKey) return;
+      if (!run || run.sessionKey !== sessionKey) return;
+      if (run.mixed) { log("info", "presentation.guard_unavailable", { reason: "mixed_workflow" }); return; }
       run.account = account; run.armed = true;
       log("info", "presentation.guard_armed");
     },

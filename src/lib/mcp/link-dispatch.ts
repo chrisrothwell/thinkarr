@@ -13,6 +13,7 @@ import { AccountLinkError, completeAccountLink, initiateAccountLink } from "./ac
 import { recordServiceMcpDenial } from "./service-principals";
 import { authorizeMediaCall, callMediaTool, serviceMediaTools } from "./media-dispatch";
 import type { McpRequestTiming } from "./request-timing";
+import { MCP_ERROR_CODE_HEADER, MCP_OPERATION_NOT_ALLOWED } from "../../../connectors/delegated-mcp/http-diagnostics";
 
 const privacyHeaders = { "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" };
 const startArguments = z.object({}).strict();
@@ -33,6 +34,7 @@ const linkTools: Tool[] = [
 ];
 
 class LinkDispatchDenied extends Error {}
+class LinkOperationNotAllowed extends LinkDispatchDenied {}
 
 /** Same exact-name policy for discovery and direct execution. No raw registry,
  * personal role, caller user ID or name normalization participates here.
@@ -48,7 +50,18 @@ export function serviceLinkTools(context: VerifiedServiceMcpContext): Tool[] {
 }
 
 function authorizeCall(context: VerifiedServiceMcpContext, name: string, args: unknown) {
-  if (!serviceLinkTools(context).some((tool) => tool.name === name)) throw new LinkDispatchDenied();
+  if (!serviceLinkTools(context).some((tool) => tool.name === name)) {
+    const c = context.delegation;
+    // Emit an actionable public reason only after authenticated delegation and
+    // the exact linking source/argument shape are established. Bad signatures,
+    // malformed/impersonating calls and unrelated tools retain generic denial.
+    const validLinkShape = name === "account_link_start"
+      ? (c.source === "tool" || (c.source === "command" && c.intent === "link-start")) && startArguments.safeParse(args ?? {}).success
+      : name === "account_link_confirm" && c.source === "message" && c.kind === "direct"
+        && completeArguments.safeParse(args).success && c.intent === `link-confirm:${(args as { code: string }).code}`;
+    if (validLinkShape && !requireCurrentDelegation(context).allowedOperations.includes(name)) throw new LinkOperationNotAllowed();
+    throw new LinkDispatchDenied();
+  }
   if (name.startsWith("media_")) {
     try { authorizeMediaCall(context, name, args ?? {}); return; }
     catch { throw new LinkDispatchDenied(); }
@@ -84,9 +97,10 @@ async function callLinkTool(context: VerifiedServiceMcpContext, name: string, ar
   };
 }
 
-function forbidden(caller: ServiceMcpContext) {
+function forbidden(caller: ServiceMcpContext, operationNotAllowed = false) {
   recordServiceMcpDenial(caller);
-  return NextResponse.json({ error: "Delegated MCP operation is not permitted." }, { status: 403, headers: privacyHeaders });
+  return NextResponse.json({ error: "Delegated MCP operation is not permitted.", ...(operationNotAllowed ? { code: MCP_OPERATION_NOT_ALLOWED } : {}) },
+    { status: 403, headers: { ...privacyHeaders, ...(operationNotAllowed ? { [MCP_ERROR_CODE_HEADER]: MCP_OPERATION_NOT_ALLOWED } : {}) } });
 }
 
 /** Signed standard MCP, linking plus explicitly configured beta media pilot.
@@ -126,12 +140,13 @@ export async function handleServiceLinkPost(request: Request, caller: ServiceMcp
     };
     if (timing) timing.spanSync("envelope", validateEnvelope); else validateEnvelope();
   } catch (error) {
-    if (error instanceof DelegationError || error instanceof LinkDispatchDenied || error instanceof SyntaxError) return forbidden(caller);
+    if (error instanceof DelegationError || error instanceof LinkDispatchDenied || error instanceof SyntaxError) return forbidden(caller, error instanceof LinkOperationNotAllowed);
     logger.error("MCP_LINK_DISPATCH_FAILURE", { principalId: caller.principalId, credentialId: caller.credentialId });
     return NextResponse.json({ error: "Delegated MCP request failed" }, { status: 500, headers: privacyHeaders });
   }
 
   let deniedDuringDispatch = false;
+  let operationNotAllowed = false;
   const server = new Server({ name: "thinkarr", version: process.env.NEXT_PUBLIC_APP_VERSION ?? "unknown" }, { capabilities: { tools: {} } });
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     try { return { tools: serviceLinkTools(context) }; }
@@ -145,6 +160,7 @@ export async function handleServiceLinkPost(request: Request, caller: ServiceMcp
     catch (error) {
       if (error instanceof DelegationError || error instanceof LinkDispatchDenied || (error instanceof AccountLinkError && error.status === 403)) {
         deniedDuringDispatch = true;
+        operationNotAllowed = error instanceof LinkOperationNotAllowed;
         throw new McpError(ErrorCode.InvalidParams, "Delegated MCP operation is not permitted.");
       }
       if (error instanceof AccountLinkError) return { content: [{ type: "text", text: JSON.stringify({ error: error.message }) }], isError: true };
@@ -163,12 +179,12 @@ export async function handleServiceLinkPost(request: Request, caller: ServiceMcp
     // The stateless transport uses JSON responses; await its body so a revoked
     // policy discovered inside the SDK handler still becomes HTTP 403.
     const body = await (timing ? timing.span("response_body", () => response.arrayBuffer()) : response.arrayBuffer());
-    if (deniedDuringDispatch) return forbidden(caller);
+    if (deniedDuringDispatch) return forbidden(caller, operationNotAllowed);
     const headers = new Headers(response.headers);
     for (const [key, value] of Object.entries(privacyHeaders)) headers.set(key, value);
     return new Response(body.byteLength ? body : null, { status: response.status, headers });
   } catch (error) {
-    if (error instanceof DelegationError || error instanceof LinkDispatchDenied) return forbidden(caller);
+    if (error instanceof DelegationError || error instanceof LinkDispatchDenied) return forbidden(caller, error instanceof LinkOperationNotAllowed);
     logger.error("MCP_LINK_TRANSPORT_FAILURE", { principalId: caller.principalId, credentialId: caller.credentialId });
     return NextResponse.json({ error: "Delegated MCP request failed" }, { status: 500, headers: privacyHeaders });
   } finally {
