@@ -362,7 +362,6 @@ export function register<C extends object>(api: OpenClawHost<C>) {
       const assertCurrent = ctx.assertInvocationCurrent;
       return {
         name: `thinkarr_${name}`, label: "Thinkarr media pilot",
-        catalogMode: "direct-only",
         description: name === "media_select" ? "Send the one native confirmation prompt for the exact title and explicit TV seasons after search/details. This tool already delivers the message and its reply instructions. After prompt_sent, end the turn with NO_REPLY and wait; do not send an extra confirmation or instruction message. Does not submit."
           : "Find title facts using the existing Seerr catalog. No library availability or personal activity is returned; do not infer availability. Link Plex with thinkarr_account_link first.",
         parameters: mediaInputSchema(name),
