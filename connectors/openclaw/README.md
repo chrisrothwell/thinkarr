@@ -29,6 +29,8 @@ Install the resulting `thinkarr-openclaw-0.3.11.tgz` through the supported local
 openclaw plugins install npm-pack:/path/to/thinkarr-openclaw-0.3.11.tgz --no-enable
 ```
 
+For releases, prefer the validated `.tgz` and matching `.sha256` from the GitHub Release. Beta/PR runs expose the same files as companion workflow artifacts. `thinkarr-openclaw-release.json` records the app version, executing companion version, pinned host version and archive hash. Verify with `sha256sum -c thinkarr-openclaw-0.3.11.tgz.sha256` before installation. `npm run pack:openclaw` builds, packs, installs/audits the archive's production dependencies in a clean temporary consumer and smoke-checks registration, tool admission, hooks and packaged skills; it does not issue live link or request calls. An optional `-- --output <fresh-directory>` exports all three files without overwriting another build.
+
 The Control UI can configure, enable and reload an installed plugin. Its catalog installer does not accept arbitrary local archives; a CLI or the browser's operator Terminal is needed for this archive installation. The package is not currently advertised as a published npm/ClawHub release.
 
 For an already-enrolled `0.3.x` connection, update the managed archive with the normal replacement/capability review. Keep the existing native secrets, connection settings and keys; do not run enrollment again. This patch works with the same Thinkarr API build. The companion accepts native SecretRefs during registration and reads prepared secrets through the pinned host SDK only during admitted invocations. Local archives, including `npm-pack:` sources, remain outside OpenClaw's reviewed trust sources. Managed installation/integrity tracking does not confer official trust or remove a provenance warning.
@@ -86,6 +88,7 @@ Useful failure signals:
 | `secrets.prepared_status` / `prepared_bearer_unavailable` / `prepared_signing_key_unavailable` | Native secret preparation and admitted plugin capability scope; availability flags reveal no secret values |
 | `connector.signing_key` | Imported credential is a supported Ed25519 PKCS8 key |
 | `mcp.http.response`, HTTP 401/403 | Integration credential, delegation assertion and saved integration/group policy |
+| `integration_operation_not_allowed` / `permission_required` | Updated app verified the linking call but the integration lacks its linking operation grant; check `account_link_start` / `account_link_confirm` in the existing operation allowlist |
 | `mcp.http.fetch` + `ECONNREFUSED` / `ENOTFOUND` / TLS code | Thinkarr reachability, DNS or certificate configuration |
 | `remote_link_configuration_required` | Thinkarr's public link origin and WhatsApp bot configuration |
 | `outbound.private_adapter` / `outbound.private_resolve` / `outbound.private_receipt` | WhatsApp adapter availability, private routing policy or provider receipt |

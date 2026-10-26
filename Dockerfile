@@ -1,5 +1,5 @@
 # Node base image — Dependabot keeps this tag current.
-# To pin to a digest instead: docker pull node:25-alpine && docker inspect node:25-alpine --format '{{index .RepoDigests 0}}'
+# To pin to a digest instead: docker pull node:26-alpine && docker inspect node:26-alpine --format '{{index .RepoDigests 0}}'
 # Stage 1: Install dependencies (includes native build tools for better-sqlite3)
 FROM node:26-alpine AS deps
 WORKDIR /app
