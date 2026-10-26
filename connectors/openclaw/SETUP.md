@@ -18,6 +18,8 @@ In the owner's normal browser, open Thinkarr **Settings → MCP → Service inte
 
 For linking and reads, allow `account_link_start`, `account_link_confirm`, `media_search` and `media_details`. To offer confirmed requests, additionally allow `media_select` and `media_confirm_request`. The helper does not expand the owner's operation allowlist.
 
+An updated app returns the bounded `operation_not_allowed` code/header only for an authenticated, correctly shaped linking call whose grant is missing. The companion projects this as `permission_required` and gives the existing integration's operation-allowlist steps. Keep enrollment, keys and any still-valid pending link; no credential replacement is needed to repair a grant. An ordinary 401/403 without that marker remains a generic authentication/policy failure, not proof of missing grants. Older app builds remain compatible but cannot provide the new precise reason.
+
 Choose **Create setup code**, not **Issue credential**. This authorizes exactly one public-key enrollment and service credential for that integration for ten minutes. It does not give the agent an administrator session or permission to manage other integrations. New codes replace old ones; configuration changes, disablement and credential issuance invalidate pending codes.
 
 An active service credential prevents new enrollment. Reuse its existing protected setup if available; otherwise the owner must explicitly revoke/rotate it. Do not rotate credentials silently.

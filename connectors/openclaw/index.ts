@@ -97,6 +97,7 @@ const messages = {
   linked: "Your Plex account is linked.",
   private_link_sent: "Check your private WhatsApp message to finish linking Plex.",
   private_delivery_unconfirmed: "Check your private WhatsApp chat for the Plex sign-in instructions. If no message arrived, let me know.",
+  permission_required: "Ask the Thinkarr administrator to enable account_link_start and account_link_confirm for this integration in Settings → MCP → Service integrations → Operation allowlist. Keep the existing setup; no new enrollment or key rotation is needed.",
   unavailable: "Thinkarr did not respond in time. Please try this step again while your current private link is valid; keep the link if you already received one.",
   unknown: "I could not confirm the result from Thinkarr. Please check your account-link status before trying again.",
   failed: "Account linking could not be completed. Please ask for a new private link.",

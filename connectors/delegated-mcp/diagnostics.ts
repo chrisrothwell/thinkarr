@@ -54,7 +54,7 @@ export class ConnectorDiagnosticError extends Error {
   constructor(readonly reason: string) { super(reason); }
 }
 
-const outcomes = new Set(["linked", "private_link_sent", "private_delivery_unconfirmed", "unavailable", "failed", "ok", "prompt_sent", "submitted", "pending_approval", "expired", "reply_to_prompt", "blocked", "unknown", "unclaimed"]);
+const outcomes = new Set(["linked", "private_link_sent", "private_delivery_unconfirmed", "permission_required", "unavailable", "failed", "ok", "prompt_sent", "submitted", "pending_approval", "expired", "reply_to_prompt", "blocked", "unknown", "unclaimed"]);
 const errorCodes = new Set([
   "ECONNREFUSED", "ECONNRESET", "ENOTFOUND", "EAI_AGAIN", "ETIMEDOUT", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT",
   "CERT_HAS_EXPIRED", "DEPTH_ZERO_SELF_SIGNED_CERT", "UNABLE_TO_VERIFY_LEAF_SIGNATURE", "ERR_TLS_CERT_ALTNAME_INVALID",

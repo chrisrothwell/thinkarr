@@ -6,7 +6,7 @@ import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { confirmationIntent, mediaOutcome, mediaToolArguments, presentation, type MediaOutcome, type MediaTool } from "./media-contract.js";
 import { ConnectorDiagnosticError, diagnosticErrorFields, safeDiagnosticSink, type DiagnosticSink } from "./diagnostics.js";
-import { MCP_REQUEST_ID_HEADER, MCP_TIMING_DEBUG_HEADER, observeMcpResponse, parseMcpRequestId, readMcpServerDuration } from "./http-diagnostics.js";
+import { MCP_REQUEST_ID_HEADER, MCP_TIMING_DEBUG_HEADER, MCP_ERROR_CODE_HEADER, MCP_OPERATION_NOT_ALLOWED, observeMcpResponse, parseMcpRequestId, readMcpServerDuration } from "./http-diagnostics.js";
 
 const identity = z.string().min(1).max(512);
 const actorSchema = z.object({
@@ -34,7 +34,7 @@ export type TrustedLinkInvocation = z.infer<typeof actorSchema> & {
   signal?: AbortSignal;
 };
 export type TrustedLinkMessage = TrustedLinkInvocation & z.infer<typeof eventSchema>;
-export type LinkOutcome = Readonly<{ status: "linked" | "private_link_sent" | "private_delivery_unconfirmed" | "unavailable" | "unknown" | "failed" }>;
+export type LinkOutcome = Readonly<{ status: "linked" | "private_link_sent" | "private_delivery_unconfirmed" | "permission_required" | "unavailable" | "unknown" | "failed" }>;
 export type PrivateLinkDelivery = Readonly<{
   channel: "whatsapp"; account: string; recipient: string; url: string; expiresAt: string;
   /** The host must recheck immediately before every physical provider send. */
@@ -137,6 +137,7 @@ export async function createLinkingConnector(config: LinkingConnectorConfig, hos
     let client: Client | undefined;
     let active = true;
     let toolCallStarted = false;
+    let linkingPermissionRequired = false;
     let stage = "connector.actor";
     const step = (next: string) => { stage = next; log("debug", stage); };
     const reject = (reason: string) => { log("warn", stage, { reason, outcome: "failed" }); return failed; };
@@ -214,13 +215,14 @@ export async function createLinkingConnector(config: LinkingConnectorConfig, hos
             }
             const httpDurationMs = Math.max(0, performance.now() - fetchStarted);
             guard();
+            if (!media && protocolPhase === "tool_call" && response.status === 403 && response.headers.get(MCP_ERROR_CODE_HEADER) === MCP_OPERATION_NOT_ALLOWED) linkingPermissionRequired = true;
             const serverDurationMs = readMcpServerDuration(response.headers.get("Server-Timing"));
             const responseRequestId = parseMcpRequestId(response.headers.get(MCP_REQUEST_ID_HEADER));
             const fields = { requestId, responseRequestId, protocolPhase, httpDurationMs, serverDurationMs,
               serverTimingAvailable: serverDurationMs !== undefined,
               ...(serverDurationMs !== undefined ? { outsideHandlerMs: Math.max(0, httpDurationMs - serverDurationMs) } : {}),
             };
-            log(response.ok ? "debug" : "error", "mcp.http.response", { ...fields, httpStatus: response.status, ...(!response.ok ? { reason: "http_request_rejected" } : {}) });
+            log(response.ok ? "debug" : "error", "mcp.http.response", { ...fields, httpStatus: response.status, ...(!response.ok ? { reason: linkingPermissionRequired ? "integration_operation_not_allowed" : "http_request_rejected" } : {}) });
             if (response.redirected || (response.status >= 300 && response.status < 400)) throw new ConnectorDiagnosticError("connector_redirect_refused");
             if (response.body) pendingBodies.add(requestId);
             return observeMcpResponse(response, log, fields);
@@ -300,6 +302,7 @@ export async function createLinkingConnector(config: LinkingConnectorConfig, hos
     } catch (error) {
       const details = diagnosticErrorFields(error);
       log("error", stage, details);
+      if (linkingPermissionRequired) return { status: "permission_required" };
       if (!media && error instanceof ConnectorDiagnosticError && error.reason === "private_delivery_unconfirmed") return { status: "private_delivery_unconfirmed" };
       let code: unknown;
       try { code = error && typeof error === "object" ? Reflect.get(error, "code") : undefined; } catch { /* retain a safe failed outcome */ }
