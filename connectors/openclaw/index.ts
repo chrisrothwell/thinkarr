@@ -117,7 +117,8 @@ export function register<C extends object>(api: OpenClawHost<C>) {
   if (!lifecycle) { registration.error("registration.lifecycle", new ConnectorDiagnosticError("plugin_lifetime_missing")); throw new Error("Thinkarr requires plugin lifecycle admission"); }
   const diagnostics = createLifecycleDiagnostics(api.lifecycle, api.logger, options.debug, api.registrationMode as "full" | "tool-discovery");
   registration = diagnostics.trace("registration");
-  const promptReplies = createPromptReplyGuard(api, options.pilotGroup, registration.log);
+  const promptReplies = createPromptReplyGuard(api, options.pilotGroup, registration.log,
+    (account, target) => Object.hasOwn(options.accounts, account) && canonicalPhone(target) === canonicalPhone(options.accounts[account]));
   const assertLive = () => { if (lifecycle.aborted) throw new ConnectorDiagnosticError("plugin_lifetime_closed"); };
   registration.log("info", "registration.ready", { debugEnabled: options.debug, mediaEnabled: !!options.pilotGroup });
   lifecycle.addEventListener("abort", () => registration.log("info", "registration.disposed"), { once: true });

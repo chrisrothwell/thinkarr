@@ -44,6 +44,7 @@ export type GroupReplyContext<C extends object> = {
   markIdle: (reason: string) => void;
 };
 export type GroupReplyResult = { handled: boolean; queuedFinal: boolean; counts: { tool: number; block: number; final: number } };
+/** Tool-hook channelId is the native conversation, not the provider label. */
 export type ToolHookContext = { runId?: string; toolCallId?: string; sessionKey?: string; channelId?: string; toolName: string; toolKind?: "code_mode_exec" };
 export type ToolHookEvent = { toolName: string; params: Record<string, unknown>; runId?: string; toolCallId?: string; toolKind?: "code_mode_exec" };
 export type ReplyPayloadEvent = { runId?: string; sessionKey?: string; channel?: string; kind: string; payload: { text?: string; isError?: boolean; isReasoning?: boolean; isCompactionNotice?: boolean; mediaUrl?: string; mediaUrls?: string[]; presentation?: unknown; interactive?: unknown; channelData?: unknown } };

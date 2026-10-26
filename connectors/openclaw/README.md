@@ -23,10 +23,10 @@ npm run build:openclaw
 npm pack ./connectors/openclaw
 ```
 
-Install the resulting `thinkarr-openclaw-0.3.10.tgz` through the supported local archive mechanism:
+Install the resulting `thinkarr-openclaw-0.3.11.tgz` through the supported local archive mechanism:
 
 ```bash
-openclaw plugins install npm-pack:/path/to/thinkarr-openclaw-0.3.10.tgz --no-enable
+openclaw plugins install npm-pack:/path/to/thinkarr-openclaw-0.3.11.tgz --no-enable
 ```
 
 The Control UI can configure, enable and reload an installed plugin. Its catalog installer does not accept arbitrary local archives; a CLI or the browser's operator Terminal is needed for this archive installation. The package is not currently advertised as a published npm/ClawHub release.
@@ -137,6 +137,8 @@ Companion 0.3.9 additionally guards duplicate text at the host tool/reply bounda
 
 Native media tools participate in the host's normal catalog, including Code Mode callable globals and `catalog.search` handles. They must not use `catalogMode: "direct-only"`: that removes them from the pinned host's JavaScript catalog even if a separate direct descriptor is visible. Host-discriminated `code_mode_exec` wrapper calls do not turn a media-only run into a mixed workflow; every nested child still runs normal tool/identity/presentation checks. Shell tools merely named `exec`, and unrelated finance tools, do disable presentation guarding. A missing Code Mode binding is not evidence that a separate model-callable confirmation tool is required. Only an admitted native selection sends the prompt, and the participant's subsequent WhatsApp reply drives native confirmation.
 
+The pinned hook contexts use different meanings for `channelId`: tool hooks carry the native conversation ID (`currentChannelId`), while reply hooks carry the provider label. The presentation guard matches the tool's native group, then arms only when that exact captured call/session successfully presents a native prompt. An automatic reply must match the armed run/session/provider/account and either the group or that receiving account's exact configured bot alias (the legacy reply mapper may expose bot `To`). Other peers/bots/groups are not accepted, and no session key is parsed for group authority. The two observed legacy title reads, `plex_check_availability` and `overseerr_search` (including namespaced forms), are presentation-compatible context; they neither expose new tools nor supply identity, availability or request authority. Personal-history, mutation, finance and unknown tools still make the run mixed. `mixed_workflow` and `presentation.reply_unmatched` diagnostics explain why an otherwise presented turn remains unmuted. These route/context corrections require companion 0.3.11 or later.
+
 The pinned WhatsApp ingress puts the provider quote ID in post-admission `ReplyToId`, but context-visibility filtering can remove `SupplementalContext.quote` and the optional quote flag may be absent. This native ID is accepted after the full admission/route checks, without demanding a quote body or extra flag. Conflicting supplemental IDs and explicit non-quote flags are rejected. Server-owned exact-current-prompt/replacement/expiry/replay rules still decide whether that native ID authorizes a request; an unrelated finance quote cannot authorize media.
 
 Private-link guidance is intentionally concise: check the private WhatsApp instructions, and report if nothing arrived. An unconfirmed provider receipt is still logged/returned as unconfirmed; short wording is not a verified identity or delivery claim. Failed request steps direct the administrator to permissions/diagnostics rather than asking an already-linked participant to link again.
@@ -172,4 +174,4 @@ Existing `0.2` credentials-file configurations remain a compatibility path, not 
 
 The SDK compatibility check, offline route tests and package build do not prove live provider admission, identity aliases, receipts or handset behavior. Verify the authorized integration in its intended conversation after provisioning. Context-free tool catalogs can omit these factories because they have no admitted human sender; repeated reloads or broader permissions do not supply that identity. Follow the bounded readiness procedure in SETUP.md.
 
-Companion 0.3.10 remains compatible with the existing signed beta.10/beta.11 API; the catalog, quote and duplicate-response fixes require the companion update, not a new backend grant or participant binding. Keep enrollment, native credentials, account bindings and operation grants when upgrading.
+Companion 0.3.11 remains compatible with the existing signed beta.10/beta.11 API; the catalog, quote and duplicate-response fixes require the companion update, not a new backend grant or participant binding. Keep enrollment, native credentials, account bindings and operation grants when upgrading.
