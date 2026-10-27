@@ -1,10 +1,11 @@
 {
   "name": "thinkarr",
-  "version": "1.1.8-beta.11",
+  "version": "1.1.8-beta.12",
   "private": true,
   "scripts": {
     "build:openclaw": "tsc -p connectors/openclaw/tsconfig.build.json",
     "check:openclaw": "node scripts/check-openclaw-sdk.mjs",
+    "pack:openclaw": "npm run build:openclaw && node scripts/package-openclaw.mjs",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",

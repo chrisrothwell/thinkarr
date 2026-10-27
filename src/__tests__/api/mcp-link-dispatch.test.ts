@@ -43,6 +43,42 @@ function expectNoRawTools() {
 }
 
 describe("linking-only delegated MCP", () => {
+  it("returns a bounded operation-grant reason only for a verified, well-shaped linking call and reuses existing enrollment after repair", async () => {
+    const f = await delegatedLinkFixture(db, adminId);
+    db.update(schema.mcpServicePrincipals).set({ allowedOperations: "[]" }).where(eq(schema.mcpServicePrincipals.id, f.principal.id)).run();
+    const denied = await POST(await f.signedRequest(call("account_link_start")));
+    expect(denied.status).toBe(403); expect(denied.headers.get("X-Thinkarr-Error-Code")).toBe("operation_not_allowed");
+    expect(denied.headers.get("Cache-Control")).toBe("no-store");
+    expect(await denied.json()).toEqual({ error: "Delegated MCP operation is not permitted.", code: "operation_not_allowed" });
+    expect(db.select().from(schema.mcpLinkChallenges).all()).toHaveLength(0);
+    for (const body of [call("account_link_start", { userId: adminId }), call("account_link_confirm", { code: "a".repeat(64) }), call("unknown_tool")]) {
+      const invalid = await POST(await f.signedRequest(body));
+      expect(invalid.status).toBe(403); expect(invalid.headers.get("X-Thinkarr-Error-Code")).toBeNull();
+      expect(await invalid.json()).toEqual({ error: "Delegated MCP operation is not permitted." });
+    }
+    const unsigned = await f.signedRequest(call("account_link_start")); unsigned.headers.delete("Thinkarr-Delegation");
+    const invalidProof = await POST(unsigned); expect(invalidProof.status).toBe(403);
+    expect(invalidProof.headers.get("X-Thinkarr-Error-Code")).toBeNull();
+    db.update(schema.mcpServicePrincipals).set({ allowedOperations: JSON.stringify(["account_link_start", "account_link_confirm"]) }).where(eq(schema.mcpServicePrincipals.id, f.principal.id)).run();
+    expect((await POST(await f.signedRequest(call("account_link_start")))).status).toBe(200);
+    expect(db.select().from(schema.mcpLinkChallenges).all()).toHaveLength(1);
+    expectNoRawTools();
+  });
+  it("preserves the pending challenge when completion permission is missing and completes with the same enrollment after the grant is repaired", async () => {
+    const f = await delegatedLinkFixture(db, adminId);
+    const started = await (await POST(await f.signedRequest(call("account_link_start")))).json();
+    const token = new URL(started.result._meta["thinkarr/private-delivery"].url).hash.replace("#token=", "");
+    const code = prepareAccountLink(token, f.sessionA, f.userA).completionCode;
+    const claims = { source: "message" as const, kind: "direct" as const, conversation: "private-A", intent: `link-confirm:${code}`, eventId: randomUUID(), eventTime: Date.now() };
+    db.update(schema.mcpServicePrincipals).set({ allowedOperations: JSON.stringify(["account_link_start"]) }).where(eq(schema.mcpServicePrincipals.id, f.principal.id)).run();
+    const denied = await POST(await f.signedRequest(call("account_link_confirm", { code }), claims));
+    expect(denied.status).toBe(403); expect(denied.headers.get("X-Thinkarr-Error-Code")).toBe("operation_not_allowed");
+    expect(db.select().from(schema.mcpActorBindings).all()).toHaveLength(0); expect(db.select().from(schema.mcpDelegationEvents).all()).toHaveLength(0);
+    db.update(schema.mcpServicePrincipals).set({ allowedOperations: JSON.stringify(["account_link_start", "account_link_confirm"]) }).where(eq(schema.mcpServicePrincipals.id, f.principal.id)).run();
+    expect((await POST(await f.signedRequest(call("account_link_confirm", { code }), claims))).status).toBe(200);
+    expect(resolveServiceActor(await f.context()).actorUserId).toBe(f.userA);
+    expect(db.select().from(schema.mcpLinkChallenges).all()).toHaveLength(1); expectNoRawTools();
+  });
   it("performs real SDK initialization/list/call with no private URL in model-facing content", async () => {
     const f = await delegatedLinkFixture(db, adminId);
     const client = new Client({ name: "trusted-connector-fixture", version: "1" });

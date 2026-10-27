@@ -8,6 +8,7 @@ import { loadPreparedSecretReader } from "./secrets.js";
 import { confirmationIntent, mediaTools, mediaInputSchema, type MediaOutcome } from "../delegated-mcp/media-contract.js";
 import { ConnectorDiagnosticError, createDiagnosticTrace, diagnosticErrorFields, type DiagnosticSink } from "../delegated-mcp/diagnostics.js";
 import { createLifecycleDiagnostics } from "./lifecycle.js";
+import { createPromptReplyGuard } from "./reply-guard.js";
 
 const routingOptions = {
   debug: z.boolean().default(false),
@@ -96,6 +97,7 @@ const messages = {
   linked: "Your Plex account is linked.",
   private_link_sent: "Check your private WhatsApp message to finish linking Plex.",
   private_delivery_unconfirmed: "Check your private WhatsApp chat for the Plex sign-in instructions. If no message arrived, let me know.",
+  permission_required: "Ask the Thinkarr administrator to enable account_link_start and account_link_confirm for this integration in Settings → MCP → Service integrations → Operation allowlist. Keep the existing setup; no new enrollment or key rotation is needed.",
   unavailable: "Thinkarr did not respond in time. Please try this step again while your current private link is valid; keep the link if you already received one.",
   unknown: "I could not confirm the result from Thinkarr. Please check your account-link status before trying again.",
   failed: "Account linking could not be completed. Please ask for a new private link.",
@@ -116,6 +118,8 @@ export function register<C extends object>(api: OpenClawHost<C>) {
   if (!lifecycle) { registration.error("registration.lifecycle", new ConnectorDiagnosticError("plugin_lifetime_missing")); throw new Error("Thinkarr requires plugin lifecycle admission"); }
   const diagnostics = createLifecycleDiagnostics(api.lifecycle, api.logger, options.debug, api.registrationMode as "full" | "tool-discovery");
   registration = diagnostics.trace("registration");
+  const promptReplies = createPromptReplyGuard(api, options.pilotGroup, registration.log,
+    (account, target) => Object.hasOwn(options.accounts, account) && canonicalPhone(target) === canonicalPhone(options.accounts[account]));
   const assertLive = () => { if (lifecycle.aborted) throw new ConnectorDiagnosticError("plugin_lifetime_closed"); };
   registration.log("info", "registration.ready", { debugEnabled: options.debug, mediaEnabled: !!options.pilotGroup });
   lifecycle.addEventListener("abort", () => registration.log("info", "registration.disposed"), { once: true });
@@ -367,6 +371,7 @@ export function register<C extends object>(api: OpenClawHost<C>) {
           const currentSignal = signal ? AbortSignal.any([signal, lifecycle]) : lifecycle;
           const result = await diagnostics.run("media_tool", name, currentSignal, (trace) => runMedia({ ...identity, signal: currentSignal,
             assertCurrent: () => { assertLive(); assertCurrent(); } }, ctx.runtimeConfig ?? ctx.config ?? api.config, (connector, current) => connector.mediaTool(current, name, args), name, trace)) ?? { status: "failed" as const };
+          if (name === "media_select" && result.status === "prompt_sent") promptReplies.presented(_id, ctx.sessionKey, identity.account);
           return { content: [{ type: "text" as const, text: result.status === "ok" ? JSON.stringify(result) : mediaMessages[result.status] }], details: result };
         },
       };
@@ -413,8 +418,15 @@ export function register<C extends object>(api: OpenClawHost<C>) {
     const quote = supplemental && typeof supplemental === "object" ? Reflect.get(supplemental, "quote") : undefined;
     const quotedId = quote && typeof quote === "object" ? Reflect.get(quote, "id") : undefined;
     if (quotedId !== undefined && quotedId !== replyTo) return reject("confirmation_quote_mismatch");
-    const quoteVerified = native.ReplyToIsQuote === true || (!!replyTo && quotedId === replyTo);
+    // In this pinned WhatsApp adapter ReplyToId is populated from the visible
+    // native provider quote. Supplemental quote *body* may subsequently be
+    // removed by context-visibility policy, without removing the route ID.
+    // Do not demand an optional flag/body as a second authorization source.
+    // All group/account/admission checks above and server exact-prompt checks
+    // still apply; explicitly non-quote/conflicting evidence remains rejected.
+    const quoteVerified = native.ReplyToIsQuote !== false && !!replyTo;
     if (native.ReplyToId !== undefined && (!replyTo || replyTo.length > 512 || !quoteVerified)) return reject("confirmation_quote_unverified");
+    if (replyTo) trace.log("debug", "confirmation.quote_verified", { reason: quotedId === replyTo ? "matching_supplemental_quote" : "native_reply_id" });
     const identity = actor("whatsapp", account, sender, from.id);
     if (!identity) return reject("confirmation_actor_invalid");
     const signal = AbortSignal.any([lifecycle, AbortSignal.timeout(28_000), ...(context.abortSignal ? [context.abortSignal] : [])]);

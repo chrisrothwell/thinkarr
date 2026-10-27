@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
+import { isTable } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
+import { logger } from "@/lib/logger";
 
 // Never cache or pre-render this route — every request must hit the live DB
 // so that ensureSchemaIntegrity runs and the probe reflects the real schema state.
@@ -13,14 +15,13 @@ export async function GET() {
     // all columns. Any column present in schema.ts but absent from the live
     // database causes an immediate SQLite error, returning 503 and failing the
     // Docker HEALTHCHECK before broken queries ever reach real users.
-    // Add new tables here as they are introduced in schema.ts.
-    db.select().from(schema.appConfig).limit(0).all();
-    db.select().from(schema.users).limit(0).all();
-    db.select().from(schema.sessions).limit(0).all();
-    db.select().from(schema.conversations).limit(0).all();
-    db.select().from(schema.messages).limit(0).all();
+    // Include delegated MCP tables automatically as the schema grows.
+    for (const table of Object.values(schema)) {
+      if (isTable(table)) db.select().from(table).limit(0).all();
+    }
     return NextResponse.json({ status: "ok" });
-  } catch (e) {
-    return NextResponse.json({ status: "error", detail: String(e) }, { status: 503 });
+  } catch {
+    try { logger.error("HEALTH_SCHEMA_PROBE_FAILED"); } catch { /* The health response must survive logging failure. */ }
+    return NextResponse.json({ status: "error" }, { status: 503 });
   }
 }

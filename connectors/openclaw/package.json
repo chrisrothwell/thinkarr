@@ -1,6 +1,6 @@
 {
   "name": "@thinkarr/openclaw",
-  "version": "0.3.8",
+  "version": "0.3.11",
   "private": true,
   "type": "module",
   "files": ["dist", "openclaw.plugin.json", "README.md", "SETUP.md", "skills"],

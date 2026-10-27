@@ -3,7 +3,7 @@ import { createDiagnosticTrace, type DiagnosticFields, type DiagnosticLogger } f
 
 // Kept in sync with package.json by the lifecycle regression suite. This is
 // executing-code metadata, never the saved package or desired upgrade version.
-export const COMPANION_VERSION = "0.3.8";
+export const COMPANION_VERSION = "0.3.11";
 type Trace = ReturnType<typeof createDiagnosticTrace>;
 type WorkKind = NonNullable<DiagnosticFields["workKind"]>;
 export type Lifecycle = {
