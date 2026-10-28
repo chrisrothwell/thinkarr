@@ -4,7 +4,7 @@
 
 The core release covers the web app and the supported OpenClaw/WhatsApp companion: private Plex linking, scoped title facts, explicit movie/TV-season selection, native human confirmation, actor-attributed Seerr requests and truthful immediate outcomes. Seerr owns approval and completion notifications.
 
-The current candidate is app **1.1.8-beta.12** with companion **0.3.11**, pinned to OpenClaw **2026.10.4**. A successful live request on 0.3.10 establishes the request path; it does not establish the newer single-message fix or managed-upgrade behavior. Those require the candidate acceptance below. IMDb/artwork cards (#533) are a subsequent feature upgrade.
+The stable release pair is app **1.1.8** with companion **1.0.0**, pinned to OpenClaw **2026.10.4**. The companion promotes the 0.3.11 runtime/configuration contract without a configuration migration. Beta execution logs verify an acknowledged request and exact-turn duplicate-reply cancellation on 0.3.11; the stable artifacts still require their own version/checksum and startup verification. Managed hot-upgrade behavior remains an accepted limitation below. IMDb/artwork cards (#533) and thumbs-up reaction confirmation (#539) are subsequent feature upgrades; quoted-text confirmation remains the supported flow.
 
 ## Automated gates
 
@@ -29,7 +29,7 @@ Download the companion workflow artifact from the exact passing PR/beta run. It 
 Verify the checksum in that directory:
 
 ```bash
-sha256sum -c thinkarr-openclaw-0.3.11.tgz.sha256
+sha256sum -c thinkarr-openclaw-1.0.0.tgz.sha256
 ```
 
 Use the validated archive for acceptance and distribution; do not substitute an unrelated local build with the same version label. `npm run pack:openclaw -- --output <fresh-directory>` supports a local reproduction and refuses to overwrite existing output.
@@ -52,20 +52,26 @@ Record pass/fail evidence against the release commit, image digest and companion
 | Movie and TV | Owner-initiated movie and explicit-season TV flows preserve the exact title/season choice and Seerr permissions/quota/approval. Returned attribution matches the linked participant. |
 | One prompt/result | One selection gives one native prompt; attempted redundant model output is blocked/cancelled. Logs show `presentation.guard_armed`, native confirmation outcome and receipt-checked result. Finance/unrelated quotes and later turns remain unmuted. |
 | Uncertain writes | A lost/unknown outcome is inspected before another attempt; no blind retry or duplicate request. A successful request need not be repeated merely to test prompt presentation. |
-| Upgrade/rollback | An idle managed companion replacement activates the expected full runtime within the supported budget. Verify existing binding/config afterward and rehearse the documented rollback path. |
+| Upgrade/rollback | Preserve backup/prior artifacts and verify the full executing version, existing binding/config and channel connection after installation or recovery. Managed hot replacement is an owner-accepted exception for this release (#527); retain the reproduction/rollback work for a future release. |
 
-**#527 remains a release blocker for managed upgrades until demonstrated:** idle companion work counts are not the host's retained-lease counts. Capture host drain/apply/saved-versus-active facts and old/new instance logs. A timeout or version mismatch is a failed acceptance result; preserve evidence and follow the host's explicit recovery receipt. Repeated reloads, a longer timeout, forced cancellation or automatic restart do not establish a fix. The diagnostic connection remains read-only; live installation/recovery is an owner-operated step.
+**Accepted release limitation — #527:** the owner accepts managed hot-replacement drain timeouts/saved-versus-executing version mismatches for app 1.1.8 / companion 1.0.0 and defers diagnosis and repair to a future release because reproductions require time-consuming upgrade attempts. This exception permits stable promotion; it does not establish successful managed-upgrade acceptance or waive automated/security gates. Idle companion work counts are not the host's retained-lease counts. Capture host drain/apply/saved-versus-active facts and old/new instance logs when troubleshooting. Preserve evidence and follow the host's explicit recovery receipt, using an owner-operated external-supervisor/container restart when needed. Do not delete a live connection lock. Repeated reloads, a longer timeout, forced cancellation or automatic restart do not establish a fix. The diagnostic connection remains read-only; live installation/recovery is an owner-operated step.
 
 Before updating, take a consistent backup of `/config` and the protected host configuration/secret store using the deployment's normal backup procedure. Retain the prior image digest and companion archive/checksum. Roll back the matched code artifacts if needed; do not replay successful Seerr writes or restore credentials blindly as a conversation repair. Resolve any unknown write outcome before a new request.
 
 ## Promotion
 
-1. Finish candidate acceptance on beta and resolve blocking results. Link evidence in the release PR; keep unresolved feature work in separate issues.
-2. Through a feature PR to `dev`, strip the beta suffix for the full release: `1.1.8-beta.N` → `1.1.8`.
+1. Record beta acceptance and the owner-accepted #527 exception in the release PR; keep unresolved feature work in separate issues. Do not mark unperformed acceptance checks as passed.
+2. Through a feature PR to `dev`, strip the beta suffix for the full app release (`1.1.8-beta.N` → `1.1.8`) and set the companion stable version to `1.0.0`, including its lockfile and executing-code version.
 3. Promote `dev → beta → main` through reviewed PRs with required checks. The human controls merges and release timing.
 4. The human tags the stable `main` commit as `v1.1.8`. The pipeline verifies tag/package parity and main ancestry before publication.
 5. After image/security gates pass, the pipeline publishes the image and the exact validated companion/checksum/compatibility metadata as GitHub Release assets. Existing different release assets are not overwritten; identical assets are safe on rerun.
 6. Confirm the production image and executing companion version, then turn detailed debug logging off after acceptance evidence is captured.
+
+## Existing-agent production MCP setup
+
+Helga is an existing OpenClaw agent that will use the production Thinkarr MCP instance. After the stable image/artifacts are published and deployed, use the packaged [agent setup guide](connectors/openclaw/SETUP.md) with the production MCP endpoint and its discovered `/api/mcp/info` audience. Reuse a valid enrollment for that same production instance; if Helga is not enrolled there, obtain an owner-authorized production setup grant and create its scoped integration/key/credential through the existing helper. A beta enrollment or participant binding does not transfer to production.
+
+Preserve Helga's unrelated tools, routing and native secret store. Configure the production integration's allowed group, receiving bot identity, public linking origin and operation grants; keep service authentication separate from each participant's Plex/Seerr link. Verify the full companion version and channel connection, then let participants complete private account linking against production. Deployment, secret input, enrollment and an actual request remain owner-authorized rollout actions, not consequences of a version bump.
 
 ## Periodic upgrades
 
