@@ -397,6 +397,8 @@ The stable pair is Thinkarr 1.1.8 / OpenClaw companion 1.0.0, pinned to host 202
 
 The required CodeQL job retains `upload: false` and saves SARIF artifacts. An explicit checker enforces effective result/rule-default `error` levels and rejects missing, malformed or failed analysis reports; it does not rely on an unsupported analyze-action input. Report snippets, arbitrary messages and file paths are not printed by the gate. GitHub's default main-branch scanning continues to own Security-tab uploads.
 
+Mocked downstream-request tests compare parsed URL origins against exact expected destinations rather than hostname string prefixes. This preserves scheme/host/port boundaries and makes the destination assertions unambiguous to security analysis without excluding tests from CodeQL.
+
 Transitive build-tool refreshes retain the framework's dependency constraints and keep Vitest and its coverage provider on the same release. Browser-target metadata, esbuild platform binaries and PostCSS resolutions are pinned together in the lockfile.
 
 The production Docker stage removes the base image's npm CLI, npx launcher and npm-bundled dependencies. Build stages retain npm for installation/compilation; the standalone entrypoint runs `node server.js` directly. This prevents unused package-manager dependencies from shipping vulnerabilities independently of the application lockfile. Docker smoke coverage checks that Node runs and npm/npx plus the bundled npm directory are absent; image vulnerability scanning remains enabled without npm-only CVE suppressions.

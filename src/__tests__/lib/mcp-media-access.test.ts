@@ -308,7 +308,9 @@ describe("delegated media downstream identity/preflight", () => {
     const access = h.access();
     expect(await access.visibleLibrarySections()).toEqual({ shared: false, sections: [] });
     expect(await access.requestEligibility({ mediaType: "movie" })).toEqual({ eligible: true });
-    expect(h.fetchRequest.mock.calls.every(([url]) => !String(url).startsWith("http://plex.internal"))).toBe(true);
+    expect(h.fetchRequest.mock.calls.every(([url]) =>
+      ["https://plex.invalid", "http://seerr.internal:5055"].includes(new URL(String(url)).origin),
+    )).toBe(true);
   });
 
   it("scans every stable directory page and rejects a later duplicate immutable identity", async () => {
