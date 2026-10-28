@@ -23,17 +23,19 @@ npm run build:openclaw
 npm pack ./connectors/openclaw
 ```
 
-Install the resulting `thinkarr-openclaw-0.3.11.tgz` through the supported local archive mechanism:
+Install the resulting `thinkarr-openclaw-1.0.0.tgz` through the supported local archive mechanism:
 
 ```bash
-openclaw plugins install npm-pack:/path/to/thinkarr-openclaw-0.3.11.tgz --no-enable
+openclaw plugins install npm-pack:/path/to/thinkarr-openclaw-1.0.0.tgz --no-enable
 ```
 
-For releases, prefer the validated `.tgz` and matching `.sha256` from the GitHub Release. Beta/PR runs expose the same files as companion workflow artifacts. `thinkarr-openclaw-release.json` records the app version, executing companion version, pinned host version and archive hash. Verify with `sha256sum -c thinkarr-openclaw-0.3.11.tgz.sha256` before installation. `npm run pack:openclaw` builds, packs, installs/audits the archive's production dependencies in a clean temporary consumer and smoke-checks registration, tool admission, hooks and packaged skills; it does not issue live link or request calls. An optional `-- --output <fresh-directory>` exports all three files without overwriting another build.
+For releases, prefer the validated `.tgz` and matching `.sha256` from the GitHub Release. Beta/PR runs expose the same files as companion workflow artifacts. `thinkarr-openclaw-release.json` records the app version, executing companion version, pinned host version and archive hash. Verify with `sha256sum -c thinkarr-openclaw-1.0.0.tgz.sha256` before installation. `npm run pack:openclaw` builds, packs, installs/audits the archive's production dependencies in a clean temporary consumer and smoke-checks registration, tool admission, hooks and packaged skills; it does not issue live link or request calls. An optional `-- --output <fresh-directory>` exports all three files without overwriting another build.
 
 The Control UI can configure, enable and reload an installed plugin. Its catalog installer does not accept arbitrary local archives; a CLI or the browser's operator Terminal is needed for this archive installation. The package is not currently advertised as a published npm/ClawHub release.
 
-For an already-enrolled `0.3.x` connection, update the managed archive with the normal replacement/capability review. Keep the existing native secrets, connection settings and keys; do not run enrollment again. This patch works with the same Thinkarr API build. The companion accepts native SecretRefs during registration and reads prepared secrets through the pinned host SDK only during admitted invocations. Local archives, including `npm-pack:` sources, remain outside OpenClaw's reviewed trust sources. Managed installation/integrity tracking does not confer official trust or remove a provenance warning.
+Companion **1.0.0** is the stable release paired with Thinkarr **1.1.8** and OpenClaw **2026.10.4**. For an already-enrolled `0.3.x` connection to the same Thinkarr instance, update the managed archive with the normal replacement/capability review. Keep the existing native secrets, connection settings and keys; do not run enrollment again. No configuration migration is required. The companion accepts native SecretRefs during registration and reads prepared secrets through the pinned host SDK only during admitted invocations. Local archives, including `npm-pack:` sources, remain outside OpenClaw's reviewed trust sources. Managed installation/integrity tracking does not confer official trust or remove a provenance warning.
+
+**Known upgrade limitation (#527):** managed hot replacement can time out or leave the saved and executing versions different. The owner accepts this limitation for the stable release; diagnosis and repair are deferred. Preserve the failure evidence and use the host's recovery receipt with an owner-operated external-supervisor/container restart when needed. Do not delete connection locks, repeatedly reload, or replay uncertain sends/requests. Verify the full executing version and WhatsApp connection after recovery. See [production rollout](../../PRODUCTION_RELEASE.md) for backups and production-instance enrollment.
 
 ## Native-secret configuration
 
