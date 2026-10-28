@@ -10,11 +10,11 @@ The stable release pair is app **1.1.8** with companion **1.0.0**, pinned to Ope
 
 All required PR gates must pass on the reviewed release tree: lint, type-check, unit tests, SDK compatibility, production audits, SAST, E2E, CodeQL and Gitleaks. App CI runs Node 26, matching the Docker runtime.
 
-CodeQL's saved SARIF is checked explicitly for error-level findings (including query-default levels). Missing/corrupt reports or failed analysis block the gate. The required job keeps `upload: false`; GitHub's default main-branch scanning still uploads to the Security tab.
+CodeQL's saved SARIF is checked explicitly for error-level findings (including query-default levels). Missing/corrupt reports or failed analysis block the gate. PR checks run full-tree queries rather than diff-informed queries, so unchanged findings cannot disappear behind a promotion baseline. The required job keeps `upload: false`; GitHub's default main-branch scanning still uploads to the Security tab.
 
 `npm run pack:openclaw` validates the distributable rather than only source files. It checks archive contents, installs and audits production dependencies in a clean consumer with engine checks, imports the packed runtime, and verifies synchronous registration, lifecycle version, hooks, skill roots, admitted tool descriptors and rejection of context-free identities. The smoke uses placeholder configuration and prohibits registration-time network I/O; it is not a live host/provider test.
 
-The beta/tag image pipeline must also pass Docker schema recovery, Docker smoke, image scanning and both architecture builds. Local Docker unavailability must remain explicitly recorded; a local exception does not waive those CI gates.
+The beta/tag image pipeline first runs its own full-tree CodeQL release gate on the exact checkout. Tests and companion packaging depend on that gate; Docker schema recovery/smoke, image scanning, both architecture builds/digest pushes and manifest/release publication follow transitively. A green PR scan is not a substitute for this in-workflow publication gate. Local Docker unavailability must remain explicitly recorded; a local exception does not waive those CI gates.
 
 The public health endpoint probes all exported schema tables/columns, including delegated MCP tables, without reading rows. A missing table/column returns 503 with a fixed response; database details stay out of the public response.
 

@@ -155,6 +155,15 @@ describe("POST /api/auth/callback — rate limiting", () => {
 });
 
 describe("POST /api/auth/callback — validation", () => {
+  it.each(["123", "../resources", "//other.invalid", "123?next=https://other.invalid", {}, [], null, true, 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])("rejects malformed PIN IDs before checking Plex (%j)", async (pinId) => {
+    const req = new Request("http://localhost/api/auth/callback", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pinId }),
+    });
+    const res = await callbackPOST(req);
+    expect(res.status).toBe(400);
+    expect(checkPlexPin).not.toHaveBeenCalled();
+  });
+
   it("returns 400 when pinId is missing", async () => {
     const req = new Request("http://localhost/api/auth/callback", {
       method: "POST",

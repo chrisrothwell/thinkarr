@@ -12,8 +12,42 @@ permissions:
   contents: read
 
 jobs:
+  codeql:
+    name: CodeQL Release Gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    env:
+      CODEQL_ACTION_DIFF_INFORMED_QUERIES: 'false'
+    steps:
+      - uses: actions/checkout@v7
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: javascript-typescript
+          queries: security-and-quality
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:javascript-typescript"
+          upload: false
+          output: ${{ runner.temp }}/codeql-results
+      - name: Enforce error-level CodeQL findings
+        run: node scripts/check-codeql-sarif.mjs "${{ runner.temp }}/codeql-results"
+      - name: Upload SARIF as artifact
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: codeql-sarif-release-${{ github.run_id }}
+          path: ${{ runner.temp }}/codeql-results
+          if-no-files-found: error
+          retention-days: 7
+
   test:
     name: Test
+    # Gate packaging, image builds/digest pushes and tag publication in this run.
+    needs: codeql
     runs-on: ubuntu-latest
 
     steps:
