@@ -34,6 +34,8 @@ jobs:
               - 'scripts/check-openclaw-sdk.mjs'
               - 'scripts/package-openclaw.mjs'
               - 'scripts/check-codeql-sarif.mjs'
+              - 'scripts/codeql-reviewed-findings.mjs'
+              - '.github/codeql-reviewed-findings.json'
               - 'tests/**'
               - 'public/**'
               - 'package.json'
@@ -172,6 +174,7 @@ jobs:
     permissions:
       contents: read
       actions: read
+      security-events: read
 
     steps:
       - uses: actions/checkout@v7
@@ -190,7 +193,9 @@ jobs:
           output: ${{ runner.temp }}/codeql-results
 
       - name: Enforce error-level CodeQL findings
-        run: node scripts/check-codeql-sarif.mjs "${{ runner.temp }}/codeql-results"
+        run: node scripts/check-codeql-sarif.mjs "${{ runner.temp }}/codeql-results" --reviewed-findings .github/codeql-reviewed-findings.json
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - name: Upload SARIF as artifact
         uses: actions/upload-artifact@v7

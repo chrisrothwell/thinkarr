@@ -161,12 +161,12 @@ gh api repos/chrisrothwell/thinkarr/code-scanning/alerts \
 gh api --method PATCH \
   repos/chrisrothwell/thinkarr/code-scanning/alerts/14 \
   -f state=dismissed \
-  -f dismissed_reason=false_positive \
+  -f dismissed_reason='false positive' \
   -f dismissed_comment="<one-line explanation of why the validation makes this safe>"
 ```
 
 ### Accepted dismissed_reason values
-- `false_positive` — CodeQL cannot trace through a custom validation function
+- `false positive` — CodeQL cannot trace through a custom validation function
 - `won't fix` — risk accepted and documented
 - `used in tests` — alert is in test-only code
 

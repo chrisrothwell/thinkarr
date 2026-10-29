@@ -18,6 +18,7 @@ jobs:
     permissions:
       contents: read
       actions: read
+      security-events: read
     env:
       CODEQL_ACTION_DIFF_INFORMED_QUERIES: 'false'
     steps:
@@ -34,7 +35,9 @@ jobs:
           upload: false
           output: ${{ runner.temp }}/codeql-results
       - name: Enforce error-level CodeQL findings
-        run: node scripts/check-codeql-sarif.mjs "${{ runner.temp }}/codeql-results"
+        run: node scripts/check-codeql-sarif.mjs "${{ runner.temp }}/codeql-results" --reviewed-findings .github/codeql-reviewed-findings.json
+        env:
+          GH_TOKEN: ${{ github.token }}
       - name: Upload SARIF as artifact
         uses: actions/upload-artifact@v7
         if: always()
