@@ -15,6 +15,43 @@
       "when": 1742651582000,
       "tag": "0001_add_message_duration",
       "breakpoints": true
-    }
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1748354400000,
+      "tag": "0002_mcp_channel_integration",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1792411200000,
+      "tag": "0003_mcp_service_principals",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1792411200001,
+      "tag": "0004_mcp_delegation_replay",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1792458000000,
+      "tag": "0005_mcp_trusted_linking",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1792458000001,
+      "tag": "0006_mcp_mobile_handoff",
+      "breakpoints": true
+    },
+    { "idx": 7, "version": "6", "when": 1792587600000, "tag": "0007_mcp_beta_pilot", "breakpoints": true },
+    { "idx": 8, "version": "6", "when": 1792634400000, "tag": "0008_mcp_setup_grants", "breakpoints": true }
   ]
 }

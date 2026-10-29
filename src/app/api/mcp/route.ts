@@ -1,31 +1,56 @@
 import { NextResponse } from "next/server";
+import { randomBytes } from "crypto";
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import {
+  ListToolsRequestSchema,
+  CallToolRequestSchema,
+  McpError,
+  ErrorCode,
+  type Tool,
+} from "@modelcontextprotocol/sdk/types.js";
+import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { getConfig, getUserIdByMcpToken } from "@/lib/config";
 import { initializeTools } from "@/lib/tools/init";
 import { getOpenAITools, executeTool, hasTools } from "@/lib/tools/registry";
 import { getDb, schema } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { getClientIp } from "@/lib/auth/rate-limit";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
+import { formatDisplayTitlesAsText } from "@/lib/tools/display-titles-text";
+import { createBasket, resolveBasket } from "@/lib/tools/pending-basket";
+import * as overseerr from "@/lib/services/overseerr";
+import type { DisplayTitle } from "@/types/titles";
+import type { McpExecutionContext, PersonalMcpContext, ServiceMcpContext } from "@/lib/mcp/auth-context";
+import { authenticateServiceMcpToken, isServiceMcpToken, recordServiceMcpDenial } from "@/lib/mcp/service-principals";
+import { handleServiceLinkPost } from "@/lib/mcp/link-dispatch";
+import { createMcpRequestTiming, type McpRequestTiming } from "@/lib/mcp/request-timing";
 
 type McpPermission = "admin" | "user";
+
+type AuthResult = PersonalMcpContext;
 
 /**
  * Authenticate an MCP request via Bearer token.
  * Returns the permission level, or null if unauthorized.
  */
-function authenticateMcp(request: Request): { permission: McpPermission; userId?: number } | null {
+function authenticateMcp(request: Request): McpExecutionContext | null {
   const authHeader = request.headers.get("authorization");
   if (!authHeader?.startsWith("Bearer ")) return null;
 
   const token = authHeader.slice(7);
+  // Reserved service tokens never enter the generic administrator/user path,
+  // including when revoked, disabled or copied into the old token config.
+  if (isServiceMcpToken(token)) return authenticateServiceMcpToken(token);
   const storedToken = getConfig("mcp.bearerToken");
 
   // Check global admin token (backward compat)
   if (storedToken && token === storedToken) {
     // Admin token — can optionally scope to a user via X-User-Id
     const userIdHeader = request.headers.get("x-user-id");
-    if (userIdHeader) {
-      const parsedUserId = parseInt(userIdHeader, 10);
+    if (userIdHeader !== null) {
+      if (!/^[1-9]\d{0,9}$/.test(userIdHeader)) return null;
+      const parsedUserId = Number(userIdHeader);
       if (!Number.isSafeInteger(parsedUserId) || parsedUserId <= 0 || parsedUserId > 2_147_483_647) {
         return null;
       }
@@ -36,10 +61,11 @@ function authenticateMcp(request: Request): { permission: McpPermission; userId?
         .where(eq(schema.users.id, parsedUserId))
         .get();
       if (user) {
-        return { permission: user.isAdmin ? "admin" : "user", userId: user.id };
+        return { kind: "personal", permission: user.isAdmin ? "admin" : "user", userId: user.id };
       }
+      return null;
     }
-    return { permission: "admin" };
+    return { kind: "personal", permission: "admin" };
   }
 
   // Check per-user tokens — token automatically scopes to that user's permission level
@@ -48,11 +74,58 @@ function authenticateMcp(request: Request): { permission: McpPermission; userId?
     const db = getDb();
     const user = db.select().from(schema.users).where(eq(schema.users.id, userId)).get();
     if (user) {
-      return { permission: user.isAdmin ? "admin" : "user", userId: user.id };
+      return { kind: "personal", permission: user.isAdmin ? "admin" : "user", userId: user.id };
     }
   }
 
   return null;
+}
+
+function serviceAccessUnavailable(auth: ServiceMcpContext) {
+  recordServiceMcpDenial(auth);
+  // Checked before tool initialization, channel-header delegation, body parsing
+  // and SDK dispatch, so every transport/mode enforces the same disabled gate.
+  return NextResponse.json({ error: "Delegated MCP access is not enabled in this build." }, { status: 403 });
+}
+
+/**
+ * Resolve channel identity headers to a Thinkarr user.
+ * Returns the resolved AuthResult on match, "unregistered" if headers present but no mapping,
+ * or null if no channel headers (caller should use the base auth result).
+ */
+function resolveChannelIdentity(
+  request: Request,
+): AuthResult | "unregistered" | null {
+  const channelType = request.headers.get("x-channel-type");
+  const channelUserId = request.headers.get("x-channel-user-id");
+  if (!channelType || !channelUserId) return null;
+
+  const db = getDb();
+  const identity = db
+    .select()
+    .from(schema.mcpChannelIdentities)
+    .where(
+      and(
+        eq(schema.mcpChannelIdentities.channelType, channelType),
+        eq(schema.mcpChannelIdentities.channelUserId, channelUserId),
+      ),
+    )
+    .get();
+
+  if (!identity) {
+    // Issue a short-lived registration token and return the link
+    const token = randomBytes(16).toString("hex");
+    const expiresAt = Math.floor(Date.now() / 1000) + 900; // 15 min
+    db.insert(schema.mcpRegistrationTokens)
+      .values({ token, channelType, channelUserId, expiresAt })
+      .run();
+    logger.info("MCP_CHANNEL_UNREGISTERED", { channelType });
+    return "unregistered";
+  }
+
+  const user = db.select().from(schema.users).where(eq(schema.users.id, identity.userId)).get();
+  if (!user) return "unregistered";
+  return { kind: "personal", permission: user.isAdmin ? "admin" : "user", userId: user.id };
 }
 
 /**
@@ -62,7 +135,6 @@ function authenticateMcp(request: Request): { permission: McpPermission; userId?
 function canExecuteTool(toolName: string, permission: McpPermission): boolean {
   if (permission === "admin") return true;
 
-  // Users can use all query/read tools
   const readOnlyTools = [
     "plex_search_library",
     "plex_get_watch_history",
@@ -77,9 +149,9 @@ function canExecuteTool(toolName: string, permission: McpPermission): boolean {
     "radarr_get_queue",
     "overseerr_search",
     "overseerr_list_requests",
+    "display_titles",
   ];
 
-  // Users can also request content on their own behalf
   const userActionTools = [
     "overseerr_request_movie",
     "overseerr_request_tv",
@@ -90,13 +162,229 @@ function canExecuteTool(toolName: string, permission: McpPermission): boolean {
   return readOnlyTools.includes(toolName) || userActionTools.includes(toolName);
 }
 
+/** Extra tool definition exposed only in text mode. */
+const CONFIRM_REQUEST_TOOL = {
+  type: "function" as const,
+  function: {
+    name: "confirm_request",
+    description:
+      "Submit a media download request that the user has explicitly confirmed. ONLY call this after the user sends a clear positive confirmation (e.g. 'yes', 'request it', 'request #2'). Never call this speculatively.",
+    parameters: {
+      type: "object",
+      properties: {
+        pendingKey: {
+          type: "string",
+          description: "The pendingKey returned by display_titles in this conversation turn.",
+        },
+        selection: {
+          type: "number",
+          description: "The 1-based number the user selected from the displayed list.",
+        },
+      },
+      required: ["pendingKey", "selection"],
+    },
+  },
+};
+
+type ToolCallOutcome =
+  | { ok: true; payload: unknown }
+  | { ok: false; kind: "rejected"; status: number; message: string }
+  | { ok: false; kind: "execution_error"; message: string };
+
 /**
- * MCP endpoint — supports both tool listing and tool execution.
- *
- * GET  /api/mcp          → List available tools (OpenAI function format)
- * POST /api/mcp          → Execute a tool (JSON-RPC style)
- * POST /api/mcp (list)   → List tools via POST
+ * Shared tool-dispatch logic used by both the legacy ad-hoc method handling
+ * and the spec-compliant JSON-RPC `tools/call` handling below, so permission
+ * checks, confirm_request, and the text-mode display_titles interception
+ * only need to be implemented once.
  */
+async function runToolCall(opts: {
+  toolName: string;
+  rawArguments: Record<string, unknown> | string | undefined;
+  auth: AuthResult;
+  textMode: boolean;
+}): Promise<ToolCallOutcome> {
+  const { toolName, rawArguments, auth, textMode } = opts;
+
+  if (toolName === "confirm_request") {
+    if (!textMode) {
+      return { ok: false, kind: "rejected", status: 403, message: "confirm_request is only available in text mode" };
+    }
+    if (!auth.userId) {
+      return { ok: false, kind: "rejected", status: 403, message: "User identity required for confirm_request" };
+    }
+
+    const args =
+      typeof rawArguments === "string"
+        ? (JSON.parse(rawArguments) as { pendingKey?: string; selection?: number })
+        : (rawArguments as { pendingKey?: string; selection?: number } | undefined) ?? {};
+
+    const { pendingKey, selection } = args;
+    if (!pendingKey || typeof selection !== "number") {
+      return { ok: false, kind: "rejected", status: 400, message: "pendingKey and selection are required" };
+    }
+
+    const item = resolveBasket(pendingKey, selection, auth.userId);
+    if (!item) {
+      return {
+        ok: true,
+        payload: { success: false, message: "That selection is no longer valid. Please search again." },
+      };
+    }
+
+    logger.info("MCP_CONFIRM_REQUEST", { userId: auth.userId, title: item.title, mediaType: item.mediaType });
+
+    const result =
+      item.mediaType === "movie"
+        ? await overseerr.requestMovie(item.overseerrId)
+        : await overseerr.requestTv(
+            item.overseerrId,
+            item.seasonNumber != null ? [item.seasonNumber] : undefined,
+          );
+
+    const message = result.success
+      ? `✅ *${item.title}* has been requested.`
+      : `❌ Could not request *${item.title}*: ${result.message}`;
+
+    return { ok: true, payload: { ...result, message } };
+  }
+
+  if (textMode && (toolName === "overseerr_request_movie" || toolName === "overseerr_request_tv")) {
+    return {
+      ok: false,
+      kind: "rejected",
+      status: 403,
+      message: "Use confirm_request in text mode — direct request tools are disabled.",
+    };
+  }
+
+  if (!canExecuteTool(toolName, auth.permission)) {
+    logger.warn("MCP_PERMISSION_DENIED", { tool: toolName, permission: auth.permission, userId: auth.userId });
+    return {
+      ok: false,
+      kind: "rejected",
+      status: 403,
+      message: `Permission denied: ${auth.permission} cannot execute ${toolName}`,
+    };
+  }
+
+  const argsString = typeof rawArguments === "string" ? rawArguments : JSON.stringify(rawArguments || {});
+
+  logger.info("MCP_TOOL_EXEC", { tool: toolName, permission: auth.permission, userId: auth.userId });
+
+  try {
+    const resultStr = await executeTool(toolName, argsString, auth);
+    const result = JSON.parse(resultStr);
+
+    // In text mode, intercept display_titles and convert to markdown + pending basket
+    if (textMode && toolName === "display_titles") {
+      const displayTitles: DisplayTitle[] = result?.displayTitles ?? [];
+      const { text, requestableItems } = formatDisplayTitlesAsText(displayTitles);
+
+      let pendingKey: string | undefined;
+      if (requestableItems.length > 0 && auth.userId != null) {
+        pendingKey = createBasket(requestableItems, auth.userId);
+      }
+
+      return { ok: true, payload: { text, ...(pendingKey ? { pendingKey } : {}) } };
+    }
+
+    return { ok: true, payload: result };
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : "Tool execution failed";
+    return { ok: false, kind: "execution_error", message: msg };
+  }
+}
+
+function buildToolList(permission: McpPermission, textMode: boolean) {
+  const allTools = getOpenAITools();
+  const filtered =
+    permission === "admin"
+      ? allTools
+      : allTools.filter((t) => t.type === "function" && canExecuteTool(t.function.name, permission));
+
+  if (textMode) {
+    return [...filtered, CONFIRM_REQUEST_TOOL];
+  }
+  return filtered;
+}
+
+/**
+ * Spec-compliant MCP Streamable HTTP handling via the official SDK (#461).
+ * `initialize` / `notifications/initialized` and protocol-version negotiation
+ * are handled automatically by `Server`; only `tools/list` and `tools/call`
+ * are implemented here, reusing `runToolCall()` so permission checks stay in
+ * one place shared with the legacy ad-hoc dispatch below.
+ *
+ * A fresh `Server` + transport is created per request — the SDK's stateless
+ * transports (no `sessionIdGenerator`) cannot be reused across requests.
+ */
+async function handleMcpProtocolRequest(request: Request, auth: AuthResult, token: string, textMode: boolean): Promise<Response> {
+  const server = new Server(
+    { name: "thinkarr", version: process.env.NEXT_PUBLIC_APP_VERSION ?? "unknown" },
+    { capabilities: { tools: {} } },
+  );
+
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    const permission = auth.permission;
+
+    // Reuse buildToolList so confirm_request is included in ?mode=text here
+    // exactly as it is for the legacy ad-hoc dispatch below — this was
+    // previously reimplemented inline without the textMode branch, so
+    // spec-compliant JSON-RPC clients (unlike the legacy-envelope OpenClaw
+    // adapter) never saw confirm_request even when connecting with ?mode=text.
+    const tools: Tool[] = buildToolList(permission, textMode)
+      .filter((t) => t.type === "function")
+      .map((t) => ({
+        name: t.function.name,
+        description: t.function.description,
+        inputSchema: t.function.parameters as Tool["inputSchema"],
+      }));
+
+    return { tools };
+  });
+
+  server.setRequestHandler(CallToolRequestSchema, async (req) => {
+    const { name, arguments: args } = req.params;
+
+    const outcome = await runToolCall({
+      toolName: name,
+      rawArguments: args,
+      auth,
+      textMode,
+    });
+
+    if (!outcome.ok) {
+      if (outcome.kind === "rejected") {
+        // Bad params / unknown tool / permission denied — a protocol-level error,
+        // not something the calling LLM should try to route around silently.
+        throw new McpError(ErrorCode.InvalidParams, outcome.message);
+      }
+      // Tool execution itself failed — per MCP spec this is reported inside the
+      // result with isError, not as a protocol error, so the LLM can see and
+      // react to it instead of just losing the turn.
+      return { content: [{ type: "text", text: outcome.message }], isError: true };
+    }
+
+    return { content: [{ type: "text", text: JSON.stringify(outcome.payload) }] };
+  });
+
+  const transport = new WebStandardStreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+    enableJsonResponse: true,
+  });
+
+  await server.connect(transport);
+
+  const authInfo: AuthInfo = {
+    token,
+    clientId: auth.userId != null ? String(auth.userId) : "admin",
+    scopes: [auth.permission],
+    extra: { permission: auth.permission, userId: auth.userId },
+  };
+
+  return transport.handleRequest(request, { authInfo });
+}
+
 export async function GET(request: Request) {
   const auth = authenticateMcp(request);
   if (!auth) {
@@ -106,6 +394,7 @@ export async function GET(request: Request) {
       { status: 401 },
     );
   }
+  if (auth.kind === "service") return serviceAccessUnavailable(auth);
 
   initializeTools();
 
@@ -113,49 +402,110 @@ export async function GET(request: Request) {
     return NextResponse.json({ tools: [] });
   }
 
-  const allTools = getOpenAITools();
-
-  // Filter based on permission
-  const tools = auth.permission === "admin"
-    ? allTools
-    : allTools.filter((t) => t.type === "function" && canExecuteTool(t.function.name, auth.permission));
+  const { searchParams } = new URL(request.url);
+  const textMode = searchParams.get("mode") === "text";
+  const tools = buildToolList(auth.permission, textMode);
 
   return NextResponse.json({ tools });
 }
 
 export async function POST(request: Request) {
-  const auth = authenticateMcp(request);
-  if (!auth) {
+  const bearer = request.headers.get("authorization");
+  const timing = (bearer?.startsWith("Bearer ") && isServiceMcpToken(bearer.slice(7))) || request.headers.has("Thinkarr-Delegation")
+    ? createMcpRequestTiming(request) : undefined;
+  try {
+    const response = await handleMcpPost(request, timing);
+    return timing ? timing.finish(response) : response;
+  } catch (error) { timing?.fail(); throw error; }
+}
+
+async function handleMcpPost(request: Request, timing?: McpRequestTiming) {
+  const baseAuth = timing ? timing.spanSync("authentication", () => authenticateMcp(request)) : authenticateMcp(request);
+  if (!baseAuth) {
     logger.warn("MCP_AUTH_FAILURE", { ip: getClientIp(request), path: "POST /api/mcp" });
     return NextResponse.json(
       { error: "Unauthorized. Provide a valid Bearer token." },
       { status: 401 },
     );
   }
+  if (baseAuth.kind === "service") {
+    if (!baseAuth.enabled) return serviceAccessUnavailable(baseAuth);
+    return handleServiceLinkPost(request, baseAuth, timing);
+  }
 
   initializeTools();
 
+  const { searchParams } = new URL(request.url);
+  const textMode = searchParams.get("mode") === "text";
+
+  // Resolve channel identity when in text mode
+  let auth = baseAuth;
+  if (textMode) {
+    const resolved = resolveChannelIdentity(request);
+    if (resolved === "unregistered") {
+      const url = new URL(request.url);
+      // Find the token we just inserted so we can return it
+      const channelType = request.headers.get("x-channel-type")!;
+      const channelUserId = request.headers.get("x-channel-user-id")!;
+      const db = getDb();
+      const row = db
+        .select()
+        .from(schema.mcpRegistrationTokens)
+        .where(
+          and(
+            eq(schema.mcpRegistrationTokens.channelType, channelType),
+            eq(schema.mcpRegistrationTokens.channelUserId, channelUserId),
+          ),
+        )
+        .orderBy(schema.mcpRegistrationTokens.expiresAt)
+        .get();
+      const token = row?.token ?? "";
+      return NextResponse.json({
+        error: "unregistered",
+        registrationUrl: `${url.origin}/mcp/link?token=${token}`,
+      });
+    }
+    if (resolved !== null) {
+      auth = resolved;
+    }
+  }
+
+  let rawBody: string;
   let body: {
+    jsonrpc?: string;
     method?: string;
     tool?: string;
     arguments?: Record<string, unknown> | string;
   };
 
   try {
-    body = await request.json();
+    rawBody = await request.text();
+    body = JSON.parse(rawBody);
   } catch {
-    return NextResponse.json(
-      { error: "Invalid JSON body" },
-      { status: 400 },
-    );
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
+
+  // Spec-compliant MCP Streamable HTTP, via the official SDK. Discriminated on the
+  // `jsonrpc` field so this doesn't collide with the legacy ad-hoc dispatch below,
+  // which existing integrations (OpenClaw text-channel adapter) rely on (#461).
+  if (body.jsonrpc === "2.0") {
+    // The body was already consumed via request.text() above to inspect it —
+    // hand the SDK transport a fresh Request with the same content instead of
+    // the original (its body stream can only be read once).
+    const freshRequest = new Request(request.url, {
+      method: "POST",
+      headers: request.headers,
+      body: rawBody,
+    });
+    return handleMcpProtocolRequest(freshRequest, auth, request.headers.get("authorization")!.slice(7), textMode);
+  }
+
+  // Legacy ad-hoc dispatch (no `jsonrpc` envelope) — kept for backward compatibility
+  // with existing integrations that predate the JSON-RPC handling above.
 
   // Handle "list" method
   if (body.method === "list" || body.method === "tools/list") {
-    const allTools = getOpenAITools();
-    const tools = auth.permission === "admin"
-      ? allTools
-      : allTools.filter((t) => t.type === "function" && canExecuteTool(t.function.name, auth.permission));
+    const tools = buildToolList(auth.permission, textMode);
     return NextResponse.json({ tools });
   }
 
@@ -163,40 +513,16 @@ export async function POST(request: Request) {
   if (body.method === "execute" || body.method === "tools/call" || body.tool) {
     const toolName = body.tool || "";
     if (!toolName) {
-      return NextResponse.json(
-        { error: "tool name is required" },
-        { status: 400 },
-      );
+      return NextResponse.json({ error: "tool name is required" }, { status: 400 });
     }
 
-    // Permission check
-    if (!canExecuteTool(toolName, auth.permission)) {
-      logger.warn("MCP_PERMISSION_DENIED", { tool: toolName, permission: auth.permission, userId: auth.userId });
-      return NextResponse.json(
-        { error: `Permission denied: ${auth.permission} cannot execute ${toolName}` },
-        { status: 403 },
-      );
+    const outcome = await runToolCall({ toolName, rawArguments: body.arguments, auth, textMode });
+    if (!outcome.ok) {
+      const status = outcome.kind === "execution_error" ? 500 : outcome.status;
+      return NextResponse.json({ error: outcome.message }, { status });
     }
 
-    const args = typeof body.arguments === "string"
-      ? body.arguments
-      : JSON.stringify(body.arguments || {});
-
-    logger.info("MCP_TOOL_EXEC", { tool: toolName, permission: auth.permission, userId: auth.userId });
-
-    try {
-      const result = await executeTool(toolName, args);
-      return NextResponse.json({
-        tool: toolName,
-        result: JSON.parse(result),
-      });
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Tool execution failed";
-      return NextResponse.json(
-        { error: msg },
-        { status: 500 },
-      );
-    }
+    return NextResponse.json({ tool: toolName, result: outcome.payload });
   }
 
   return NextResponse.json(

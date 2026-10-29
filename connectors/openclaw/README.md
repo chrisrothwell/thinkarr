@@ -1,0 +1,182 @@
+# Thinkarr companion plugin for OpenClaw
+
+Connect OpenClaw conversations to the Thinkarr app with private Plex account linking, participant-scoped title search and explicitly confirmed media requests. Tools use standard MCP with Thinkarr's signed per-invocation delegation profile. Existing unrelated tools and routing are retained.
+
+## Install and configure
+
+**Start with the packaged [agent setup guide](SETUP.md).** An owner's setup agent should read that guide and perform local key/secret/configuration work. Owner involvement is limited to actual authorization and secure input; constructing JSON and copying individual public values is not the normal setup flow.
+
+The package includes an API enrollment helper at `dist/openclaw/setup.js`. It discovers the public delegation audience, registers the dedicated public key using a one-use owner grant, obtains a scoped service credential and saves both private values as **protected OpenClaw store entries**. Plugin configuration contains native SecretRefs, not a custom plaintext credentials file. OpenClaw's manifest secret contracts provide resolution, redaction and audit coverage.
+
+Requirements:
+- OpenClaw **2026.10.4** (the exact tested SDK/runtime contract), on a supported POSIX host.
+- A Thinkarr build providing `/api/mcp/info` and `/api/mcp/setup` (introduced in `1.1.8-beta.9`).
+- Verified HTTPS reachable by both OpenClaw and participants' browsers; HTTP loopback is supported only for local development.
+- An owner-authorized Thinkarr integration with its group, public linking origin and bot identity saved in Settings.
+
+Build from this repository:
+
+```bash
+npm ci
+npm run check:openclaw
+npm run build:openclaw
+npm pack ./connectors/openclaw
+```
+
+Install the resulting `thinkarr-openclaw-1.0.0.tgz` through the supported local archive mechanism:
+
+```bash
+openclaw plugins install npm-pack:/path/to/thinkarr-openclaw-1.0.0.tgz --no-enable
+```
+
+For releases, prefer the validated `.tgz` and matching `.sha256` from the GitHub Release. Beta/PR runs expose the same files as companion workflow artifacts. `thinkarr-openclaw-release.json` records the app version, executing companion version, pinned host version and archive hash. Verify with `sha256sum -c thinkarr-openclaw-1.0.0.tgz.sha256` before installation. `npm run pack:openclaw` builds, packs, installs/audits the archive's production dependencies in a clean temporary consumer and smoke-checks registration, tool admission, hooks and packaged skills; it does not issue live link or request calls. An optional `-- --output <fresh-directory>` exports all three files without overwriting another build.
+
+The Control UI can configure, enable and reload an installed plugin. Its catalog installer does not accept arbitrary local archives; a CLI or the browser's operator Terminal is needed for this archive installation. The package is not currently advertised as a published npm/ClawHub release.
+
+Companion **1.0.0** is the stable release paired with Thinkarr **1.1.8** and OpenClaw **2026.10.4**. For an already-enrolled `0.3.x` connection to the same Thinkarr instance, update the managed archive with the normal replacement/capability review. Keep the existing native secrets, connection settings and keys; do not run enrollment again. No configuration migration is required. The companion accepts native SecretRefs during registration and reads prepared secrets through the pinned host SDK only during admitted invocations. Local archives, including `npm-pack:` sources, remain outside OpenClaw's reviewed trust sources. Managed installation/integrity tracking does not confer official trust or remove a provenance warning.
+
+**Known upgrade limitation (#527):** managed hot replacement can time out or leave the saved and executing versions different. The owner accepts this limitation for the stable release; diagnosis and repair are deferred. Preserve the failure evidence and use the host's recovery receipt with an owner-operated external-supervisor/container restart when needed. Do not delete connection locks, repeatedly reload, or replay uncertain sends/requests. Verify the full executing version and WhatsApp connection after recovery. See [production rollout](../../PRODUCTION_RELEASE.md) for backups and production-instance enrollment.
+
+## Native-secret configuration
+
+The setup helper writes the equivalent of this source configuration using public metadata and protected secret references:
+
+```json
+{
+  "connection": {
+    "endpoint": "https://thinkarr.example.com/api/mcp",
+    "publicLinkOrigin": "https://thinkarr.example.com",
+    "service": "<integration UUID>",
+    "issuer": "openclaw:thinkarr",
+    "keyId": "<registered key ID>",
+    "audience": "<discovered public instance ID>",
+    "bearer": { "source": "store", "provider": "default", "id": "THINKARR_SERVICE_TOKEN" },
+    "privateKeyPem": { "source": "store", "provider": "default", "id": "THINKARR_PRIVATE_KEY" }
+  },
+  "accounts": { "default": "+15555550100" },
+  "pilotGroup": "120300000000@g.us"
+}
+```
+
+`pilotGroup` is the existing plugin option name for its native WhatsApp group restriction. It must match the integration's saved Thinkarr group. `accounts` maps receiving account IDs to the bot's own identity for self/echo rejection, not a participant allowlist. Actual secret names generated by the helper are integration/key-specific. Use the configured native store provider alias when it is not `default`.
+
+Registration accepts references without reading secrets. During an admitted invocation the adapter uses OpenClaw's `getPreparedPluginSecretInput` for the two fixed manifest-owned paths. Missing/denied prepared values fail closed; it never resolves references directly, reads the store or falls back to environment values. Both values must belong to the same secrets revision, rechecked at invocation and delivery fences. Host-materialized string configurations remain supported. Never put raw values in source configuration, chat or model tool arguments. After rotating protected values, refresh native secrets and reload the plugin so old invocation lifetimes are closed. Run the platform secret audit and inspect actual runtime tools before reporting readiness.
+
+## Diagnostics and debug mode
+
+Structured diagnostics are a permanent plugin feature. Normal mode (`debug: false`, the default) logs registration, operation start/completion, rejected operations and errors. Each operation has a random `traceId`, stage and elapsed time. Errors identify the stage/reason and, when available, HTTP status, MCP error code or a recognized network/module error code. Validation failures include bounded schema-field/code pairs (for example `bearer: invalid_format`), never rejected values or validator messages. Known Thinkarr tool errors are mapped to fixed reasons; unknown upstream text is never copied into logs. Chat/tool replies retain their safe outcome messages.
+
+Enable **Debug logs** in the Thinkarr plugin's OpenClaw settings, or set the single option locally:
+
+```bash
+openclaw config set plugins.entries.thinkarr.config.debug true --strict-json
+```
+
+Turn detailed logging off with:
+
+```bash
+openclaw config set plugins.entries.thinkarr.config.debug false --strict-json
+```
+
+The option takes effect when the platform applies/reloads the plugin configuration. Follow its normal apply receipt; if it requires a manual reload, use `openclaw plugins reload thinkarr --json` once. A `registration.ready` record confirms `debugEnabled: true` or `false`. Changing this option does not require reenrollment or secret changes.
+
+Debug mode adds admission, credential/SDK preparation, signing-key validation, signed HTTP transport, MCP connect/call/result/cleanup, private-link verification, prompt acknowledgement and WhatsApp resolve/send/dispatch/receipt stages. These records use the host's info sink with `level: "debug"` in their JSON, so the plugin switch works without enabling global Gateway debug logs. View Gateway logs (for example `openclaw logs --limit 300 --plain`), find `[thinkarr]`, and correlate one attempt by `traceId`.
+
+Useful failure signals:
+
+| Stage / reason | What to inspect |
+| --- | --- |
+| `credentials.load` + `ERR_MODULE_NOT_FOUND` / `ERR_PACKAGE_PATH_NOT_EXPORTED` | Installed host version and availability of the pinned prepared-secret SDK |
+| `secrets.prepared_status` / `prepared_bearer_unavailable` / `prepared_signing_key_unavailable` | Native secret preparation and admitted plugin capability scope; availability flags reveal no secret values |
+| `connector.signing_key` | Imported credential is a supported Ed25519 PKCS8 key |
+| `mcp.http.response`, HTTP 401/403 | Integration credential, delegation assertion and saved integration/group policy |
+| `integration_operation_not_allowed` / `permission_required` | Updated app verified the linking call but the integration lacks its linking operation grant; check `account_link_start` / `account_link_confirm` in the existing operation allowlist |
+| `mcp.http.fetch` + `ECONNREFUSED` / `ENOTFOUND` / TLS code | Thinkarr reachability, DNS or certificate configuration |
+| `remote_link_configuration_required` | Thinkarr's public link origin and WhatsApp bot configuration |
+| `outbound.private_adapter` / `outbound.private_resolve` / `outbound.private_receipt` | WhatsApp adapter availability, private routing policy or provider receipt |
+| `prepared_secret_revision_changed` / `invocation_not_current` | A rotation, reload or superseding invocation closed the attempt; do not blindly retry uncertain sends/writes |
+
+Both modes exclude credential values, SecretRef IDs, config/file paths, URLs, JWTs, raw exceptions/stacks, request/response bodies, titles, message/verification text, provider receipt IDs and participant identities. Logging failures cannot change request or delivery behavior.
+
+### Measuring handshake latency on both sides
+
+Each physical signed POST has an independent random `requestId`, sent as `X-Thinkarr-Request-Id`; this is separate from JWT replay nonces and carries no authority. Updated Thinkarr app builds validate that ID (or generate one), echo it in the response and log `MCP_HTTP_TIMING` request-received/completed/aborted events. Client and server records include UTC timestamps and monotonic elapsed times.
+
+With the plugin's `debug: true`, the connector also sends `X-Thinkarr-Debug-Timing: 1`. This enables server phase start/end records for authentication, body reading, delegation key lookup, signature verification, nonce claim, envelope validation, SDK connect/dispatch, tool handling, response buffering and awaited cleanup. A stalled phase has a start but no end; client cancellation produces `request_aborted` when it reaches the app. The server's `request_completed` is emitted only after handler processing and SDK cleanup, not before cleanup starts. Normal mode retains concise request totals without detailed phase logs.
+
+The response includes `Server-Timing` metrics, especially `mcp_total`, measured inside the app. Client `mcp.http.response` records `httpDurationMs` (fetch-to-headers), `serverDurationMs`, and their nonnegative difference `outsideHandlerMs`. This comparison does not require synchronized clocks. The difference includes time outside the measured handler span: network, proxy/framework queuing/output, and client scheduling. It is **not** a pure network measurement and cannot separate those causes without further infrastructure evidence. Nested server subphase durations overlap; do not sum them to calculate total time.
+
+If no headers arrive, the `mcp.http.fetch` error/timeout record still includes that request's `httpDurationMs`, `requestId` and protocol phase. This distinguishes time in the stalled request from elapsed time spent on earlier handshake exchanges.
+
+Client `mcp.http.body_start` and `mcp.http.body_complete` / `body_error` / `body_cancelled` distinguish received headers from SDK body consumption. `bodyDurationMs` is elapsed time since headers were received. The observer does not clone, eagerly drain, retain or log response chunks, and preserves streaming/cancellation behavior.
+
+Correlate one client's `requestId` with server `MCP_HTTP_TIMING` records. The client also records the echoed `responseRequestId`. A server phase that dominates `mcp_total` localizes app processing; a fast server total with a large client remainder points outside the measured app span. A missing server entry can mean the request never reached the handler, the app build lacks this instrumentation, or the inspected log window omitted it. `serverTimingAvailable: false` means that response has no usable metrics, for example an older app, a proxy response or a failure before the app could return headers.
+
+**Use a timing-enabled Thinkarr app and companion 0.3.7 or later for two-sided measurements.** Updating the plugin alone cannot add server timing to an older app. No enrollment or key rotation is required.
+
+### Diagnosing an upgrade that does not drain
+
+Companion 0.3.8 adds observations for issue #527. Every valid registration has a random `instanceId`, an executing-code `companionVersion` and `registrationMode` (`full` or `tool-discovery`). These identify the code producing a log, not the host's desired/saved version or numeric generation. A newly saved package alone does not prove runtime activation; check the host's apply receipt/status and a new **full** registration's version/instance.
+
+Normal logging includes `lifecycle.work_started`, `work_cancelled`, `work_settled`, `signal_aborted` and `dispose`. Each work item has a random `workId` equal to its operation `traceId`, a fixed kind, last `workStage`, age, cancellation flag and total `trackedWorkCount`. Tracking covers tool execution and the entire claimed private/group hook, including acknowledgement/result sends and awaited cleanup. Cancellation requested is not physical settlement. Factory discovery and unrelated turns are not counted as executing work.
+
+With debug enabled, full runtime instances emit `lifecycle.snapshot` every ten seconds, including when idle, and up to twenty `lifecycle.work_pending` records per snapshot. The total count remains exact. The unreferenced timer is started through the public `runInBackgroundContext` API to detach registration's caller scope and is cleared on abort/disposal; discovery instances do not poll. No diagnostic timer keeps the process alive or claims a retained-work token.
+
+Each MCP exchange has an `exchangeId` (selection and presentation acknowledgement are separate exchanges). `mcp.close` starts SDK client/transport cleanup; `close_pending` warns after two seconds, and `close_completed` / `close_failed` report its actual settlement and `cleanupDurationMs`. `pendingHttpCount` counts fetches still awaiting headers, and `pendingBodyCount` counts observed response bodies awaiting EOF/error/cancellation settlement. SDK close completion does not by itself prove those counts are zero. `mcp.http.cancel_requested` records a physical-fetch abort request; body `body_cancel_start` is distinct from cancellation completion. No close timeout abandons cleanup or retries a send/write.
+
+For the next owner-authorized upgrade:
+
+1. Enable debug on the running version through normal configuration/apply, and capture its full registration/version and idle snapshot before upgrading. The first upgrade **to** 0.3.8 cannot retrospectively instrument an older instance that is already stuck.
+2. Retain Gateway logs spanning before the upgrade through the sixty-second drain window. Capture the host's saved-versus-active/apply status and its drain/retained-work/cleanup facts alongside `[thinkarr]` records; a plugin cannot observe every host-owned lease.
+3. Match the old `instanceId` to its unfinished `workId`/stage. An outbound send stage without settlement points to adapter work; `mcp.close_pending` localizes SDK cleanup; unmatched HTTP/body stages identify transport work. Correlate signed HTTP `requestId` values with app timings as needed.
+4. If companion snapshots show zero tracked work while the host still reports retained work, investigate the host's retained consumers/custody and publication path. Zero companion work is **not** proof the host is idle. The host may wait for pre-replacement drain before aborting the lifecycle signal, so absence of `signal_aborted`/`dispose` alone is not a plugin cleanup failure. Missing snapshots can also mean an older build, disabled debug, blocked event loop or an incomplete log window.
+5. Preserve the failure evidence before following the host's recovery instructions. Do not treat repeated reloads, longer drain limits, forced cancellation or automatic restarts as a fix. Leave an uncertain media write/send unreplayed. Disable debug after collecting the authorized evidence.
+
+## Conversation playbook
+
+The installed [Thinkarr interaction skill](skills/thinkarr/SKILL.md) is declared in the manifest's skill directories and ships in the package. Agents with Thinkarr tools should use it for linking, scoped search/details and confirmed requests. Normal skill discovery/agent skill policy remains authoritative; no external conversation transcript or manually edited agent prompt is needed. If an agent restricts skills, make this installed skill available through its normal configuration.
+
+The selection tool sends one self-contained native confirmation message. Its `prompt_sent` result explicitly tells the model to end with the host's `NO_REPLY` marker rather than send a second confirmation/instruction. Reply directly to the delivered prompt with `request it`; the native handler submits and sends one status. Instructions guide model behavior but do not authorize requests or replace the native confirmation checks. Verify model adherence in the live pilot.
+
+Companion 0.3.9 additionally guards duplicate text at the host tool/reply boundaries for a correlated media-only turn, after the native prompt receipt **and** backend presentation acknowledgement succeed. The host's exact run/call/session facts associate that execution with the prompt; neither model text nor a session-wide timeout supplies this association. A subsequent text-only WhatsApp `message` send to the same group/account is blocked with `NO_REPLY` guidance, and an exactly correlated automatic reply is cancelled. New turns, other recipients/accounts, rich/error payloads and mixed workflows (including finance tools) remain unaffected. Missing exact correlation leaves delivery unchanged and logs `presentation.guard_unavailable`; `guard_armed` and `duplicate_tool_blocked` / `duplicate_reply_cancelled` show actual enforcement. State is bounded, expires after two minutes and clears on lifecycle abort; it is never confirmation or submission authority.
+
+Native media tools participate in the host's normal catalog, including Code Mode callable globals and `catalog.search` handles. They must not use `catalogMode: "direct-only"`: that removes them from the pinned host's JavaScript catalog even if a separate direct descriptor is visible. Host-discriminated `code_mode_exec` wrapper calls do not turn a media-only run into a mixed workflow; every nested child still runs normal tool/identity/presentation checks. Shell tools merely named `exec`, and unrelated finance tools, do disable presentation guarding. A missing Code Mode binding is not evidence that a separate model-callable confirmation tool is required. Only an admitted native selection sends the prompt, and the participant's subsequent WhatsApp reply drives native confirmation.
+
+The pinned hook contexts use different meanings for `channelId`: tool hooks carry the native conversation ID (`currentChannelId`), while reply hooks carry the provider label. The presentation guard matches the tool's native group, then arms only when that exact captured call/session successfully presents a native prompt. An automatic reply must match the armed run/session/provider/account and either the group or that receiving account's exact configured bot alias (the legacy reply mapper may expose bot `To`). Other peers/bots/groups are not accepted, and no session key is parsed for group authority. The two observed legacy title reads, `plex_check_availability` and `overseerr_search` (including namespaced forms), are presentation-compatible context; they neither expose new tools nor supply identity, availability or request authority. Personal-history, mutation, finance and unknown tools still make the run mixed. `mixed_workflow` and `presentation.reply_unmatched` diagnostics explain why an otherwise presented turn remains unmuted. These route/context corrections require companion 0.3.11 or later.
+
+The pinned WhatsApp ingress puts the provider quote ID in post-admission `ReplyToId`, but context-visibility filtering can remove `SupplementalContext.quote` and the optional quote flag may be absent. This native ID is accepted after the full admission/route checks, without demanding a quote body or extra flag. Conflicting supplemental IDs and explicit non-quote flags are rejected. Server-owned exact-current-prompt/replacement/expiry/replay rules still decide whether that native ID authorizes a request; an unrelated finance quote cannot authorize media.
+
+Private-link guidance is intentionally concise: check the private WhatsApp instructions, and report if nothing arrived. An unconfirmed provider receipt is still logged/returned as unconfirmed; short wording is not a verified identity or delivery claim. Failed request steps direct the administrator to permissions/diagnostics rather than asking an already-linked participant to link again.
+
+## Runtime behavior
+
+- The manifest declares all four owned tools and intentionally activates at startup so the admitted inbound-message hook exists before the first link/confirmation reply. All tools remain optional and require additive owner grants.
+- Optional tools: `thinkarr_account_link`, `thinkarr_media_search`, `thinkarr_media_details`, `thinkarr_media_select`. Read/selection tools do not submit requests.
+- Tool factories capture host-owned sender/account/native conversation and current-invocation guards. There is no latest-sender cache or session-key authority inference.
+- The adapter supports canonical E.164/PN-JID identities and validated native group addresses. Unresolved LID, hosted/device and ambiguous identities fail closed.
+- A verified private inbound event may identify its conversation by the human peer or by this receiving account's bot address. Only after channel, private-kind, message-ID, timestamp and sender agreement checks does the adapter normalize that bot-recipient form to the authenticated sender. Other accounts' bot addresses, other peers and self echoes remain rejected; model tool contexts do not receive this exception.
+- Private verification sends one explicit, fixed-text acknowledgement to the verified sender through the checked WhatsApp outbound adapter. The hook returns handled with no automatic text, so success/failure replies do not depend on automatic-reply policy and cannot be duplicated by it. Binding completion and acknowledgement confirmation are logged separately; an unconfirmed acknowledgement is never blindly retried and does not undo a committed binding.
+- Group confirmation uses the pinned host's global `reply_dispatch` hook, where the full native frame includes group `From` / `ChatId` / `OriginatingTo` separately from the receiving bot `To`. It requires matching configured group/receiving account, a foreground agent-owned post-admission `user_request`, actual provider sender/event/time, compatible reply route, allowed send policy and native quote evidence when present. It never guesses a group from a session key, bot recipient or configuration alone. Normal group `message_tool_only` suppression of automatic finals permits the plugin's explicit native result. Hard send-policy denial, other delivery suppression, observed-only, synthetic/internal, ACP/background and other-group turns remain unclaimed.
+- A claimed group confirmation sends one explicit fixed-text result, returns receipt-checked delivery counts, and suppresses normal model fallback. Generic quoted assent to a non-Thinkarr prompt remains unclaimed. Lost/cancelled confirmation responses after submission are `unknown`, not invitations to submit again.
+- Linking has a 45-second overall MCP budget and a 20-second tool-call budget; private verification reserves 55 seconds including its acknowledgement within a 60-second hook limit. Both invocation cancellation and the SDK's per-request/transport signal reach physical HTTP requests. The optional standalone SSE GET probe receives a local 405 with no credential/network forwarding; signed POST-only policy is unchanged. Debug HTTP records identify the `initialize`, `initialized` or `tool_call` protocol phase.
+- Private links and request prompts require checked physical-send fences and actual provider destination/message receipts. No public-link fallback or automatic send retry.
+- Native `request it`/`request 1` confirms the one presented title/season choice. The prompt lasts two minutes. Replaced/old prompts require the exact current quote; generic yes only matches that prompt. Unrelated messages stay with their normal router.
+- Thinkarr owns the durable actor/binding/event/selection claim and verifies effective Seerr identity, permissions, quotas and returned attribution. Pending approval is preserved. Unknown outcomes are checked in Seerr rather than blindly retried; Seerr owns completion emails.
+
+Linking outcomes distinguish failure from uncertainty:
+
+| Outcome | User guidance |
+| --- | --- |
+| `private_link_sent` | A matching provider receipt was verified; follow the private message. |
+| `private_delivery_unconfirmed` | A send was dispatched but its receipt/actual destination could not be verified (including unresolved LID destinations). Check private WhatsApp instructions; use an arrived link rather than requesting another one. This does not claim verified delivery or relax destination checks. |
+| `unavailable` | A connection/handshake failed before the linking tool call; retry the current step while its private link is valid. No automatic retry or replacement challenge is made. |
+| `unknown` | The linking tool call may have committed but its response was lost/timed out. Check account-link status before another attempt; do not assume success or failure. |
+| `linked` | Thinkarr confirmed the participant binding. Acknowledgement delivery is logged separately. |
+
+Receipt diagnostics include a value-free `receiptDestinationKind` (`pn_jid`, `e164`, `lid`, `group`, `missing`, `other`). An unsupported destination never becomes a verified match; a known wrong group/recipient remains rejected.
+
+Existing `0.2` credentials-file configurations remain a compatibility path, not the recommended setup. Migrate their private values into native secrets and remove the old plugin option. Verify the new connection and retire only confirmed obsolete plaintext copies; the helper does not delete existing key files automatically.
+
+The SDK compatibility check, offline route tests and package build do not prove live provider admission, identity aliases, receipts or handset behavior. Verify the authorized integration in its intended conversation after provisioning. Context-free tool catalogs can omit these factories because they have no admitted human sender; repeated reloads or broader permissions do not supply that identity. Follow the bounded readiness procedure in SETUP.md.
+
+Companion 0.3.11 remains compatible with the existing signed beta.10/beta.11 API; the catalog, quote and duplicate-response fixes require the companion update, not a new backend grant or participant binding. Keep enrollment, native credentials, account bindings and operation grants when upgrading.

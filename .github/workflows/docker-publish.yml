@@ -12,33 +12,85 @@ permissions:
   contents: read
 
 jobs:
+  codeql:
+    name: CodeQL Release Gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      security-events: read
+    env:
+      CODEQL_ACTION_DIFF_INFORMED_QUERIES: 'false'
+    steps:
+      - uses: actions/checkout@v7
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: javascript-typescript
+          queries: security-and-quality
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:javascript-typescript"
+          upload: false
+          output: ${{ runner.temp }}/codeql-results
+      - name: Enforce error-level CodeQL findings
+        run: node scripts/check-codeql-sarif.mjs "${{ runner.temp }}/codeql-results" --reviewed-findings .github/codeql-reviewed-findings.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Upload SARIF as artifact
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: codeql-sarif-release-${{ github.run_id }}
+          path: ${{ runner.temp }}/codeql-results
+          if-no-files-found: error
+          retention-days: 7
+
   test:
     name: Test
+    # Gate packaging, image builds/digest pushes and tag publication in this run.
+    needs: codeql
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v6
-
-      # Strip leading 'v' from tag names so APP_VERSION is always a bare
-      # version string (e.g. '1.1.0' not 'v1.1.0', 'beta' stays 'beta').
-      - name: Set version
-        run: echo "APP_VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
-
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@v7
         with:
-          node-version: '22'
+          fetch-depth: 0
+
+      # The beta UI reports the actual package version, not merely "beta".
+      # Production tags must match stable code already on main.
+      - name: Set version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Production tags require a stable package version"; exit 1; }
+            [[ "${GITHUB_REF_NAME#v}" == "$VERSION" ]] || { echo "Tag/package version mismatch"; exit 1; }
+            git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          fi
+          echo "APP_VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '26'
           cache: 'npm'
 
       - name: Install dependencies
         run: npm ci
 
       - name: Dependency audit
-        run: npm audit --audit-level=high
+        run: npm run security:audit
+
+      - name: OpenClaw SDK, runtime audit and distributable smoke
+        run: |
+          npm run check:openclaw
+          npm audit --prefix connectors/openclaw --omit=dev --audit-level=low
+          npm run pack:openclaw -- --output "$RUNNER_TEMP/thinkarr-companion"
 
       - name: SAST scan
         run: |
           pip install semgrep --quiet
-          semgrep --config=p/typescript --config=p/nextjs --config=p/owasp-top-ten src/ --error
+          semgrep --config=p/typescript --config=p/nextjs --config=p/owasp-top-ten src/ connectors/ --error
 
       - name: Lint
         run: npm run lint
@@ -63,6 +115,14 @@ jobs:
           CI: true
           NEXT_TELEMETRY_DISABLED: "1"
 
+      - name: Upload validated companion archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: thinkarr-openclaw
+          path: ${{ runner.temp }}/thinkarr-companion/
+          if-no-files-found: error
+          retention-days: 90
+
       - name: Upload Playwright report
         uses: actions/upload-artifact@v7
         if: failure()
@@ -77,11 +137,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
-          node-version: '22'
+          node-version: '26'
           cache: 'npm'
 
       - name: Install dependencies
@@ -192,10 +252,10 @@ jobs:
             runner: ubuntu-24.04-arm
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set version
-        run: echo "APP_VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+        run: echo "APP_VERSION=$(node -p "require('./package.json').version")" >> "$GITHUB_ENV"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -245,10 +305,10 @@ jobs:
       contents: write  # required for anchore/sbom-action to attach SBOM to release
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set version
-        run: echo "APP_VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+        run: echo "APP_VERSION=$(node -p "require('./package.json').version")" >> "$GITHUB_ENV"
 
       - name: Download digests
         uses: actions/download-artifact@v8
@@ -301,3 +361,35 @@ jobs:
           name: sbom-${{ env.APP_VERSION }}
           path: sbom-${{ env.APP_VERSION }}.spdx.json
           retention-days: 90
+
+  companion-release:
+    name: Publish validated companion release assets
+    needs: [test, docker-merge]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: thinkarr-openclaw
+          path: companion
+
+      - name: Verify checksum and publish immutable assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          (cd companion && sha256sum -c ./*.sha256)
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --title "$GITHUB_REF_NAME"
+          fi
+          mkdir -p "$RUNNER_TEMP/existing-companion"
+          for file in companion/*.tgz companion/*.sha256 companion/thinkarr-openclaw-release.json; do
+            name=$(basename "$file")
+            if gh release download "$GITHUB_REF_NAME" --pattern "$name" --dir "$RUNNER_TEMP/existing-companion" >/dev/null 2>&1; then
+              cmp "$file" "$RUNNER_TEMP/existing-companion/$name" || { echo "Refusing to replace different release asset: $name"; exit 1; }
+            else
+              gh release upload "$GITHUB_REF_NAME" "$file"
+            fi
+          done

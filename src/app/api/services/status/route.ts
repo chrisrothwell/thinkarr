@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { getConfig } from "@/lib/config";
+import { refreshPlexToken } from "@/lib/services/plex-auth";
 import type { ApiResponse } from "@/types/api";
 
 export type ServiceStatusLevel = "green" | "amber" | "red";
@@ -83,15 +84,31 @@ async function checkLlmEndpoints(): Promise<ServiceStatus[]> {
 
 async function checkPlex(): Promise<ServiceStatus> {
   const url = getConfig("plex.url");
-  const token = getConfig("plex.token");
+  let token = getConfig("plex.token");
 
   if (!url) return { name: "Plex", status: "red", message: "Not configured" };
 
-  try {
-    const res = await fetch(`${url.replace(/\/$/, "")}/identity`, {
-      headers: { ...(token ? { "X-Plex-Token": token } : {}), Accept: "application/json" },
+  const identityUrl = `${url.replace(/\/$/, "")}/identity`;
+  const probe = (t: string | null) =>
+    fetch(identityUrl, {
+      headers: { ...(t ? { "X-Plex-Token": t } : {}), Accept: "application/json" },
       signal: AbortSignal.timeout(5000),
     });
+
+  try {
+    let res = await probe(token);
+
+    if (res.status === 401) {
+      const refreshed = await refreshPlexToken();
+      if (refreshed) {
+        token = refreshed;
+        res = await probe(refreshed);
+      }
+    }
+
+    if (res.status === 401) {
+      return { name: "Plex", status: "red", message: "Token expired or revoked — reconnect in Settings" };
+    }
     if (!res.ok) {
       return { name: "Plex", status: "amber", message: `HTTP ${res.status}` };
     }

@@ -41,6 +41,19 @@ export async function GET(): Promise<NextResponse> {
 
   try {
     const servers = await getPlexDevices(user.plexToken);
+    // No connection details in a server's response usually means it isn't
+    // publishing itself on plex.tv (common for LAN-only setups) — log a
+    // summary (no tokens) so this is diagnosable from /beta-logs instead of
+    // requiring the admin to reproduce it live (#457).
+    logger.info("Plex device discovery", {
+      userId: session.user.id,
+      servers: servers.map((s) => ({
+        name: s.name,
+        clientIdentifier: s.clientIdentifier,
+        owned: s.owned,
+        connectionCount: s.connections.length,
+      })),
+    });
     return NextResponse.json<ApiResponse>({ success: true, data: servers });
   } catch (e: unknown) {
     const error = e instanceof Error ? e.message : "Unknown error";

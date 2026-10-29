@@ -92,8 +92,11 @@ Before opening a `dev → beta` PR, run all three checks locally and confirm the
 ### 1. npm audit
 ```bash
 npm run security:audit
-# Must exit 0 (no HIGH/CRITICAL vulnerabilities)
+# Must exit 0
 ```
+Runs `scripts/check-npm-audit.mjs`, which audits **production dependencies only** (`npm audit --omit=dev`) and fails on **any** finding at **any** severity — not just high/critical. devDependencies (eslint, drizzle-kit, vite, etc.) are excluded because they never reach the shipped Docker image and have no runtime attack surface; the CI job still surfaces their moderate/low counts as informational (non-blocking) context.
+
+If a production-dependency vulnerability can't be fixed yet (e.g. blocked on an upstream package publishing a fix, or the only available fix is a breaking major-version jump that needs its own dedicated PR), add its GHSA ID to `.npmauditignore` with a comment explaining why and what condition removes it — same spirit as `.trivyignore`. This is a deliberate, reviewed exception, not a way to silence audit noise; remove the entry as soon as the condition is met.
 
 ### 2. Semgrep SAST (requires semgrep installed via pipx in WSL2)
 ```bash
@@ -158,12 +161,12 @@ gh api repos/chrisrothwell/thinkarr/code-scanning/alerts \
 gh api --method PATCH \
   repos/chrisrothwell/thinkarr/code-scanning/alerts/14 \
   -f state=dismissed \
-  -f dismissed_reason=false_positive \
+  -f dismissed_reason='false positive' \
   -f dismissed_comment="<one-line explanation of why the validation makes this safe>"
 ```
 
 ### Accepted dismissed_reason values
-- `false_positive` — CodeQL cannot trace through a custom validation function
+- `false positive` — CodeQL cannot trace through a custom validation function
 - `won't fix` — risk accepted and documented
 - `used in tests` — alert is in test-only code
 

@@ -1,0 +1,74 @@
+{
+  "id": "thinkarr",
+  "name": "Thinkarr",
+  "description": "Thinkarr companion: private Plex linking and participant-scoped media requests",
+  "activation": { "onStartup": true },
+  "skills": ["./skills"],
+  "contracts": {
+    "tools": ["thinkarr_account_link", "thinkarr_media_search", "thinkarr_media_details", "thinkarr_media_select"]
+  },
+  "toolMetadata": {
+    "thinkarr_account_link": { "optional": true },
+    "thinkarr_media_search": { "optional": true },
+    "thinkarr_media_details": { "optional": true },
+    "thinkarr_media_select": { "optional": true }
+  },
+  "configContracts": {
+    "secretInputs": {
+      "paths": [
+        { "path": "connection.bearer", "expected": "string", "ownerKind": "capability" },
+        { "path": "connection.privateKeyPem", "expected": "string", "ownerKind": "capability" }
+      ]
+    }
+  },
+  "uiHints": {
+    "debug": { "label": "Debug logs", "help": "Detailed value-free Thinkarr stage logs. Apply/reload the plugin after changing. Errors are always logged." },
+    "connection.bearer": { "label": "Service credential", "sensitive": true },
+    "connection.privateKeyPem": { "label": "Signing key", "sensitive": true },
+    "credentialsFile": { "label": "Legacy credentials file (migrate to native secrets)" }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["accounts"],
+    "oneOf": [
+      { "required": ["connection"], "not": { "required": ["credentialsFile"] } },
+      { "required": ["credentialsFile"], "not": { "required": ["connection"] } }
+    ],
+    "definitions": {
+      "secretRef": {
+        "type": "object", "additionalProperties": false,
+        "required": ["source", "provider", "id"],
+        "properties": {
+          "source": { "enum": ["store", "env", "file", "exec"] },
+          "provider": { "type": "string", "minLength": 1 },
+          "id": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "properties": {
+      "debug": { "type": "boolean", "default": false, "description": "Emit detailed structured Thinkarr diagnostics to Gateway logs; never includes secrets, messages or participant IDs" },
+      "credentialsFile": { "type": "string", "minLength": 1 },
+      "connection": {
+        "type": "object", "additionalProperties": false,
+        "required": ["endpoint", "publicLinkOrigin", "service", "issuer", "keyId", "audience", "bearer", "privateKeyPem"],
+        "properties": {
+          "endpoint": { "type": "string", "format": "uri" },
+          "publicLinkOrigin": { "type": "string", "format": "uri" },
+          "service": { "type": "string", "format": "uuid" },
+          "issuer": { "type": "string", "minLength": 1 },
+          "keyId": { "type": "string", "minLength": 1 },
+          "audience": { "type": "string", "minLength": 1 },
+          "bearer": { "$ref": "#/definitions/secretRef" },
+          "privateKeyPem": { "$ref": "#/definitions/secretRef" }
+        }
+      },
+      "pilotGroup": { "type": "string", "maxLength": 512, "pattern": "^[0-9]+(?:-[0-9]+)?@g\\.us$", "description": "Native WhatsApp group restriction; media tools remain absent elsewhere" },
+      "accounts": {
+        "type": "object",
+        "additionalProperties": { "type": "string", "pattern": "^\\+[1-9][0-9]{6,14}$" },
+        "description": "Receiving WhatsApp account ID to bot self E.164 identity; not a participant allowlist"
+      }
+    }
+  }
+}

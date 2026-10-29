@@ -77,7 +77,7 @@ Use when Langfuse is not configured, or for server-level issues not captured in 
 
 ```bash
 curl -s -H "X-Api-Key: $THINKARR_INTERNAL_KEY" \
-  "https://ai-beta.plexorcist.synology.me/api/internal/logs?tail=300"
+  "https://tb.chrisrothwell.com/api/internal/logs?tail=300"
 ```
 
 **Optional filters** — append to the URL as needed:

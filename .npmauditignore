@@ -1,0 +1,10 @@
+# Temporary allowlist for npm audit findings in PRODUCTION dependencies only
+# (devDependencies are already excluded via --omit=dev in scripts/check-npm-audit.mjs
+# and never reach the shipped Docker image).
+#
+# Format: one GHSA ID per line, with a comment above explaining why it's here
+# and what condition removes it. This is a deliberate, reviewed exception —
+# not a way to silence audit noise. Remove the entry as soon as the condition
+# is met; do not let entries accumulate indefinitely.
+#
+# (empty — no current exceptions)

@@ -1033,6 +1033,34 @@ describe("getPlexDevices — plex.tv resources endpoint", () => {
   });
 });
 
+describe("plexFetch — 401 handling — issue #457", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("throws a reconnect-oriented message instead of a bare HTTP 401 error", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      json: async () => ({}),
+    }));
+
+    const { searchLibrary } = await import("@/lib/services/plex");
+    await expect(searchLibrary("test")).rejects.toThrow(/reconnect/i);
+  });
+
+  it("still throws a generic HTTP error message for other non-401 failures", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => ({}),
+    }));
+
+    const { searchLibrary } = await import("@/lib/services/plex");
+    await expect(searchLibrary("test")).rejects.toThrow(/HTTP 500/);
+  });
+});
+
 describe("searchLibrary — episode filtering — issue #206", () => {
   beforeEach(() => {
     vi.resetModules();
