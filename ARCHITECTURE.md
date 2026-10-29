@@ -47,6 +47,8 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 ├── scripts/check-openclaw-sdk.mjs    # Integrity-pinned SDK declarations-only compatibility check
 ├── scripts/package-openclaw.mjs      # Clean-consumer archive audit/smoke, checksum and app/host compatibility metadata
 ├── scripts/check-codeql-sarif.mjs     # Fail-closed error-level finding gate for CodeQL's saved SARIF
+├── scripts/codeql-reviewed-findings.mjs # Exact source-bound GitHub false-positive review verification
+├── .github/codeql-reviewed-findings.json # Reviewed alert IDs/locations and runtime/dependency digest
 ├── drizzle/
 │   ├── 0000_short_gressill.sql      # Initial migration (5 tables)
 │   ├── 0001_add_message_duration.sql
@@ -398,6 +400,8 @@ The application's MCP SDK transport override requires `@hono/node-server` 2.1.3 
 The stable pair is Thinkarr 1.1.8 / OpenClaw companion 1.0.0, pinned to host 2026.10.4, with the existing signed delegation and native-secret configuration contract. Managed hot-replacement drain/activation failures (#527) are an owner-accepted limitation for this release, with diagnosis deferred; owner-operated external-supervisor recovery and full executing-version/channel verification remain required when replacement fails. This exception does not waive automated/security gates or claim a lifecycle fix. Existing agents connect using the target production instance's audience and scoped enrollment; beta credentials/bindings are not transferred, and unrelated agent tools/routing are preserved.
 
 The required CodeQL job retains `upload: false` and saves SARIF artifacts. An explicit checker enforces effective result/rule-default `error` levels and rejects missing, malformed or failed analysis reports; it does not rely on an unsupported analyze-action input. PR scans disable diff-informed queries so release readiness does not depend on the target branch's baseline. The Docker beta/tag workflow runs its own full-tree CodeQL release gate on the exact checkout; its test/companion-packaging job depends on that gate, followed by Docker smoke/Trivy, architecture-specific image builds/digest pushes, manifest publication and stable companion publication. A failed release scan therefore prevents packaging/publication without relying on another workflow's status. Report snippets, arbitrary messages and file paths are not printed by the gate. GitHub's default main-branch scanning continues to own Security-tab uploads.
+
+Explicit reviewed findings are distinct from scan exclusions: the gate verifies exact rule/location/alert-ID mappings against live GitHub owner false-positive dismissals and a digest of every non-test `src/` file plus both root package manifests. Changes to the runtime/dependency snapshot, an unreviewed finding, stale/revoked dismissal or unavailable verification fail closed. Five admin-only custom service probes use this disposition; intended LAN/provider support remains available without hiding arbitrary SSRF findings. Workflow tokens have read-only code-scanning access, never authority to dismiss findings. `PRODUCTION_RELEASE.md` describes the review/digest update procedure.
 
 Mocked downstream-request tests compare parsed URL origins against exact expected destinations rather than hostname string prefixes. This preserves scheme/host/port boundaries and makes the destination assertions unambiguous to security analysis without excluding tests from CodeQL.
 
