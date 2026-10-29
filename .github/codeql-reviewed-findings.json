@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "repository": "chrisrothwell/thinkarr",
+  "sourceSha256": "25d04d754c5c39448c53564c77009abc4311fbdc568141d5b5a65beadfc34cd7",
+  "findings": [
+    {
+      "alertNumber": 22,
+      "ruleId": "js/request-forgery",
+      "location": { "path": "src/lib/services/test-connection.ts", "startLine": 29, "endLine": 29, "startColumn": 23, "endColumn": 71 }
+    },
+    {
+      "alertNumber": 28,
+      "ruleId": "js/request-forgery",
+      "location": { "path": "src/lib/services/test-connection.ts", "startLine": 46, "endLine": 53, "startColumn": 23, "endColumn": 7 }
+    },
+    {
+      "alertNumber": 7,
+      "ruleId": "js/request-forgery",
+      "location": { "path": "src/lib/services/test-connection.ts", "startLine": 182, "endLine": 186, "startColumn": 23, "endColumn": 7 }
+    },
+    {
+      "alertNumber": 8,
+      "ruleId": "js/request-forgery",
+      "location": { "path": "src/lib/services/test-connection.ts", "startLine": 208, "endLine": 212, "startColumn": 23, "endColumn": 7 }
+    },
+    {
+      "alertNumber": 9,
+      "ruleId": "js/request-forgery",
+      "location": { "path": "src/lib/services/test-connection.ts", "startLine": 230, "endLine": 234, "startColumn": 23, "endColumn": 7 }
+    }
+  ]
+}

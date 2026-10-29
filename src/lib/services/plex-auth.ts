@@ -56,8 +56,12 @@ export async function createPlexPin(): Promise<PlexPin> {
 
 /** Check if a Plex PIN has been claimed. Returns the auth token if claimed, null otherwise. */
 export async function checkPlexPin(pinId: number): Promise<string | null> {
-  const res = await fetch(`${PLEX_API_BASE}/api/v2/pins/${pinId}`, {
+  if (typeof pinId !== "number" || !Number.isSafeInteger(pinId) || pinId <= 0) {
+    throw new Error("Invalid Plex PIN ID");
+  }
+  const res = await fetch(`${PLEX_API_BASE}/api/v2/pins/${encodeURIComponent(String(pinId))}`, {
     headers: PLEX_HEADERS,
+    redirect: "error",
   });
 
   if (!res.ok) {

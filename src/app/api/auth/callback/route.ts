@@ -26,9 +26,9 @@ export async function POST(request: Request) {
     );
   }
 
-  if (!body || typeof body !== "object" || !body.pinId) {
+  if (!body || typeof body !== "object" || typeof body.pinId !== "number" || !Number.isSafeInteger(body.pinId) || body.pinId <= 0) {
     return NextResponse.json<ApiResponse>(
-      { success: false, error: "pinId is required" },
+      { success: false, error: "pinId must be a positive safe integer" },
       { status: 400 },
     );
   }

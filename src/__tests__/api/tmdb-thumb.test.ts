@@ -10,7 +10,7 @@
  *   - Returns 502 on upstream fetch failure
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const mockSession = {
   sessionId: "test-session",
@@ -24,6 +24,7 @@ function makeRequest(url: string): Request {
 }
 
 describe("GET /api/tmdb/thumb", () => {
+  afterEach(() => vi.unstubAllGlobals());
   beforeEach(() => {
     vi.resetModules();
     mockGetSession.mockResolvedValue(mockSession);
@@ -58,6 +59,25 @@ describe("GET /api/tmdb/thumb", () => {
     const { GET } = await import("@/app/api/tmdb/thumb/route");
     const res = await GET(makeRequest("http://localhost/api/tmdb/thumb?url=not-a-url"));
     expect(res.status).toBe(400);
+  });
+
+  it.each(["https://image.tmdb.org.evil.invalid/a.jpg", "https://image.tmdb.org:8443/a.jpg", "https://user:secret@image.tmdb.org/a.jpg"])("rejects authority overrides without fetching (%s)", async (url) => {
+    const fetchRequest = vi.fn(); vi.stubGlobal("fetch", fetchRequest);
+    const { GET } = await import("@/app/api/tmdb/thumb/route");
+    const res = await GET(makeRequest(`http://localhost/api/tmdb/thumb?url=${encodeURIComponent(url)}`));
+    expect(res.status).toBe(400); expect(fetchRequest).not.toHaveBeenCalled();
+  });
+
+  it("keeps double-slash paths and queries on the fixed TMDB origin and rejects redirects", async () => {
+    const fetchRequest = vi.fn().mockRejectedValue(new TypeError("redirect rejected"));
+    vi.stubGlobal("fetch", fetchRequest);
+    const { GET } = await import("@/app/api/tmdb/thumb/route");
+    const url = "https://image.tmdb.org//other.invalid/poster.jpg?next=https%3A%2F%2Fother.invalid";
+    const res = await GET(makeRequest(`http://localhost/api/tmdb/thumb?url=${encodeURIComponent(url)}`));
+    expect(res.status).toBe(502); expect(fetchRequest).toHaveBeenCalledTimes(1);
+    const [target, options] = fetchRequest.mock.calls[0];
+    expect(target).toBeInstanceOf(URL); expect(target.origin).toBe("https://image.tmdb.org");
+    expect(target.pathname).toBe("//other.invalid/poster.jpg"); expect(options.redirect).toBe("error");
   });
 
   it("proxies a valid image.tmdb.org URL and returns image data", async () => {

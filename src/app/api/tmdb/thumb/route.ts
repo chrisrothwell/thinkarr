@@ -37,15 +37,16 @@ export async function GET(request: Request) {
     return new NextResponse("Invalid URL", { status: 400 });
   }
 
-  if (parsed.protocol !== "https:" || parsed.hostname !== ALLOWED_HOSTNAME) {
+  if (parsed.protocol !== "https:" || parsed.hostname !== ALLOWED_HOSTNAME || parsed.port || parsed.username || parsed.password) {
     return new NextResponse("URL not allowed", { status: 400 });
   }
 
   try {
-    // Host is pinned to the ALLOWED_HOSTNAME constant; user only controls the path/query.
-    // The scheme and host are hardcoded — not exploitable SSRF (see .github/codeql/codeql-config.yml).
-    const safeUrl = `https://${ALLOWED_HOSTNAME}${parsed.pathname}${parsed.search}`;
-    const res = await fetch(safeUrl, { signal: AbortSignal.timeout(10000) });
+    // Assign path/query on a fixed origin, never resolve a user path as a URL.
+    const safeUrl = new URL("https://image.tmdb.org");
+    safeUrl.pathname = parsed.pathname;
+    safeUrl.search = parsed.search;
+    const res = await fetch(safeUrl, { redirect: "error", signal: AbortSignal.timeout(10000) });
 
     if (!res.ok) {
       return new NextResponse("Upstream error", { status: res.status });
