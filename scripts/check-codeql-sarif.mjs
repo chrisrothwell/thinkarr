@@ -2,6 +2,7 @@
 // Never print source snippets, paths or arbitrary SARIF message text.
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { loadReview } from "./codeql-reviewed-findings.mjs";
 
 async function reports(directory) {
   const files = [];
@@ -14,10 +15,12 @@ async function reports(directory) {
 }
 
 try {
-  if (process.argv.length !== 3) throw new Error();
+  if (process.argv.length !== 3 && !(process.argv.length === 5 && process.argv[3] === "--reviewed-findings")) throw new Error();
+  const review = process.argv.length === 5 ? await loadReview(process.argv[4], process.cwd()) : undefined;
   const files = await reports(process.argv[2]);
   if (!files.length) throw new Error();
   const errors = [];
+  let reviewed = 0;
   for (const file of files) {
     const report = JSON.parse(await readFile(file, "utf8"));
     if (report.version !== "2.1.0" || !Array.isArray(report.runs) || !report.runs.length) throw new Error();
@@ -40,12 +43,14 @@ try {
         if (!["none", "note", "warning", "error"].includes(level)) throw new Error();
         if (level === "error") {
           const id = ruleId ?? rule?.id;
+          if (review && await review(id, result)) { reviewed += 1; continue; }
           errors.push(typeof id === "string" && /^[a-zA-Z0-9_./-]{1,100}$/.test(id) ? id : "unclassified_rule");
         }
       }
     }
   }
   console.log(`CodeQL SARIF gate: ${files.length} report(s), ${errors.length} error-level finding(s).`);
+  if (reviewed) console.log(`CodeQL reviewed false positives: ${reviewed} source-bound GitHub dismissal(s) verified.`);
   if (errors.length) {
     for (const id of [...new Set(errors)].slice(0, 20)) console.error(`CodeQL error: ${id}`);
     process.exitCode = 1;

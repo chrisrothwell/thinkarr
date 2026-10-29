@@ -20,12 +20,12 @@ async function probeVoiceSupport(url: string, apiKey: string): Promise<boolean> 
   try {
     const check = validateServiceUrl(url);
     if (!check.valid) return false;
-    // Reconstruct from parsed URL (not raw user string) to prevent SSRF taint propagation
+    // Preserve the validated administrator-selected origin and base path.
     const parsed = new URL(url);
     const base = parsed.origin + parsed.pathname.replace(/\/$/, "");
     const form = new FormData();
     form.append("model", "whisper-1");
-    const voiceOpts: RequestInit = { method: "POST", headers: { Authorization: `Bearer ${apiKey}` }, body: form, signal: AbortSignal.timeout(8000) };
+    const voiceOpts: RequestInit = { method: "POST", headers: { Authorization: `Bearer ${apiKey}` }, body: form, redirect: "error", signal: AbortSignal.timeout(8000) };
     const res = await fetch(`${base}/audio/transcriptions`, voiceOpts);
     // 400 = endpoint exists but we sent bad params; 200 = success; both mean voice is supported
     return res.status === 200 || res.status === 400;
@@ -38,11 +38,14 @@ async function probeTtsSupport(url: string, apiKey: string): Promise<boolean> {
   try {
     const check = validateServiceUrl(url);
     if (!check.valid) return false;
-    const parsed = new URL(url);
-    // Build fetch URL as a URL object whose .toString() breaks CodeQL SSRF taint propagation
-    const endpoint = new URL(parsed.pathname.replace(/\/$/, "") + "/audio/speech", parsed.origin);
+    // Preserve the validated administrator-selected origin and base path.
+    const endpoint = new URL(url);
+    endpoint.pathname = `${endpoint.pathname.replace(/\/$/, "")}/audio/speech`;
+    endpoint.search = "";
+    endpoint.hash = "";
     const res = await fetch(endpoint.toString(), {
       method: "POST",
+      redirect: "error",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       // Empty input triggers a 400 from the endpoint without generating audio
       body: JSON.stringify({ model: "tts-1", voice: "alloy", input: "" }),
@@ -61,11 +64,12 @@ async function probeRealtimeSupport(url: string, apiKey: string): Promise<string
   const check = validateServiceUrl(url);
   if (!check.valid) return null;
   try {
-    // Reconstruct from parsed URL (not raw user string) to prevent SSRF taint propagation
     const parsed = new URL(url);
-    const base = parsed.origin + parsed.pathname.replace(/\/$/, "");
-    const realtimeOpts: RequestInit = { headers: { Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(8000) };
-    const res = await fetch(`${base}/models`, realtimeOpts);
+    if (parsed.origin !== "https://api.openai.com") return null;
+    const endpoint = new URL("https://api.openai.com");
+    endpoint.pathname = `${parsed.pathname.replace(/\/$/, "")}/models`;
+    const realtimeOpts: RequestInit = { headers: { Authorization: `Bearer ${apiKey}` }, redirect: "error", signal: AbortSignal.timeout(8000) };
+    const res = await fetch(endpoint.toString(), realtimeOpts);
     if (!res.ok) return null;
     const data = await res.json();
     const models: Array<{ id: string }> = data?.data ?? [];
@@ -176,6 +180,7 @@ async function testPlex(url: string, token: string): Promise<TestConnectionRespo
   if (!check.valid) return { success: false, message: `Invalid URL: ${check.error}` };
   try {
     const res = await fetch(`${url.replace(/\/$/, "")}/identity`, {
+      redirect: "error",
       headers: { "X-Plex-Token": token, Accept: "application/json" },
       signal: AbortSignal.timeout(10000),
     });
@@ -201,6 +206,7 @@ async function testArrService(
   try {
     const base = url.replace(/\/$/, "");
     const res = await fetch(`${base}/api/v3/system/status`, {
+      redirect: "error",
       headers: { "X-Api-Key": apiKey },
       signal: AbortSignal.timeout(10000),
     });
@@ -222,6 +228,7 @@ async function testOverseerr(url: string, apiKey: string): Promise<TestConnectio
   try {
     const base = url.replace(/\/$/, "");
     const res = await fetch(`${base}/api/v1/status`, {
+      redirect: "error",
       headers: { "X-Api-Key": apiKey },
       signal: AbortSignal.timeout(10000),
     });
@@ -238,6 +245,8 @@ async function testOverseerr(url: string, apiKey: string): Promise<TestConnectio
 }
 
 export async function testConnection(req: TestConnectionRequest): Promise<TestConnectionResponse> {
+  const check = validateServiceUrl(req.url);
+  if (!check.valid) return { success: false, message: `Invalid URL: ${check.error}` };
   switch (req.type) {
     case "llm":
       return testLlm(req.url, req.apiKey ?? "", req.model);

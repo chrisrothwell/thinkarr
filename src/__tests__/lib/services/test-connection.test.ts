@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const { createMock, listModelsMock } = vi.hoisted(() => ({
   createMock: vi.fn(),
@@ -26,15 +26,58 @@ vi.mock("openai", () => {
   return { default: OpenAIMock, APIError };
 });
 
-vi.mock("@/lib/security/url-validation", () => ({
-  validateServiceUrl: vi.fn().mockReturnValue({ valid: true }),
-}));
-
 import { testConnection } from "@/lib/services/test-connection";
 
 beforeEach(() => {
   vi.clearAllMocks();
   listModelsMock.mockResolvedValue({ [Symbol.asyncIterator]: async function* () {} });
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ data: [], version: "1.0", MediaContainer: { machineIdentifier: "test" } })));
+});
+afterEach(() => vi.unstubAllGlobals());
+
+describe("service probe destination and redirect boundaries", () => {
+  it.each(["plex", "sonarr", "radarr", "overseerr"] as const)("preserves custom LAN/base-path destinations for %s without following redirects", async (type) => {
+    const result = await testConnection({ type, url: "http://192.168.1.10:9000/proxy", apiKey: "test-key" });
+    expect(result.success).toBe(true);
+    const calls = vi.mocked(fetch).mock.calls;
+    expect(calls).toHaveLength(1);
+    const target = new URL(String(calls[0][0]));
+    expect(target.origin).toBe("http://192.168.1.10:9000"); expect(target.pathname).toMatch(/^\/proxy\//);
+    expect(calls[0][1]?.redirect).toBe("error");
+  });
+
+  it.each(["llm", "plex", "sonarr", "radarr", "overseerr"] as const)("rejects metadata addresses and non-HTTP schemes before %s probing", async (type) => {
+    for (const url of ["http://169.254.169.254/latest/meta-data", "http://[fe80::1]", "file:///etc/passwd"]) {
+      const result = await testConnection({ type, url, apiKey: "test-key", model: "test-model" });
+      expect(result.success).toBe(false);
+    }
+    expect(fetch).not.toHaveBeenCalled(); expect(createMock).not.toHaveBeenCalled(); expect(listModelsMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["http://127.0.0.1:9000/proxy/v1", "http://127.0.0.1:9000//other.invalid/proxy/v1"])("preserves custom LLM voice/TTS base paths without changing hosts or probing OpenAI realtime (%s)", async (url) => {
+    createMock.mockResolvedValue({ choices: [] });
+    const result = await testConnection({ type: "llm", url, apiKey: "test-key", model: "local-model" });
+    expect(result.success).toBe(true);
+    const calls = vi.mocked(fetch).mock.calls;
+    const basePath = new URL(url).pathname;
+    expect(calls.map(([target]) => new URL(String(target)).pathname).sort()).toEqual([`${basePath}/audio/speech`, `${basePath}/audio/transcriptions`]);
+    expect(calls.every(([url, options]) => new URL(String(url)).origin === "http://127.0.0.1:9000" && options?.redirect === "error")).toBe(true);
+  });
+
+  it("pins realtime models to the HTTPS OpenAI origin", async () => {
+    createMock.mockResolvedValue({ choices: [] });
+    await testConnection({ type: "llm", url: "https://api.openai.com/v1", apiKey: "test-key", model: "test-model" });
+    expect(vi.mocked(fetch).mock.calls.some(([url, options]) => String(url) === "https://api.openai.com/v1/models" && options?.redirect === "error")).toBe(true);
+  });
+
+  it("reports failed capability probes when redirects are rejected without retrying them", async () => {
+    createMock.mockResolvedValue({ choices: [] });
+    vi.mocked(fetch).mockRejectedValue(new TypeError("redirect rejected"));
+    const result = await testConnection({ type: "llm", url: "http://127.0.0.1:9000/v1", apiKey: "test-key", model: "local-model" });
+    expect(result).toMatchObject({ success: true, capabilities: { supportsVoice: false, supportsTts: false, realtimeModel: null } });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(fetch).mock.calls.every(([, options]) => options?.redirect === "error")).toBe(true);
+  });
 });
 
 describe("testConnection LLM — max_tokens fallback", () => {
