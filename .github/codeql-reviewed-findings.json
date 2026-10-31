@@ -1,7 +1,7 @@
 {
   "version": 1,
   "repository": "chrisrothwell/thinkarr",
-  "sourceSha256": "25d04d754c5c39448c53564c77009abc4311fbdc568141d5b5a65beadfc34cd7",
+  "sourceSha256": "ba362b02074b3011658131732243f43b88f95e36811f35c8395d0e1f176675b0",
   "findings": [
     {
       "alertNumber": 22,
