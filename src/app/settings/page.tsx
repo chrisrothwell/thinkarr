@@ -87,8 +87,6 @@ interface UserEntry {
   msgCount24h: number;
   msgCount7d: number;
   msgCount30d: number;
-  mcpToken?: string;
-  mcpTokenLoading?: boolean;
 }
 
 // --- Helpers ---
@@ -129,10 +127,6 @@ export default function SettingsPage() {
   const [plexDiscovering, setPlexDiscovering] = useState(false);
   const [plexDevices, setPlexDevices] = useState<PlexDevice[]>([]);
   const [plexDiscoverError, setPlexDiscoverError] = useState<string | null>(null);
-
-  // MCP state — admin global token; also per-user token for non-admins
-  const [mcpToken, setMcpToken] = useState<string>("");
-  const [mcpTokenLoading, setMcpTokenLoading] = useState(false);
 
   // User state (admin only)
   const [users, setUsers] = useState<UserEntry[]>([]);
@@ -181,10 +175,9 @@ export default function SettingsPage() {
 
         if (user.isAdmin) {
           // Admin: load full settings
-          const [settingsData, usersData, mcpData] = await Promise.all([
+          const [settingsData, usersData] = await Promise.all([
             fetch("/api/settings").then((r) => r.json()),
             fetch("/api/settings/users").then((r) => r.json()),
-            fetch("/api/settings/mcp-token").then((r) => r.json()),
           ]);
 
           if (settingsData.success) {
@@ -251,13 +244,6 @@ export default function SettingsPage() {
               })),
             );
           }
-          if (mcpData.success) setMcpToken(mcpData.data?.token || "");
-        } else {
-          // Non-admin: load only their own MCP token
-          try {
-            const mcpData = await fetch(`/api/settings/mcp-token/user/${user.id}`).then((r) => r.json());
-            if (mcpData.success) setMcpToken(mcpData.data?.token || "");
-          } catch { /* non-fatal */ }
         }
       })
       .catch(() => {})
@@ -532,34 +518,6 @@ export default function SettingsPage() {
     setSaved(false);
   }
 
-  // --- MCP token ---
-  async function regenerateMcpToken() {
-    setMcpTokenLoading(true);
-    try {
-      const res = await fetch("/api/settings/mcp-token", { method: "POST" });
-      const data = await res.json();
-      if (data.success) setMcpToken(data.data.token);
-    } catch {
-      // Silent fail
-    } finally {
-      setMcpTokenLoading(false);
-    }
-  }
-
-  async function regenerateOwnMcpToken() {
-    if (!currentUser) return;
-    setMcpTokenLoading(true);
-    try {
-      const res = await fetch(`/api/settings/mcp-token/user/${currentUser.id}`, { method: "POST" });
-      const data = await res.json();
-      if (data.success) setMcpToken(data.data.token);
-    } catch {
-      // Silent fail
-    } finally {
-      setMcpTokenLoading(false);
-    }
-  }
-
   // --- Logs ---
   async function loadLogFiles() {
     if (logFilesLoaded) return;
@@ -636,45 +594,6 @@ export default function SettingsPage() {
       );
     } catch {
       // Silent fail
-    }
-  }
-
-  // --- Per-user MCP tokens ---
-  async function loadUserMcpToken(userId: number) {
-    setUsers((prev) =>
-      prev.map((u) => (u.id === userId ? { ...u, mcpTokenLoading: true } : u)),
-    );
-    try {
-      const res = await fetch(`/api/settings/mcp-token/user/${userId}`);
-      const data = await res.json();
-      if (data.success) {
-        setUsers((prev) =>
-          prev.map((u) => (u.id === userId ? { ...u, mcpToken: data.data.token, mcpTokenLoading: false } : u)),
-        );
-      }
-    } catch {
-      setUsers((prev) =>
-        prev.map((u) => (u.id === userId ? { ...u, mcpTokenLoading: false } : u)),
-      );
-    }
-  }
-
-  async function regenerateUserMcpToken(userId: number) {
-    setUsers((prev) =>
-      prev.map((u) => (u.id === userId ? { ...u, mcpTokenLoading: true } : u)),
-    );
-    try {
-      const res = await fetch(`/api/settings/mcp-token/user/${userId}`, { method: "POST" });
-      const data = await res.json();
-      if (data.success) {
-        setUsers((prev) =>
-          prev.map((u) => (u.id === userId ? { ...u, mcpToken: data.data.token, mcpTokenLoading: false } : u)),
-        );
-      }
-    } catch {
-      setUsers((prev) =>
-        prev.map((u) => (u.id === userId ? { ...u, mcpTokenLoading: false } : u)),
-      );
     }
   }
 
@@ -1234,7 +1153,7 @@ export default function SettingsPage() {
               <CardHeader>
                 <CardTitle className="text-lg">MCP Server</CardTitle>
                 <CardDescription>
-                  Connect third-party LLMs and services to your Thinkarr MCP tools.
+                  External MCP access requires a registered service integration and signed requests from the Thinkarr companion.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -1257,56 +1176,12 @@ export default function SettingsPage() {
                   </div>
                 </div>
 
-                <div className="space-y-1.5">
-                  <Label htmlFor="mcp-bearer-token">{currentUser?.isAdmin ? "Admin Bearer Token" : "Your Bearer Token"}</Label>
-                  <div className="flex items-center gap-2">
-                    <Input
-                      id="mcp-bearer-token"
-                      value={mcpToken}
-                      readOnly
-                      className="font-mono text-sm"
-                    />
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => copyToClipboard(mcpToken)}
-                    >
-                      <Copy size={14} />
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      size="icon"
-                      onClick={currentUser?.isAdmin ? regenerateMcpToken : regenerateOwnMcpToken}
-                      disabled={mcpTokenLoading}
-                    >
-                      {mcpTokenLoading ? <Spinner size={14} /> : <RefreshCw size={14} />}
-                    </Button>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    Use this token as a Bearer token in the Authorization header.
-                  </p>
-                </div>
-
-                {currentUser?.isAdmin && (
-                  <div className="space-y-2">
-                    <Label>Registered Tools</Label>
-                    <div className="grid grid-cols-2 gap-2 text-sm">
-                      {[
-                        { name: "Plex", tools: ["search_library", "get_watch_history", "get_on_deck", "check_availability"] },
-                        { name: "Sonarr", tools: ["search_series", "get_calendar", "get_queue", "list_series", "monitor_series"] },
-                        { name: "Radarr", tools: ["search_movie", "list_movies", "get_queue", "monitor_movie"] },
-                        { name: "Seerr", tools: ["search", "request_movie", "request_tv", "list_requests"] },
-                      ].map((svc) => (
-                        <div key={svc.name} className="rounded-lg border p-3">
-                          <p className="font-medium text-foreground mb-1">{svc.name}</p>
-                          <p className="text-xs text-muted-foreground">
-                            {svc.tools.length} tool{svc.tools.length !== 1 ? "s" : ""}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
+                <p className="text-sm text-muted-foreground">
+                  Generic MCP clients, personal/admin bearer tokens and unsigned channel headers are not supported.
+                  {currentUser?.isAdmin
+                    ? " Manage the companion’s enrollment and operation grants in Service integrations below."
+                    : " Ask your administrator to configure the companion, then use its private Plex linking flow."}
+                </p>
               </CardContent>
             </Card>
             {currentUser?.isAdmin && <McpIntegrations />}
@@ -1489,44 +1364,6 @@ export default function SettingsPage() {
                             <span><span className="font-medium text-foreground">{user.msgCount30d}</span> / 30d</span>
                           </div>
 
-                          {/* Per-user MCP token */}
-                          <div className="mt-2">
-                            {user.mcpToken ? (
-                              <div className="flex items-center gap-2">
-                                <span className="text-xs text-muted-foreground">MCP token:</span>
-                                <code className="flex-1 truncate rounded bg-muted px-2 py-0.5 text-xs font-mono max-w-[200px]">
-                                  {user.mcpToken}
-                                </code>
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-6 w-6"
-                                  onClick={() => copyToClipboard(user.mcpToken!)}
-                                >
-                                  <Copy size={12} />
-                                </Button>
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-6 w-6"
-                                  onClick={() => regenerateUserMcpToken(user.id)}
-                                  disabled={user.mcpTokenLoading}
-                                >
-                                  {user.mcpTokenLoading ? <Spinner size={12} /> : <RefreshCw size={12} />}
-                                </Button>
-                              </div>
-                            ) : (
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-6 text-xs text-muted-foreground px-2"
-                                onClick={() => loadUserMcpToken(user.id)}
-                                disabled={user.mcpTokenLoading}
-                              >
-                                {user.mcpTokenLoading ? <Spinner size={12} /> : "Show MCP token"}
-                              </Button>
-                            )}
-                          </div>
                         </div>
                       </div>
                     ))}
