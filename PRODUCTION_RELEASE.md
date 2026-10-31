@@ -4,7 +4,7 @@
 
 The core release covers the web app and the supported OpenClaw/WhatsApp companion: private Plex linking, scoped title facts, explicit movie/TV-season selection, native human confirmation, actor-attributed Seerr requests and truthful immediate outcomes. Seerr owns approval and completion notifications.
 
-The stable release pair is app **1.1.8** with companion **1.0.0**, pinned to OpenClaw **2026.10.4**. The companion promotes the 0.3.11 runtime/configuration contract without a configuration migration. Beta execution logs verify an acknowledged request and exact-turn duplicate-reply cancellation on 0.3.11; the stable artifacts still require their own version/checksum and startup verification. Managed hot-upgrade behavior remains an accepted limitation below. IMDb/artwork cards (#533) and thumbs-up reaction confirmation (#539) are subsequent feature upgrades; quoted-text confirmation remains the supported flow.
+The stable release pair is app **1.1.9** with companion **1.0.0**, pinned to OpenClaw **2026.10.4**. The app patch adds an automatic forward migration for missing legacy MCP channel tables; existing production volumes, login state, conversations and companion enrollment are retained. The companion retains the 0.3.11 runtime/configuration contract without a configuration migration. Beta execution logs verify an acknowledged request and exact-turn duplicate-reply cancellation on 0.3.11; the stable artifacts still require their own version/checksum and startup verification. Managed hot-upgrade behavior remains an accepted limitation below. IMDb/artwork cards (#533) and thumbs-up reaction confirmation (#539) are subsequent feature upgrades; quoted-text confirmation remains the supported flow.
 
 ## Automated gates
 
@@ -65,9 +65,9 @@ Before updating, take a consistent backup of `/config` and the protected host co
 ## Promotion
 
 1. Record beta acceptance and the owner-accepted #527 exception in the release PR; keep unresolved feature work in separate issues. Do not mark unperformed acceptance checks as passed.
-2. Through a feature PR to `dev`, strip the beta suffix for the full app release (`1.1.8-beta.N` → `1.1.8`) and set the companion stable version to `1.0.0`, including its lockfile and executing-code version.
+2. Through a feature PR to `dev`, strip the beta suffix for the full app release (`1.1.9-beta.N` → `1.1.9`). The unchanged companion remains `1.0.0`.
 3. Promote `dev → beta → main` through reviewed PRs with required checks. The human controls merges and release timing.
-4. The human tags the stable `main` commit as `v1.1.8`. The pipeline verifies tag/package parity and main ancestry before publication.
+4. The human or explicitly authorized release agent tags the stable `main` commit as `v1.1.9`. The pipeline verifies tag/package parity and main ancestry before publication.
 5. After image/security gates pass, the pipeline publishes the image and the exact validated companion/checksum/compatibility metadata as GitHub Release assets. Existing different release assets are not overwritten; identical assets are safe on rerun.
 6. Confirm the production image and executing companion version, then turn detailed debug logging off after acceptance evidence is captured.
 
