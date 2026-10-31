@@ -3,12 +3,32 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { readMigrationFiles } from "drizzle-orm/migrator";
-import { eq } from "drizzle-orm";
+import { eq, isTable } from "drizzle-orm";
 import * as schema from "@/lib/db/schema";
 import { ensureSchemaIntegrity } from "@/lib/db";
 import path from "path";
+import fs from "fs";
+import os from "os";
 
 const MIGRATIONS_DIR = path.join(process.cwd(), "drizzle");
+
+// Use the real migrator for old releases too: manually executing their SQL
+// would hide the timestamp-based skipping that broke the production upgrade.
+function migrateThrough(connection: Database.Database, count: number) {
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), "thinkarr-migrations-"));
+  try {
+    const journal = JSON.parse(fs.readFileSync(path.join(MIGRATIONS_DIR, "meta/_journal.json"), "utf8"));
+    journal.entries = journal.entries.slice(0, count);
+    fs.mkdirSync(path.join(folder, "meta"));
+    fs.writeFileSync(path.join(folder, "meta/_journal.json"), JSON.stringify(journal));
+    for (const entry of journal.entries) {
+      fs.copyFileSync(path.join(MIGRATIONS_DIR, `${entry.tag}.sql`), path.join(folder, `${entry.tag}.sql`));
+    }
+    migrate(drizzle(connection), { migrationsFolder: folder });
+  } finally {
+    fs.rmSync(folder, { recursive: true, force: true });
+  }
+}
 
 type Col = { name: string; notnull: number; pk: number; dflt_value: string | null };
 
@@ -185,6 +205,107 @@ describe("migrations — idempotency", () => {
       expect(db.select().from(schema.mcpServiceAudit).all()).toEqual([]);
       expect(() => migrate(db, { migrationsFolder: MIGRATIONS_DIR })).not.toThrow();
     } finally { old.close(); }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Existing production upgrades — 0002 was backdated behind 0000, so the real
+// migrator skips it even though later delegated-MCP migrations are applied.
+// ---------------------------------------------------------------------------
+
+describe("migrations — legacy channel table repair", () => {
+  function seedExistingData(connection: Database.Database) {
+    connection.exec(`
+      INSERT INTO users (id, plex_id, plex_username, plex_token, created_at)
+        VALUES (1, 'existing-plex', 'existing-user', 'existing-plex-token', 0);
+      INSERT INTO sessions (id, user_id, expires_at, created_at) VALUES ('existing-session', 1, 2000000000, 0);
+      INSERT INTO app_config (key, value, updated_at) VALUES ('user.1.mcpToken', 'existing-personal-token', 0);
+      INSERT INTO conversations (id, user_id, title, created_at, updated_at) VALUES ('existing-chat', 1, 'Keep me', 0, 0);
+      INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES ('existing-message', 'existing-chat', 'user', 'Keep my history', 0);
+    `);
+  }
+
+  function existingData(connection: Database.Database) {
+    return Object.fromEntries(["users", "sessions", "app_config", "conversations", "messages"].map(
+      (table) => [table, connection.prepare(`SELECT * FROM ${table}`).all()],
+    ));
+  }
+
+  function assertReady(connection: Database.Database) {
+    expect(() => ensureSchemaIntegrity(connection)).not.toThrow();
+    const db = drizzle(connection, { schema });
+    // Same full-schema probe as /api/health, including every MCP table.
+    for (const table of Object.values(schema)) {
+      if (isTable(table)) expect(() => db.select().from(table).limit(0).all()).not.toThrow();
+    }
+    expect(connection.pragma("integrity_check", { simple: true })).toBe("ok");
+    expect(connection.pragma("foreign_key_check")).toEqual([]);
+    expect(() => migrate(db, { migrationsFolder: MIGRATIONS_DIR })).not.toThrow();
+  }
+
+  it.each([1, 2])("upgrades a pre-MCP database with %i historical migrations", (count) => {
+    const old = new Database(":memory:");
+    old.pragma("foreign_keys = ON");
+    try {
+      migrateThrough(old, count);
+      seedExistingData(old);
+      migrate(drizzle(old), { migrationsFolder: MIGRATIONS_DIR });
+      // The one-migration case also exercises the existing duration_ms repair.
+      assertReady(old);
+      expect(old.prepare("SELECT plex_token FROM users").get()).toEqual({ plex_token: "existing-plex-token" });
+      expect(old.prepare("SELECT id FROM sessions").get()).toEqual({ id: "existing-session" });
+      expect(old.prepare("SELECT value FROM app_config").get()).toEqual({ value: "existing-personal-token" });
+      expect(old.prepare("SELECT content FROM messages").get()).toEqual({ content: "Keep my history" });
+      expect(old.prepare("SELECT title FROM conversations").get()).toEqual({ title: "Keep me" });
+      for (const table of [schema.mcpChannelIdentities, schema.mcpRegistrationTokens, schema.mcpPendingBaskets]) {
+        expect(drizzle(old).select().from(table).all()).toEqual([]);
+      }
+    } finally {
+      old.close();
+    }
+  });
+
+  it.each([false, true])("repairs a failed 1.1.8 upgrade even when 0002 is recorded: %s", (recordSkippedMigration) => {
+    const old = new Database(":memory:");
+    old.pragma("foreign_keys = ON");
+    try {
+      migrateThrough(old, 2);
+      seedExistingData(old);
+      const before = existingData(old);
+      migrateThrough(old, 9);
+      expect(old.prepare("PRAGMA table_info(mcp_channel_identities)").all()).toEqual([]);
+      expect(() => ensureSchemaIntegrity(old)).toThrow(/"mcp_channel_identities"/);
+      if (recordSkippedMigration) {
+        const skipped = readMigrationFiles({ migrationsFolder: MIGRATIONS_DIR })[2];
+        old.prepare("INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)").run(skipped.hash, skipped.folderMillis);
+      }
+      migrate(drizzle(old), { migrationsFolder: MIGRATIONS_DIR });
+      assertReady(old);
+      expect(existingData(old)).toEqual(before);
+    } finally {
+      old.close();
+    }
+  });
+
+  it("preserves existing channel links, registration tokens and pending baskets on a healthy database", () => {
+    const old = new Database(":memory:");
+    old.pragma("foreign_keys = ON");
+    try {
+      migrateThrough(old, 9);
+      seedExistingData(old);
+      old.exec(`
+        INSERT INTO mcp_channel_identities VALUES ('whatsapp', 'existing-actor', 1, 0);
+        INSERT INTO mcp_registration_tokens VALUES ('existing-registration', 'whatsapp', 'existing-actor', 2000000000);
+        INSERT INTO mcp_pending_baskets VALUES ('existing-basket', '[]', 1, 2000000000);
+      `);
+      const tables = ["mcp_channel_identities", "mcp_registration_tokens", "mcp_pending_baskets"];
+      const before = tables.map((table) => old.prepare(`SELECT * FROM ${table}`).all());
+      migrate(drizzle(old), { migrationsFolder: MIGRATIONS_DIR });
+      assertReady(old);
+      expect(tables.map((table) => old.prepare(`SELECT * FROM ${table}`).all())).toEqual(before);
+    } finally {
+      old.close();
+    }
   });
 });
 
