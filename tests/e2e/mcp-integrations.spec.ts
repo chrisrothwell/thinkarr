@@ -82,7 +82,7 @@ test("administrator manages scoped integrations, one-time secrets and public ver
   await expect(page.getByRole("button", { name: "Enable integration", exact: true })).toBeEnabled();
 });
 
-test("a real non-admin session has personal MCP settings but no integration UI or management access", async ({ browser }) => {
+test("a real non-admin session has no legacy MCP token controls or integration management access", async ({ browser }) => {
   const state = JSON.parse(readFileSync(STATE_FILE, "utf8")) as { configDir: string };
   const sqlite = new Database(path.join(state.configDir, "thinkarr.db"));
   const sessionId = randomUUID();
@@ -103,7 +103,10 @@ test("a real non-admin session has personal MCP settings but no integration UI o
     const page = await context.newPage();
     await page.goto("/settings");
     await page.getByRole("button", { name: "MCP", exact: true }).click();
-    await expect(page.getByLabel("Your Bearer Token", { exact: true })).toBeVisible();
+    await expect(page.getByText("Generic MCP clients, personal/admin bearer tokens and unsigned channel headers are not supported.", { exact: false })).toBeVisible();
+    await expect(page.getByLabel("Your Bearer Token", { exact: true })).toHaveCount(0);
+    await expect(page.getByLabel("Admin Bearer Token", { exact: true })).toHaveCount(0);
+    expect((await context.request.get(`${BASE_URL}/api/settings/mcp-token/user/1`)).status()).toBe(410);
     await expect(page.getByRole("heading", { name: "Service integrations" })).toHaveCount(0);
     const response = await context.request.get(`${BASE_URL}/api/settings/mcp-integrations`);
     expect(response.status()).toBe(403);

@@ -97,29 +97,44 @@ describe("service credentials cannot enter personal/admin MCP paths", () => {
   });
 });
 
-describe("existing personal MCP identity and explicit admin delegation", () => {
-  it("passes server-authenticated identity separately from model arguments in legacy and SDK requests", async () => {
-    const args = { query: "fixture", userId: adminId, kind: "service", permission: "admin" };
-    for (const body of [
-      { tool: "plex_search_library", arguments: args },
-      { jsonrpc: "2.0", method: "tools/call", id: 7, params: { name: "plex_search_library", arguments: args } },
-    ]) {
-      const response = await POST(request("personal-fixture", body, { headers: { "X-User-Id": String(adminId) } }));
-      expect(response.status).toBe(200);
-      expect(handler).toHaveBeenLastCalledWith({ query: "fixture" }, { kind: "personal", permission: "user", userId });
+describe("legacy personal/admin MCP access is retired", () => {
+  it.each(["admin-fixture", "personal-fixture"])("rejects stored token %s in every mode, including existing channel identities", async (token) => {
+    db.insert(schema.mcpChannelIdentities).values({ channelType: "whatsapp", channelUserId: "existing-sender", userId }).run();
+    for (const text of [false, true]) {
+      const headerVariants: Record<string, string>[] = [{}, {
+        "X-User-Id": String(adminId), "X-Channel-Type": "whatsapp", "X-Channel-User-Id": "existing-sender",
+        "Thinkarr-Delegation": "forged-assertion",
+      }];
+      for (const headers of headerVariants) {
+        expect((await GET(request(token, undefined, { text, headers }))).status).toBe(401);
+        for (const body of [
+          { method: "list" },
+          { method: "execute", tool: "plex_search_library", arguments: { userId: adminId } },
+          { tool: "confirm_request", arguments: { pendingKey: "old-basket", selection: 1 } },
+          { jsonrpc: "2.0", method: "initialize", id: 1, params: {} },
+          { jsonrpc: "2.0", method: "tools/list", id: 2 },
+          { jsonrpc: "2.0", method: "tools/call", id: 3, params: { name: "plex_search_library", arguments: {} } },
+        ]) {
+          const response = await POST(request(token, body, { text, headers }));
+          expect(response.status).toBe(401);
+          expect(response.headers.get("Cache-Control")).toBe("no-store");
+          expect(await response.text()).not.toContain("plex_search_library");
+        }
+      }
     }
-  });
-
-  it.each(["", "1junk", "1.0", "-1", "1 2", "0", "2147483648", "9999999"])("rejects invalid/nonexistent explicit admin user scope %j without admin fallback", async (header) => {
-    expect((await GET(request("admin-fixture", undefined, { headers: { "X-User-Id": header } }))).status).toBe(401);
     expect(initializeTools).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+    expect(db.select().from(schema.mcpRegistrationTokens).all()).toHaveLength(0);
+    expect(db.select().from(schema.mcpServiceAudit).all()).toHaveLength(0);
   });
 
-  it("retains unscoped administrator and valid explicitly scoped behavior", async () => {
-    const body = { tool: "plex_search_library", arguments: {} };
-    expect((await POST(request("admin-fixture", body))).status).toBe(200);
-    expect(handler).toHaveBeenLastCalledWith({}, { kind: "personal", permission: "admin" });
-    expect((await POST(request("admin-fixture", body, { headers: { "X-User-Id": String(userId) } }))).status).toBe(200);
-    expect(handler).toHaveBeenLastCalledWith({}, { kind: "personal", permission: "user", userId });
+  it("rejects a web session and forged delegation without a registered service bearer", async () => {
+    const response = await POST(new Request("http://localhost/api/mcp", {
+      method: "POST", headers: { Cookie: "thinkarr_session=fixture", "Thinkarr-Delegation": "forged-assertion" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    }));
+    expect(response.status).toBe(401);
+    expect(initializeTools).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
   });
 });

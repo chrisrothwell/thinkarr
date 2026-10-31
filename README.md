@@ -17,7 +17,7 @@ LLM-powered chat assistant for managing your media stack. Connect your Plex, Son
 - **Plex authentication** — Sign in with your Plex account
 - **Streaming responses** — Real-time streaming with tool call visualization
 - **Supports Voice and Realtime** — In-built support for Voice and Realtime modes when using ChatGPT model
-- **Exposes an MCP Server** — MCP wrapper over Seerr/Arrs/Plex APIs to integrate any LLM or GenAI harness
+- **Registered MCP integrations** — Signed, participant-scoped media access through the Thinkarr companion; no generic admin/user bearer-token access
 - **In-built Observability** — connect to Langfuse Cloud or Self-Hosted Langfuse
 - **Integration with GitHub** — Allow users to report issues with conversations and automatically generate a GitHub issue with traceid's to enable quick correlation of issues to Langfuse traces.
 - **Dark theme** — Purpose-built dark UI
@@ -76,6 +76,8 @@ On first launch, the setup wizard will guide you through configuring:
 | `SECURE_COOKIES` | `false` | Set to `true` when ONLY running behind a reverse proxy with HTTPS, and you don't want to access locally over HTTP. |
 
 Configure delegated WhatsApp integrations in **Settings → MCP → Service integrations**, including the group, public linking origin, bot number and enable/disable state. **Create setup code** authorizes one API enrollment; public audience metadata is available without login at `/api/mcp/info`. No container environment changes or restart are required. See the packaged [agent setup guide](connectors/openclaw/SETUP.md) for the companion plugin and native OpenClaw secrets.
+
+The companion is the supported external MCP client. Remove generic Thinkarr MCP server entries from the harness when using it: legacy administrator/user tokens and unsigned channel headers are not accepted. Discovery and execution require a registered service credential and valid per-request signed delegation; public `/api/mcp/info` metadata does not prove authentication.
 
 Validated companion archives and checksums are attached to stable GitHub Releases; beta/PR builds expose companion workflow artifacts with app/host compatibility metadata. See [production release and upgrade acceptance](PRODUCTION_RELEASE.md) for the matching-image/companion rollout, acceptance and rollback procedure.
 
