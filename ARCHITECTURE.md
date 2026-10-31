@@ -103,8 +103,8 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
     │   │   │   ├── route.ts                 # GET config (masked) / PATCH update
     │   │   │   ├── logs/route.ts            # GET list log files (admin)
     │   │   │   ├── logs/[filename]/route.ts # GET read/download log file (admin)
-    │   │   │   ├── mcp-token/route.ts       # GET/POST global admin MCP token
-    │   │   │   ├── mcp-token/user/[userId]/route.ts  # GET/POST per-user MCP token
+    │   │   │   ├── mcp-token/route.ts       # GET/POST retirement response (410; no token access)
+    │   │   │   ├── mcp-token/user/[userId]/route.ts  # GET/POST retirement response (410)
     │   │   │   ├── mcp-integrations/
     │   │   │   │   ├── route.ts                 # GET list / POST create disabled integration (admin)
     │   │   │   │   └── [id]/
@@ -185,6 +185,7 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
     │   │   ├── integration-policy.ts # Live persisted integration/group policy, managed through Settings
     │   │   ├── connection-setup.ts   # Owner setup grant issuance, atomic enrollment and replay/configuration checks
     │   │   ├── link-dispatch.ts     # Signed stateless MCP dispatch, exact source/scope policy and trusted delivery metadata
+    │   │   ├── legacy-access.ts     # No-store 410 response for retired token APIs and unsigned linking
     │   │   ├── request-timing.ts    # Delegated HTTP request/phase timing, cancellation and Server-Timing headers
     │   │   ├── account-link-api.ts  # Browser JSON/session guards, safe errors and no-store/no-referrer output
     │   │   ├── auth-context.ts      # Discriminated personal/service server-owned caller context
@@ -261,14 +262,14 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 | `sonarr.url` / `sonarr.apiKey` | String | Sonarr connection |
 | `radarr.url` / `radarr.apiKey` | String | Radarr connection |
 | `overseerr.url` / `overseerr.apiKey` | String | Overseerr connection |
-| `mcp.bearerToken` | String | Global admin bearer token for external MCP access |
+| `mcp.bearerToken` | String | Inert legacy value, never accepted for external MCP access |
 | `mcp.delegationAudience` | String | Stable public instance UUID for delegated JWT audience; created conflict-safely on first administrator metadata read or verification |
 | `langfuse.secretKey` / `langfuse.publicKey` | String (encrypted) | Langfuse credentials (env vars take precedence) |
 | `langfuse.baseUrl` | String | Langfuse host (default: `https://cloud.langfuse.com`) |
 | `user.{id}.defaultModel` | String | Per-user default model |
 | `user.{id}.canChangeModel` | Boolean | Permission to switch models (default `true`) |
 | `user.{id}.rateLimit` | JSON | `{"messages": number, "period": "hour"/"day"/"week"/"month"}` |
-| `user.{id}.mcpToken` | String | Per-user MCP bearer token |
+| `user.{id}.mcpToken` | String | Inert legacy value; token retrieval/issuance is retired |
 
 ---
 
@@ -291,12 +292,11 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 | DELETE | `/api/conversations/[id]` | Delete conversation |
 | PATCH | `/api/conversations/[id]/title` | Rename (max 200 chars) |
 | POST | `/api/conversations/[id]/messages` | Save realtime turn |
-| GET | `/api/mcp` | List MCP tools (bearer auth, permission-filtered; `?mode=text` adds `confirm_request`) |
-| POST | `/api/mcp` | Personal tool execution (bearer auth; `?mode=text` enables text-channel adapter); service principals use signed linking and opt-in group-scoped beta media dispatch, with validated diagnostic request-ID echo and Server-Timing metrics |
+| GET | `/api/mcp` | Denied: 401 without a registered service credential, 403 for service credentials; no generic tool catalog |
+| POST | `/api/mcp` | Registered enabled service integrations only; signed JSON-RPC linking and group-scoped media dispatch, with validated diagnostic request-ID echo and Server-Timing metrics |
 | GET | `/api/mcp/info` | Public `{version:1,audience}` discovery, independent of Plex sessions/integration creation/credential issuance; no service or credential metadata |
 | POST | `/api/mcp/setup` | Redeem a single-use owner setup code in Authorization; register the supplied public key and issue a scoped service bearer atomically; no browser session required |
-| GET | `/api/mcp/link` | Validate a channel registration token |
-| POST | `/api/mcp/link` | Complete channel registration: exchange Plex PIN + registration token → store identity |
+| GET/POST | `/api/mcp/link` | Retired unsigned linking (410); no token consumption, OAuth or identity updates |
 | POST | `/api/mcp/account-links/inspect` | Inspect a JSON-body challenge from its configured browser origin; safe integration/channel/expiry metadata only |
 | POST | `/api/mcp/account-links/prepare` | Prepare a prefilled private handoff URL for the actual browser user/session; optional expected-user comparison rejects account switches but never selects a beneficiary; does not activate a binding |
 | GET | `/api/account-links` | List only the current user's trusted links, including integration enabled/revoked state |
@@ -308,10 +308,8 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 | GET | `/api/settings/logs` | List log files (admin) |
 | GET | `/api/settings/logs/[filename]` | Read/download log (`?download=true`) |
 | GET | `/api/settings/langfuse-keys` | Get unmasked Langfuse public + secret keys (admin) |
-| GET | `/api/settings/mcp-token` | Get global admin MCP token |
-| POST | `/api/settings/mcp-token` | Regenerate global admin MCP token |
-| GET | `/api/settings/mcp-token/user/[userId]` | Get per-user MCP token (admin; user can self-access) |
-| POST | `/api/settings/mcp-token/user/[userId]` | Regenerate per-user MCP token |
+| GET/POST | `/api/settings/mcp-token` | Retired global MCP credentials (410); no secret retrieval/issuance |
+| GET/POST | `/api/settings/mcp-token/user/[userId]` | Retired per-user MCP credentials (410); no secret retrieval/issuance |
 | GET | `/api/settings/mcp-integrations` | List integrations including saved group configuration, curated operations, stable delegation audience and access availability (admin session) |
 | POST | `/api/settings/mcp-integrations` | Create a disabled service principal with optional group/link settings (admin session) |
 | GET | `/api/settings/mcp-integrations/[id]` | Get safe principal/credential/public-key/participant metadata and latest 20 audit records (admin session) |
@@ -345,19 +343,12 @@ LLM-powered chat frontend for the *arr media stack. Users log in via Plex OAuth,
 | Radarr | `radarr_search_movie`, `radarr_get_movie_status`, `radarr_get_queue` |
 | Seerr | `overseerr_search`, `overseerr_get_details`, `overseerr_list_requests`, `overseerr_discover`, `overseerr_get_season_episodes`, `overseerr_similar`, `overseerr_report_issue` |
 | Built-in | `display_titles` — renders TitleCarousel in chat (always registered) |
-| Text-channel only | `confirm_request` — submits an Overseerr request after explicit user confirmation; only available in `?mode=text` |
 
-Personal MCP access uses the existing global (`mcp.bearerToken`) or per-user (`user.{id}.mcpToken`) bearer. The global token's optional `X-User-Id` scope must be a valid positive integer naming an existing user; explicit malformed/nonexistent scopes fail authentication. Reserved `thk_svc_` credentials are recognized in a separate branch before either personal token path, including when copied into the global-token setting.
+The table above describes the web app's in-process registry, not an externally accessible generic catalog. External `/api/mcp` accepts only registered `thk_svc_` credentials and signed, actor-bound service requests. Global/per-user bearer tokens, web-session cookies, `X-User-Id`, and unsigned `X-Channel-*` headers grant no MCP access, including with `?mode=text` or a JSON-RPC envelope. Old stored token values and legacy tables may remain on the volume but have no authorization role.
 
-Service principals start disabled and can be configured/enabled through authenticated integration Settings. Disabled service credentials receive HTTP 403 before body parsing or SDK dispatch; service GET is always denied. Enabled-service POST enters a separate signed dispatcher before raw tool initialization or unsigned channel resolution. Only explicitly permitted linking and scoped media operations are accepted; legacy/batch envelopes and raw tools are denied in both text/non-text modes. Revoked/expired/unknown service credentials fail authentication without administrator fallback. The registry independently refuses service-context calls before name normalization or hidden-tool suggestions.
+Service principals start disabled and can be configured/enabled through authenticated integration Settings. Disabled service credentials receive HTTP 403 before body parsing or SDK dispatch; service GET is always denied. Enabled-service POST enters the signed dispatcher without any raw-registry fallback. Every exchange, including initialization and discovery, verifies the current service/key, instance audience, signature and replay binding. Only explicitly permitted linking and scoped media operations are accepted; legacy/batch envelopes and raw tools are denied in both text/non-text modes. Revoked/expired/unknown service credentials fail authentication without administrator fallback. The registry independently refuses service-context calls before name normalization or hidden-tool suggestions.
 
-Personal `POST /api/mcp` speaks two request shapes, discriminated by a top-level `jsonrpc: "2.0"` field:
-- **Spec-compliant JSON-RPC 2.0** (real MCP clients — Claude Desktop, Claude Code `mcp add`, etc.): handled by the official `@modelcontextprotocol/sdk`, not a hand-rolled envelope. `handleMcpProtocolRequest()` in `route.ts` builds a fresh low-level `Server` + `WebStandardStreamableHTTPServerTransport` per request (stateless — SDK 1.26+ transports can't be reused across requests), which handles `initialize`/`notifications/initialized` and protocol-version negotiation automatically. Only `ListToolsRequestSchema` and `CallToolRequestSchema` handlers are implemented ourselves, reusing `runToolCall()` for permission checks. `tools/call` rejections (bad params, permission denied, unknown tool) throw `McpError(ErrorCode.InvalidParams, ...)`, a genuine protocol-level error; exceptions during tool execution are returned as a successful result with `isError: true` per spec, so the calling LLM can see and react to them. Handlers use the per-request server-authenticated personal context captured by the stateless server. Permission/user metadata is also supplied in `AuthInfo.extra`.
-- **Legacy ad-hoc dispatch** (no `jsonrpc` field): `{method: "list"|"execute"|"tools/list"|"tools/call", tool, arguments}` → bare `{tools: [...]}` / `{tool, result}`. Still hand-rolled — kept for the text-channel adapter below, which predates the JSON-RPC handling and reuses these method names without the envelope.
-
-Both paths share one `runToolCall()` helper for permission checks, `confirm_request`, and the text-mode `display_titles` interception, so that logic isn't duplicated.
-
-In `?mode=text` (OpenClaw / external channel adapter): channel identity is resolved from `X-Channel-Type` + `X-Channel-User-Id` headers via `mcp_channel_identities`; `display_titles` results are transformed to markdown; `confirm_request` replaces the direct request tools as the only path to submit Overseerr requests.
+Signed standard JSON-RPC uses the official SDK in `src/lib/mcp/link-dispatch.ts`, with a fresh stateless server/transport per request. Settings exposes only registered integration enrollment, keys, grants and credential management; legacy token APIs and unsigned linking return 410 via `src/lib/mcp/legacy-access.ts` without reading or mutating credential/identity state.
 
 ---
 
@@ -383,7 +374,7 @@ The schema repair is app-only: it retains the companion 1.0.0 protocol and exist
 `ensureSchemaIntegrity()` (`src/lib/db/index.ts`) compares every table in `schema.ts` against the live SQLite file after `migrate()` runs. Missing nullable columns can be added safely; missing NOT NULL columns or entire tables require explicit migration SQL and throw instead of allowing broken queries. `getDb()`'s module-level `_db` handle is only assigned *after* initialization succeeds; a failed check is retried (and re-thrown) on every subsequent call within the same process instead of being cached. Regression coverage in `src/__tests__/db/get-db-cache.test.ts` and `src/__tests__/db/migrations.test.ts` verifies this fail-closed behavior independently of the targeted legacy-table repair.
 
 ### In-Process MCP Tool Registry
-Tools defined with Zod schemas, converted to JSON Schema → OpenAI function format at runtime. Single source of truth: same registry serves both the in-process chat engine and personal external `/api/mcp` access. Auto-initialized based on which services are configured. `executeTool` accepts an optional server-owned authentication context passed separately to handlers; existing in-process callers remain compatible. External personal MCP calls pass their authenticated permission/user identity; model arguments cannot replace it. Service contexts are unconditionally rejected by this registry and use the isolated signed dispatcher instead.
+Tools defined with Zod schemas, converted to JSON Schema → OpenAI function format at runtime. The registry serves the in-process chat engine and realtime tools under the web app's session authentication; external MCP cannot access it. Auto-initialized based on which services are configured. `executeTool` accepts an optional server-owned authentication context passed separately to handlers. Service contexts are unconditionally rejected by this registry and use the isolated signed dispatcher instead.
 
 ### Administrator-Managed MCP Integrations
 Service principals are separate from Plex-authenticated users. An administrator web session is required for every management API; bearer credentials never authorize management. Principals start disabled and operation lists contain only explicit curated media/link names. Settings → MCP → Service integrations manages each integration's native WhatsApp group, public linking origin, bot number and enable/disable state. Enabling requires all three saved connection fields; multiple independently configured integrations can be enabled. No container environment variables, special principal UUID or restart are required. The existing `pilot_group` database column/API field stores the integration's group restriction for compatibility with deployed pilot records; it is not an environment-backed feature flag. Current persisted configuration is rechecked on calls and downstream boundaries. Group operations cannot use another group; direct chat remains only for private linking controls. Changing the group atomically consumes pending verification challenges and revokes/version-increments existing participant bindings, invalidating old selections even if the group is later changed back. Saving the same group preserves links. This is a context restriction, not a participant admission list. The panel supports integration ID/audience copy, scopes, credential rotation, public keys and recent activity. A newly issued secret lives only in component memory and disappears on dismissal, tab exit or reload; retrieval contains safe metadata only.
@@ -544,15 +535,9 @@ Realtime (WebRTC) is restricted to `api.openai.com` only. `probeRealtimeSupport(
 1. **Message-based**: Per-user configurable (`user.{id}.rateLimit`), calendar-aligned, checked before each `/api/chat` stream.
 2. **API-based**: Per-user in-memory (60 req/min sliding window) on `/api/conversations/*` and `/api/settings/*`; returns HTTP 429.
 
-### Text-Channel Adapter (`?mode=text`)
+### Companion-Only External Channel Access
 
-Enables external channel gateways (e.g. OpenClaw) to drive Thinkarr via MCP without a web UI. Three behaviour changes activate when `?mode=text` is appended to MCP requests:
-
-1. **Channel identity resolution**: `X-Channel-Type` + `X-Channel-User-Id` headers resolve to a `users` row via `mcp_channel_identities`. Unregistered users receive `{ error: "unregistered", registrationUrl: "..." }` pointing to `/mcp/link?token=...`. The token is short-lived (15 min) and stored in `mcp_registration_tokens`.
-
-2. **`display_titles` interception**: The route post-processes the tool result before returning. `formatDisplayTitlesAsText()` converts `displayTitles[]` to a markdown numbered list. Requestable items (`mediaStatus: "not_requested"` with an `overseerrId`) are stored in `mcp_pending_baskets` (10-min TTL) and the basket token is returned as `pendingKey` alongside the text.
-
-3. **`confirm_request` tool**: Exposed only in text mode. Takes `{ pendingKey, selection }`, validates the basket (token, TTL, ownership), calls `overseerr.requestMovie` or `overseerr.requestTv`, and returns a user-facing confirmation string. The basket is deleted on resolution (one-time use). `overseerr_request_movie` and `overseerr_request_tv` are hard-blocked in text mode — `confirm_request` is the only path to submit a request.
+The companion signs actor/context-bound MCP requests using its enrolled service credential and Ed25519 key. App-side grants and participant bindings govern discovery and execution. A generic MCP server entry is neither required nor supported. `?mode=text` cannot enable unsigned identity resolution or the old `confirm_request` path. `/mcp/link` displays retirement guidance; current private linking uses `/mcp/connect` and the signed account-link flow. Legacy tables remain for migration continuity, without an active unsigned access path.
 
 ### Title Card Display System
 `display_titles` tool accepts 1–10 titles with rich metadata. Server resolves `thumbUrl` (Plex proxy + token) and `plexMachineId` (Watch Now universal link). Renders as both a collapsible tool call panel and a full-width TitleCarousel below the message. LLM always calls `display_titles` after searches.
