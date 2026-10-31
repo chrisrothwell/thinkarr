@@ -24,10 +24,9 @@ let _db: ReturnType<typeof drizzle<typeof schema>> | null = null;
  *                      The process exits so the operator can intervene rather
  *                      than silently serving 500s.
  *
- * This runs after migrate() so it only fires when __drizzle_migrations has
- * recorded a migration as applied but the ALTER TABLE SQL never actually ran
- * (e.g. DB restored from a backup taken before that migration ran, or a
- * crash/rollback mid-migration).
+ * This runs after migrate() to catch schema drift, including migrations skipped
+ * because their journal timestamps predate an already-applied migration, or
+ * tracked migrations whose SQL is absent after a database restore.
  *
  * Emits one log line per table so startup logs give a complete schema snapshot
  * that can be used to diagnose drift without needing shell access to the container.

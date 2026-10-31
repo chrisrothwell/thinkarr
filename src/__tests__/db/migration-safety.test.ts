@@ -7,6 +7,7 @@
  * Rules enforced:
  *   1. ADD COLUMN NOT NULL must have a DEFAULT (SQLite rejects this on non-empty tables)
  *   2. DROP TABLE must be paired with CREATE TABLE in the same file (data-loss guard)
+ *   3. New journal timestamps must exceed every earlier migration timestamp
  *
  * When you INTENTIONALLY drop a table, add its name to ALLOWED_DROPS below.
  */
@@ -90,6 +91,28 @@ describe("Migration safety linter", () => {
     const raw = fs.readFileSync(JOURNAL_PATH, "utf-8");
     const journal = JSON.parse(raw) as { entries?: unknown };
     expect(Array.isArray(journal.entries), "_journal.json must have an entries array").toBe(true);
+  });
+
+  it("journal timestamps advance beyond all previous migrations, except the two immutable legacy entries", () => {
+    const journal = JSON.parse(fs.readFileSync(JOURNAL_PATH, "utf-8")) as {
+      entries: { idx: number; tag: string; when: number }[];
+    };
+    // Editing these deployed timestamps can replay ALTER TABLE on existing DBs.
+    // 0009 repairs the missing 0002 tables; future entries must never backdate.
+    const legacy = new Map([
+      ["0001_add_message_duration", 1742651582000],
+      ["0002_mcp_channel_integration", 1748354400000],
+    ]);
+    let latest = -Infinity;
+    for (const entry of journal.entries) {
+      expect(Number.isSafeInteger(entry.when), entry.tag).toBe(true);
+      if (legacy.has(entry.tag)) {
+        expect(entry.when, `${entry.tag} must retain its deployed timestamp`).toBe(legacy.get(entry.tag));
+      } else {
+        expect(entry.when, `${entry.tag} would be skipped on an existing database`).toBeGreaterThan(latest);
+      }
+      latest = Math.max(latest, entry.when);
+    }
   });
 
   it("every _journal.json entry has a corresponding .sql file (missing file = migration never runs)", () => {
